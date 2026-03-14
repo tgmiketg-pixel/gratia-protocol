@@ -1,0 +1,26 @@
+[package]
+name = "gratia-vm"
+description = "Gratia protocol - GratiaVM WASM-based smart contract execution engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+gratia-core = { path = "../gratia-core" }
+serde = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+sha2 = { workspace = true }
+
+# Wasmer is optional — may not compile on all targets (e.g., Windows dev machines
+# without full LLVM toolchain). The MockRuntime is always available for testing
+# and development. Enable the `wasmer-runtime` feature for real WASM execution.
+wasmer = { workspace = true, optional = true }
+
+[features]
+default = []
+wasmer-runtime = ["wasmer"]
+
+[dev-dependencies]
+tokio = { workspace = true }

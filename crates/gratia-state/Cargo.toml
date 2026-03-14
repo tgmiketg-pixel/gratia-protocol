@@ -1,0 +1,27 @@
+[package]
+name = "gratia-state"
+description = "Gratia protocol - blockchain state management (RocksDB, Merkle trees, pruning, sharding)"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+gratia-core = { path = "../gratia-core" }
+serde = { workspace = true }
+bincode = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+ed25519-dalek = { workspace = true }
+
+# RocksDB is optional — may not compile on all targets (e.g., Windows dev machines).
+# The InMemoryStore is always available for testing and development.
+rocksdb = { workspace = true, optional = true }
+
+[features]
+default = []
+rocksdb-backend = ["rocksdb"]
+
+[dev-dependencies]
+tokio = { workspace = true }
+rand = { workspace = true }

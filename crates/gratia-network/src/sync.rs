@@ -1,0 +1,591 @@
+//! State synchronization protocol.
+//!
+//! Handles synchronizing blockchain state between peers. When a node
+//! joins the network or falls behind, this module coordinates requesting
+//! missing blocks from peers to catch up.
+
+use std::collections::HashMap;
+
+use chrono::{DateTime, Utc};
+use libp2p::PeerId;
+use serde::{Deserialize, Serialize};
+
+use gratia_core::types::{Block, BlockHash};
+
+use crate::error::NetworkError;
+
+// ============================================================================
+// Sync State
+// ============================================================================
+
+/// The synchronization state of this node relative to the network.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncState {
+    /// Node is fully synchronized with the network.
+    Synced,
+    /// Node is actively downloading blocks to catch up.
+    Syncing {
+        /// Current local block height.
+        local_height: u64,
+        /// Best known height from peers.
+        target_height: u64,
+    },
+    /// Node knows it is behind but has not started syncing.
+    Behind {
+        /// Current local block height.
+        local_height: u64,
+        /// Best known height from peers.
+        network_height: u64,
+    },
+    /// Cannot determine sync state (e.g., no peers connected).
+    Unknown,
+}
+
+impl SyncState {
+    /// Check if the node is fully synced.
+    pub fn is_synced(&self) -> bool {
+        matches!(self, SyncState::Synced)
+    }
+
+    /// Get the sync progress as a percentage (0.0 to 1.0).
+    /// Returns 1.0 if synced or unknown.
+    pub fn progress(&self) -> f64 {
+        match self {
+            SyncState::Synced => 1.0,
+            SyncState::Syncing {
+                local_height,
+                target_height,
+            } => {
+                if *target_height == 0 {
+                    return 1.0;
+                }
+                *local_height as f64 / *target_height as f64
+            }
+            SyncState::Behind {
+                local_height,
+                network_height,
+            } => {
+                if *network_height == 0 {
+                    return 1.0;
+                }
+                *local_height as f64 / *network_height as f64
+            }
+            SyncState::Unknown => 1.0,
+        }
+    }
+}
+
+// ============================================================================
+// Sync Protocol Messages
+// ============================================================================
+
+/// Request/response messages for the sync protocol.
+/// These are sent as direct peer-to-peer request/response (not gossip).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SyncRequest {
+    /// Request blocks within a height range (inclusive).
+    GetBlocks {
+        /// Starting block height.
+        from_height: u64,
+        /// Ending block height (inclusive).
+        to_height: u64,
+    },
+    /// Request this peer's current chain tip (height + hash).
+    GetChainTip,
+    /// Request block headers only (lighter than full blocks).
+    GetHeaders {
+        from_height: u64,
+        to_height: u64,
+    },
+}
+
+/// Response to a sync request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SyncResponse {
+    /// Response to GetBlocks.
+    Blocks(Vec<Block>),
+    /// Response to GetChainTip.
+    ChainTip {
+        height: u64,
+        hash: BlockHash,
+    },
+    /// Response to GetHeaders (block height + hash pairs).
+    Headers(Vec<(u64, BlockHash)>),
+    /// Error response.
+    Error(String),
+}
+
+impl SyncRequest {
+    /// Serialize to bytes.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, NetworkError> {
+        bincode::serialize(self).map_err(NetworkError::from)
+    }
+
+    /// Deserialize from bytes.
+    pub fn from_bytes(data: &[u8]) -> Result<Self, NetworkError> {
+        bincode::deserialize(data).map_err(NetworkError::from)
+    }
+}
+
+impl SyncResponse {
+    /// Serialize to bytes.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, NetworkError> {
+        bincode::serialize(self).map_err(NetworkError::from)
+    }
+
+    /// Deserialize from bytes.
+    pub fn from_bytes(data: &[u8]) -> Result<Self, NetworkError> {
+        bincode::deserialize(data).map_err(NetworkError::from)
+    }
+}
+
+// ============================================================================
+// Peer Chain State Tracking
+// ============================================================================
+
+/// Tracks the reported chain tip of each peer.
+#[derive(Debug, Clone)]
+pub struct PeerChainState {
+    /// The peer's reported block height.
+    pub height: u64,
+    /// Hash of the peer's tip block.
+    pub tip_hash: BlockHash,
+    /// When we last received this info.
+    pub last_updated: DateTime<Utc>,
+}
+
+// ============================================================================
+// Sync Manager
+// ============================================================================
+
+/// Maximum number of blocks to request in a single sync batch.
+/// WHY: Each block is up to 256KB. 50 blocks = ~12.5MB max, which is
+/// a reasonable download chunk on mobile networks without hogging bandwidth.
+const MAX_BLOCKS_PER_REQUEST: u64 = 50;
+
+/// Minimum number of peer chain tips needed before determining sync state.
+/// WHY: A single peer could report a false height. Requiring 3+ peer
+/// reports reduces the risk of syncing to a malicious fork.
+const MIN_PEERS_FOR_SYNC_DECISION: usize = 3;
+
+/// How often to check peer chain tips (seconds).
+/// WHY: 30 seconds — frequent enough to detect new blocks quickly,
+/// infrequent enough to avoid spamming peers on mobile connections.
+const CHAIN_TIP_POLL_INTERVAL_SECS: u64 = 30;
+
+/// Manages state synchronization with network peers.
+pub struct SyncManager {
+    /// Current sync state.
+    state: SyncState,
+    /// Our local chain height.
+    local_height: u64,
+    /// Our local chain tip hash.
+    local_tip: BlockHash,
+    /// Chain state reported by each peer.
+    peer_states: HashMap<PeerId, PeerChainState>,
+    /// Blocks that have been requested but not yet received.
+    pending_requests: HashMap<PeerId, (u64, u64)>, // (from, to)
+}
+
+impl SyncManager {
+    /// Create a new SyncManager with the given local chain state.
+    pub fn new(local_height: u64, local_tip: BlockHash) -> Self {
+        SyncManager {
+            state: SyncState::Unknown,
+            local_height,
+            local_tip,
+            peer_states: HashMap::new(),
+            pending_requests: HashMap::new(),
+        }
+    }
+
+    /// Get the current sync state.
+    pub fn state(&self) -> SyncState {
+        self.state
+    }
+
+    /// Get the local chain height.
+    pub fn local_height(&self) -> u64 {
+        self.local_height
+    }
+
+    /// Update our local chain state (e.g., after processing a new block).
+    pub fn update_local_state(&mut self, height: u64, tip: BlockHash) {
+        self.local_height = height;
+        self.local_tip = tip;
+        self.reevaluate_sync_state();
+    }
+
+    /// Record a peer's reported chain tip.
+    pub fn update_peer_state(&mut self, peer: PeerId, height: u64, tip_hash: BlockHash) {
+        self.peer_states.insert(
+            peer,
+            PeerChainState {
+                height,
+                tip_hash,
+                last_updated: Utc::now(),
+            },
+        );
+        self.reevaluate_sync_state();
+    }
+
+    /// Remove a peer's chain state (e.g., on disconnect).
+    pub fn remove_peer(&mut self, peer: &PeerId) {
+        self.peer_states.remove(peer);
+        self.pending_requests.remove(peer);
+        self.reevaluate_sync_state();
+    }
+
+    /// Determine the best known network height from peer reports.
+    /// Uses the median of reported heights to resist outlier manipulation.
+    pub fn best_network_height(&self) -> Option<u64> {
+        if self.peer_states.len() < MIN_PEERS_FOR_SYNC_DECISION {
+            return None;
+        }
+
+        let mut heights: Vec<u64> = self.peer_states.values().map(|s| s.height).collect();
+        heights.sort_unstable();
+
+        // WHY: Median instead of max. If one peer reports a bogus height of 999999,
+        // the median ignores it. More resistant to dishonest peers.
+        Some(heights[heights.len() / 2])
+    }
+
+    /// Re-evaluate the sync state based on local height and peer reports.
+    fn reevaluate_sync_state(&mut self) {
+        let network_height = match self.best_network_height() {
+            Some(h) => h,
+            None => {
+                self.state = SyncState::Unknown;
+                return;
+            }
+        };
+
+        if self.local_height >= network_height {
+            self.state = SyncState::Synced;
+        } else if self.pending_requests.is_empty() {
+            self.state = SyncState::Behind {
+                local_height: self.local_height,
+                network_height,
+            };
+        } else {
+            self.state = SyncState::Syncing {
+                local_height: self.local_height,
+                target_height: network_height,
+            };
+        }
+    }
+
+    /// Generate the next sync request to send to a peer.
+    /// Returns None if already synced or no suitable peer available.
+    pub fn next_sync_request(&mut self) -> Option<(PeerId, SyncRequest)> {
+        let network_height = self.best_network_height()?;
+
+        if self.local_height >= network_height {
+            return None;
+        }
+
+        // Find a peer that has blocks we need and that we haven't already
+        // sent a pending request to
+        let from = self.local_height + 1;
+        let to = (from + MAX_BLOCKS_PER_REQUEST - 1).min(network_height);
+
+        let peer = self
+            .peer_states
+            .iter()
+            .filter(|(peer_id, state)| {
+                state.height >= to && !self.pending_requests.contains_key(peer_id)
+            })
+            .map(|(peer_id, _)| *peer_id)
+            .next()?;
+
+        self.pending_requests.insert(peer, (from, to));
+        self.state = SyncState::Syncing {
+            local_height: self.local_height,
+            target_height: network_height,
+        };
+
+        Some((peer, SyncRequest::GetBlocks {
+            from_height: from,
+            to_height: to,
+        }))
+    }
+
+    /// Handle a completed sync request — peer responded with blocks.
+    /// Returns the blocks for the caller to validate and apply.
+    pub fn handle_blocks_response(
+        &mut self,
+        peer: &PeerId,
+        blocks: Vec<Block>,
+    ) -> Result<Vec<Block>, NetworkError> {
+        let expected = self.pending_requests.remove(peer);
+
+        if let Some((from, to)) = expected {
+            // Basic sanity check: are the blocks in the expected range?
+            if let Some(first) = blocks.first() {
+                if first.header.height != from {
+                    return Err(NetworkError::SyncError(format!(
+                        "Expected blocks starting at height {}, got {}",
+                        from, first.header.height
+                    )));
+                }
+            }
+
+            // Verify blocks are contiguous
+            for window in blocks.windows(2) {
+                if window[1].header.height != window[0].header.height + 1 {
+                    return Err(NetworkError::SyncError(
+                        "Received non-contiguous blocks".to_string(),
+                    ));
+                }
+            }
+        }
+
+        Ok(blocks)
+    }
+
+    /// Handle a sync request FROM another peer.
+    /// The caller provides a function to fetch blocks from local storage.
+    pub fn handle_sync_request<F>(
+        &self,
+        request: &SyncRequest,
+        get_blocks: F,
+    ) -> SyncResponse
+    where
+        F: Fn(u64, u64) -> Option<Vec<Block>>,
+    {
+        match request {
+            SyncRequest::GetChainTip => SyncResponse::ChainTip {
+                height: self.local_height,
+                hash: self.local_tip,
+            },
+            SyncRequest::GetBlocks {
+                from_height,
+                to_height,
+            } => {
+                // Clamp the range to prevent abuse
+                let clamped_to = (*to_height).min(*from_height + MAX_BLOCKS_PER_REQUEST - 1);
+
+                if *from_height > self.local_height {
+                    return SyncResponse::Error(format!(
+                        "Requested height {} is above our chain tip {}",
+                        from_height, self.local_height
+                    ));
+                }
+
+                match get_blocks(*from_height, clamped_to) {
+                    Some(blocks) => SyncResponse::Blocks(blocks),
+                    None => SyncResponse::Error("Failed to retrieve blocks".to_string()),
+                }
+            }
+            SyncRequest::GetHeaders {
+                from_height,
+                to_height,
+            } => {
+                // WHY: Header-only requests are much lighter than full blocks.
+                // Useful for initial sync to find the fork point before
+                // downloading full blocks.
+                let clamped_to = (*to_height).min(*from_height + MAX_BLOCKS_PER_REQUEST - 1);
+
+                match get_blocks(*from_height, clamped_to) {
+                    Some(blocks) => {
+                        let headers: Vec<_> = blocks
+                            .into_iter()
+                            .map(|b| (b.header.height, b.header.hash()))
+                            .collect();
+                        SyncResponse::Headers(headers)
+                    }
+                    None => SyncResponse::Error("Failed to retrieve headers".to_string()),
+                }
+            }
+        }
+    }
+
+    /// Number of tracked peers.
+    pub fn tracked_peer_count(&self) -> usize {
+        self.peer_states.len()
+    }
+
+    /// Number of pending sync requests.
+    pub fn pending_request_count(&self) -> usize {
+        self.pending_requests.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sync_state_progress() {
+        assert_eq!(SyncState::Synced.progress(), 1.0);
+        assert_eq!(SyncState::Unknown.progress(), 1.0);
+
+        let syncing = SyncState::Syncing {
+            local_height: 50,
+            target_height: 100,
+        };
+        assert!((syncing.progress() - 0.5).abs() < f64::EPSILON);
+
+        let behind = SyncState::Behind {
+            local_height: 75,
+            network_height: 100,
+        };
+        assert!((behind.progress() - 0.75).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_sync_manager_initial_state() {
+        let sm = SyncManager::new(0, BlockHash([0u8; 32]));
+        assert_eq!(sm.state(), SyncState::Unknown);
+        assert_eq!(sm.local_height(), 0);
+    }
+
+    #[test]
+    fn test_sync_manager_needs_min_peers() {
+        let mut sm = SyncManager::new(0, BlockHash([0u8; 32]));
+
+        // With fewer than MIN_PEERS_FOR_SYNC_DECISION peers, state remains Unknown
+        sm.update_peer_state(PeerId::random(), 100, BlockHash([1u8; 32]));
+        sm.update_peer_state(PeerId::random(), 100, BlockHash([1u8; 32]));
+        assert_eq!(sm.state(), SyncState::Unknown);
+
+        // Third peer should trigger state evaluation
+        sm.update_peer_state(PeerId::random(), 100, BlockHash([1u8; 32]));
+        assert!(matches!(sm.state(), SyncState::Behind { .. }));
+    }
+
+    #[test]
+    fn test_sync_manager_synced() {
+        let mut sm = SyncManager::new(100, BlockHash([1u8; 32]));
+
+        for _ in 0..3 {
+            sm.update_peer_state(PeerId::random(), 100, BlockHash([1u8; 32]));
+        }
+
+        assert!(sm.state().is_synced());
+    }
+
+    #[test]
+    fn test_best_network_height_uses_median() {
+        let mut sm = SyncManager::new(0, BlockHash([0u8; 32]));
+
+        sm.update_peer_state(PeerId::random(), 100, BlockHash([1u8; 32]));
+        sm.update_peer_state(PeerId::random(), 102, BlockHash([2u8; 32]));
+        sm.update_peer_state(PeerId::random(), 999999, BlockHash([3u8; 32])); // outlier
+
+        // Median of [100, 102, 999999] = 102
+        assert_eq!(sm.best_network_height(), Some(102));
+    }
+
+    #[test]
+    fn test_next_sync_request() {
+        let mut sm = SyncManager::new(0, BlockHash([0u8; 32]));
+        let peer = PeerId::random();
+
+        sm.update_peer_state(peer, 100, BlockHash([1u8; 32]));
+        sm.update_peer_state(PeerId::random(), 100, BlockHash([1u8; 32]));
+        sm.update_peer_state(PeerId::random(), 100, BlockHash([1u8; 32]));
+
+        let (selected_peer, request) = sm.next_sync_request().unwrap();
+        match request {
+            SyncRequest::GetBlocks {
+                from_height,
+                to_height,
+            } => {
+                assert_eq!(from_height, 1);
+                assert_eq!(to_height, MAX_BLOCKS_PER_REQUEST);
+            }
+            _ => panic!("Expected GetBlocks request"),
+        }
+    }
+
+    #[test]
+    fn test_handle_chain_tip_request() {
+        let sm = SyncManager::new(42, BlockHash([7u8; 32]));
+        let response = sm.handle_sync_request(&SyncRequest::GetChainTip, |_, _| None);
+
+        match response {
+            SyncResponse::ChainTip { height, hash } => {
+                assert_eq!(height, 42);
+                assert_eq!(hash, BlockHash([7u8; 32]));
+            }
+            _ => panic!("Expected ChainTip response"),
+        }
+    }
+
+    #[test]
+    fn test_sync_request_serialization() {
+        let req = SyncRequest::GetBlocks {
+            from_height: 10,
+            to_height: 20,
+        };
+        let bytes = req.to_bytes().unwrap();
+        let decoded = SyncRequest::from_bytes(&bytes).unwrap();
+
+        match decoded {
+            SyncRequest::GetBlocks {
+                from_height,
+                to_height,
+            } => {
+                assert_eq!(from_height, 10);
+                assert_eq!(to_height, 20);
+            }
+            _ => panic!("Expected GetBlocks"),
+        }
+    }
+
+    #[test]
+    fn test_sync_response_serialization() {
+        let resp = SyncResponse::ChainTip {
+            height: 99,
+            hash: BlockHash([0xAB; 32]),
+        };
+        let bytes = resp.to_bytes().unwrap();
+        let decoded = SyncResponse::from_bytes(&bytes).unwrap();
+
+        match decoded {
+            SyncResponse::ChainTip { height, hash } => {
+                assert_eq!(height, 99);
+                assert_eq!(hash, BlockHash([0xAB; 32]));
+            }
+            _ => panic!("Expected ChainTip"),
+        }
+    }
+
+    #[test]
+    fn test_handle_blocks_contiguity_check() {
+        let mut sm = SyncManager::new(0, BlockHash([0u8; 32]));
+        let peer = PeerId::random();
+        sm.pending_requests.insert(peer, (1, 3));
+
+        // Non-contiguous blocks should fail
+        let blocks = vec![
+            make_block_at_height(1),
+            make_block_at_height(3), // gap!
+        ];
+
+        let result = sm.handle_blocks_response(&peer, blocks);
+        assert!(result.is_err());
+    }
+
+    fn make_block_at_height(height: u64) -> Block {
+        Block {
+            header: gratia_core::types::BlockHeader {
+                height,
+                timestamp: Utc::now(),
+                parent_hash: BlockHash([0u8; 32]),
+                transactions_root: [0u8; 32],
+                state_root: [0u8; 32],
+                attestations_root: [0u8; 32],
+                producer: gratia_core::types::NodeId([0u8; 32]),
+                vrf_proof: vec![],
+                active_miners: 0,
+                geographic_diversity: 0,
+            },
+            transactions: vec![],
+            attestations: vec![],
+            validator_signatures: vec![],
+        }
+    }
+}

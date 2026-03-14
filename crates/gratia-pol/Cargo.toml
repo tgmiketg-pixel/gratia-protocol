@@ -1,0 +1,13 @@
+[package]
+name = "gratia-pol"
+description = "Gratia protocol - gratia-pol"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+gratia-core = { path = "../gratia-core" }
+serde = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

@@ -1,0 +1,31 @@
+[package]
+name = "gratia-zk"
+description = "Gratia protocol - Zero-knowledge proof system (Bulletproofs, Pedersen commitments, shielded transactions)"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+gratia-core = { path = "../gratia-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+
+# Zero-knowledge proof primitives
+# WHY: Using bulletproofs 5.0 (not workspace 4.0) because 5.0 depends on
+# curve25519-dalek 4.x while 4.0 depends on the incompatible curve25519-dalek-ng
+# fork. Version 5.0 aligns with the workspace's curve25519-dalek = "4.1".
+bulletproofs = "5.0"
+merlin = { workspace = true }
+curve25519-dalek = { version = "4.1", features = ["serde", "rand_core"] }
+
+# Randomness
+rand = { workspace = true }
+rand_chacha = { workspace = true }
+
+# Hashing (for domain separation in commitments)
+sha2 = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

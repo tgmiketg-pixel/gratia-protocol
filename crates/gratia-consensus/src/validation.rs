@@ -1,0 +1,706 @@
+//! Transaction and block validation.
+//!
+//! Validates transactions (signatures, nonces, fees, payload-specific rules)
+//! and blocks (structure, all contained transactions, size limits).
+
+use gratia_core::crypto::{verify_signature, sha256};
+use gratia_core::error::GratiaError;
+use gratia_core::types::{
+    Block, BlockHeader, Lux, NodeId, Transaction, TransactionPayload,
+};
+
+use crate::committee::ValidatorCommittee;
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+/// Maximum block size in bytes (256 KB).
+/// WHY: Sized for mobile network transmission within the 3-5 second block time.
+/// A 256 KB block can be transmitted over a 1 Mbps connection in ~2 seconds,
+/// leaving time for validation and propagation.
+pub const MAX_BLOCK_SIZE: usize = 262_144;
+
+/// Minimum transaction fee in Lux (1000 Lux = 0.001 GRAT).
+/// WHY: Prevents spam transactions while remaining negligible for real users.
+/// This fee is burned, contributing to deflationary pressure.
+pub const MIN_TRANSACTION_FEE: Lux = 1_000;
+
+/// Maximum transactions per block.
+/// WHY: Bounds validation time on mobile devices. At ~250 bytes per standard
+/// transaction, 256 KB fits ~1000 transactions, but we cap lower to leave
+/// room for attestations and signatures.
+pub const MAX_TRANSACTIONS_PER_BLOCK: usize = 512;
+
+/// Maximum bytecode size for contract deployment (64 KB).
+/// WHY: Larger contracts consume excessive storage on mobile nodes.
+/// Complex contracts should be split into multiple smaller contracts.
+pub const MAX_CONTRACT_BYTECODE_SIZE: usize = 65_536;
+
+/// Maximum size of a single transaction payload in bytes (128 KB).
+/// WHY: Individual transactions should not consume more than half the block.
+pub const MAX_TRANSACTION_PAYLOAD_SIZE: usize = 131_072;
+
+// ============================================================================
+// Validation Context
+// ============================================================================
+
+/// State needed to validate transactions and blocks.
+///
+/// In a full implementation, this would reference the state database.
+/// For PoC, it holds the minimum information needed for validation.
+#[derive(Debug, Clone)]
+pub struct ValidationContext {
+    /// Current block height (the height we're validating for).
+    pub current_height: u64,
+    /// The hash of the previous block.
+    pub previous_block_hash: [u8; 32],
+    /// The active validator committee.
+    pub committee: ValidatorCommittee,
+    /// Maximum block size in bytes (from config, default 256 KB).
+    pub max_block_size: usize,
+    /// Minimum transaction fee (from config).
+    pub min_transaction_fee: Lux,
+}
+
+// ============================================================================
+// Transaction Validation
+// ============================================================================
+
+/// Validate a single transaction.
+///
+/// Checks:
+/// 1. Signature is valid for the sender's public key
+/// 2. Fee meets minimum requirement
+/// 3. Payload-specific rules are satisfied
+///
+/// Note: Nonce and balance checks require state access and are deferred
+/// to the block execution phase. This function validates structure only.
+pub fn validate_transaction(tx: &Transaction, min_fee: Lux) -> Result<(), GratiaError> {
+    // 1. Verify the transaction signature
+    let payload_bytes = bincode::serialize(&tx.payload)
+        .map_err(|e| GratiaError::SerializationError(e.to_string()))?;
+
+    // Build the signing message: nonce || fee || timestamp || payload
+    let mut signing_message = Vec::new();
+    signing_message.extend_from_slice(&tx.nonce.to_le_bytes());
+    signing_message.extend_from_slice(&tx.fee.to_le_bytes());
+    let timestamp_bytes = bincode::serialize(&tx.timestamp)
+        .map_err(|e| GratiaError::SerializationError(e.to_string()))?;
+    signing_message.extend_from_slice(&timestamp_bytes);
+    signing_message.extend_from_slice(&payload_bytes);
+
+    verify_signature(&tx.sender_pubkey, &signing_message, &tx.signature)?;
+
+    // 2. Verify the transaction hash matches
+    let computed_hash = sha256(&signing_message);
+    if tx.hash.0 != computed_hash {
+        return Err(GratiaError::BlockValidationFailed {
+            reason: format!(
+                "Transaction hash mismatch: expected {}, got {}",
+                hex::encode(computed_hash),
+                tx.hash,
+            ),
+        });
+    }
+
+    // 3. Check minimum fee
+    if tx.fee < min_fee {
+        return Err(GratiaError::BlockValidationFailed {
+            reason: format!(
+                "Transaction fee {} Lux below minimum {} Lux",
+                tx.fee, min_fee,
+            ),
+        });
+    }
+
+    // 4. Payload-specific validation
+    validate_payload(&tx.payload)?;
+
+    Ok(())
+}
+
+/// Validate payload-specific rules.
+fn validate_payload(payload: &TransactionPayload) -> Result<(), GratiaError> {
+    match payload {
+        TransactionPayload::Transfer { amount, .. } => {
+            if *amount == 0 {
+                return Err(GratiaError::BlockValidationFailed {
+                    reason: "Transfer amount cannot be zero".into(),
+                });
+            }
+        }
+        TransactionPayload::ShieldedTransfer {
+            commitment,
+            range_proof,
+            ..
+        } => {
+            if commitment.is_empty() {
+                return Err(GratiaError::BlockValidationFailed {
+                    reason: "Shielded transfer missing commitment".into(),
+                });
+            }
+            if range_proof.is_empty() {
+                return Err(GratiaError::BlockValidationFailed {
+                    reason: "Shielded transfer missing range proof".into(),
+                });
+            }
+        }
+        TransactionPayload::Stake { amount } | TransactionPayload::Unstake { amount } => {
+            if *amount == 0 {
+                return Err(GratiaError::BlockValidationFailed {
+                    reason: "Stake/unstake amount cannot be zero".into(),
+                });
+            }
+        }
+        TransactionPayload::DeployContract { bytecode, .. } => {
+            if bytecode.is_empty() {
+                return Err(GratiaError::BlockValidationFailed {
+                    reason: "Contract bytecode cannot be empty".into(),
+                });
+            }
+            if bytecode.len() > MAX_CONTRACT_BYTECODE_SIZE {
+                return Err(GratiaError::BlockValidationFailed {
+                    reason: format!(
+                        "Contract bytecode {} bytes exceeds maximum {} bytes",
+                        bytecode.len(),
+                        MAX_CONTRACT_BYTECODE_SIZE,
+                    ),
+                });
+            }
+        }
+        TransactionPayload::CallContract { gas_limit, function, .. } => {
+            if *gas_limit == 0 {
+                return Err(GratiaError::BlockValidationFailed {
+                    reason: "Contract call gas limit cannot be zero".into(),
+                });
+            }
+            if function.is_empty() {
+                return Err(GratiaError::BlockValidationFailed {
+                    reason: "Contract call function name cannot be empty".into(),
+                });
+            }
+        }
+        TransactionPayload::GovernanceProposal { title, description, .. } => {
+            if title.is_empty() {
+                return Err(GratiaError::BlockValidationFailed {
+                    reason: "Governance proposal title cannot be empty".into(),
+                });
+            }
+            if description.is_empty() {
+                return Err(GratiaError::BlockValidationFailed {
+                    reason: "Governance proposal description cannot be empty".into(),
+                });
+            }
+        }
+        TransactionPayload::GovernanceVote { .. } => {
+            // Vote validity (duplicate check, eligibility) requires state access
+        }
+        TransactionPayload::CreatePoll { question, options, duration_secs, .. } => {
+            if question.is_empty() {
+                return Err(GratiaError::BlockValidationFailed {
+                    reason: "Poll question cannot be empty".into(),
+                });
+            }
+            if options.len() < 2 {
+                return Err(GratiaError::BlockValidationFailed {
+                    reason: "Poll must have at least 2 options".into(),
+                });
+            }
+            if *duration_secs == 0 {
+                return Err(GratiaError::BlockValidationFailed {
+                    reason: "Poll duration cannot be zero".into(),
+                });
+            }
+        }
+        TransactionPayload::PollVote { .. } => {
+            // Vote validity requires state access
+        }
+    }
+
+    Ok(())
+}
+
+/// Validate all transactions in a block.
+///
+/// Checks:
+/// - No duplicate transaction hashes
+/// - Each transaction individually valid
+/// - Total transaction count within limits
+pub fn validate_block_transactions(
+    transactions: &[Transaction],
+    min_fee: Lux,
+) -> Result<(), GratiaError> {
+    // Check transaction count
+    if transactions.len() > MAX_TRANSACTIONS_PER_BLOCK {
+        return Err(GratiaError::BlockValidationFailed {
+            reason: format!(
+                "Block contains {} transactions, maximum is {}",
+                transactions.len(),
+                MAX_TRANSACTIONS_PER_BLOCK,
+            ),
+        });
+    }
+
+    // Check for duplicate transaction hashes
+    let mut seen_hashes = std::collections::HashSet::new();
+    for tx in transactions {
+        if !seen_hashes.insert(tx.hash) {
+            return Err(GratiaError::BlockValidationFailed {
+                reason: format!("Duplicate transaction hash: {}", tx.hash),
+            });
+        }
+    }
+
+    // Validate each transaction
+    for (i, tx) in transactions.iter().enumerate() {
+        validate_transaction(tx, min_fee).map_err(|e| {
+            GratiaError::BlockValidationFailed {
+                reason: format!("Transaction {} invalid: {}", i, e),
+            }
+        })?;
+    }
+
+    Ok(())
+}
+
+/// Validate a block header (lightweight, no transaction checks).
+///
+/// Checks:
+/// - Height is sequential
+/// - Parent hash matches expected
+/// - Block size within limits
+/// - Timestamp is plausible
+/// - Producer is a committee member
+pub fn validate_block_header(
+    header: &BlockHeader,
+    ctx: &ValidationContext,
+) -> Result<(), GratiaError> {
+    // Height must be sequential
+    if header.height != ctx.current_height {
+        return Err(GratiaError::BlockValidationFailed {
+            reason: format!(
+                "Block height {} does not match expected {}",
+                header.height, ctx.current_height,
+            ),
+        });
+    }
+
+    // Parent hash must match
+    if header.parent_hash.0 != ctx.previous_block_hash {
+        return Err(GratiaError::BlockValidationFailed {
+            reason: format!(
+                "Parent hash mismatch: expected {}, got {}",
+                hex::encode(ctx.previous_block_hash),
+                header.parent_hash,
+            ),
+        });
+    }
+
+    // Producer must be a committee member
+    if !ctx.committee.is_committee_member(&header.producer) {
+        return Err(GratiaError::BlockValidationFailed {
+            reason: format!(
+                "Block producer {} is not a committee member",
+                header.producer,
+            ),
+        });
+    }
+
+    // Timestamp sanity check: should be within a reasonable window.
+    // WHY: Prevents blocks with far-future timestamps from being accepted,
+    // which could disrupt time-dependent logic. The 30-second tolerance
+    // accounts for clock skew on mobile devices.
+    let now = chrono::Utc::now();
+    let max_future = chrono::Duration::seconds(30);
+    if header.timestamp > now + max_future {
+        return Err(GratiaError::BlockValidationFailed {
+            reason: "Block timestamp is too far in the future".into(),
+        });
+    }
+
+    Ok(())
+}
+
+/// Validate a complete block (header + transactions + size).
+pub fn validate_block(
+    block: &Block,
+    ctx: &ValidationContext,
+) -> Result<(), GratiaError> {
+    // Validate header
+    validate_block_header(&block.header, ctx)?;
+
+    // Check serialized block size
+    let block_bytes = bincode::serialize(block)
+        .map_err(|e| GratiaError::SerializationError(e.to_string()))?;
+    if block_bytes.len() > ctx.max_block_size {
+        return Err(GratiaError::BlockValidationFailed {
+            reason: format!(
+                "Block size {} bytes exceeds maximum {} bytes",
+                block_bytes.len(),
+                ctx.max_block_size,
+            ),
+        });
+    }
+
+    // Validate transactions
+    validate_block_transactions(&block.transactions, ctx.min_transaction_fee)?;
+
+    // Validate finality (sufficient validator signatures)
+    let sig_count = block.validator_signatures.len();
+    if !ctx.committee.has_finality(sig_count) {
+        return Err(GratiaError::InsufficientSignatures {
+            count: sig_count,
+            required: crate::committee::FINALITY_THRESHOLD,
+        });
+    }
+
+    // Verify each validator signature is from a committee member
+    for vs in &block.validator_signatures {
+        if !ctx.committee.is_committee_member(&vs.validator) {
+            return Err(GratiaError::BlockValidationFailed {
+                reason: format!(
+                    "Validator signature from non-committee member: {}",
+                    vs.validator,
+                ),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gratia_core::types::*;
+    use gratia_core::crypto::Keypair;
+    use crate::committee::{self, EligibleNode, COMMITTEE_SIZE, SLOTS_PER_EPOCH};
+    use crate::vrf::VrfPublicKey;
+    use chrono::Utc;
+
+    fn make_signed_transaction(keypair: &Keypair, payload: TransactionPayload, fee: Lux) -> Transaction {
+        let nonce = 1u64;
+        let timestamp = Utc::now();
+
+        let payload_bytes = bincode::serialize(&payload).unwrap();
+        let mut signing_message = Vec::new();
+        signing_message.extend_from_slice(&nonce.to_le_bytes());
+        signing_message.extend_from_slice(&fee.to_le_bytes());
+        let timestamp_bytes = bincode::serialize(&timestamp).unwrap();
+        signing_message.extend_from_slice(&timestamp_bytes);
+        signing_message.extend_from_slice(&payload_bytes);
+
+        let signature = keypair.sign(&signing_message);
+        let hash = sha256(&signing_message);
+
+        Transaction {
+            hash: TxHash(hash),
+            payload,
+            sender_pubkey: keypair.public_key_bytes(),
+            signature,
+            nonce,
+            fee,
+            timestamp,
+        }
+    }
+
+    fn make_test_committee() -> ValidatorCommittee {
+        let nodes: Vec<EligibleNode> = (0..25)
+            .map(|i| {
+                let mut node_id = [0u8; 32];
+                node_id[0] = i;
+                EligibleNode {
+                    node_id: NodeId(node_id),
+                    vrf_pubkey: VrfPublicKey { bytes: [i; 32] },
+                    presence_score: 60,
+                    has_valid_pol: true,
+                    meets_minimum_stake: true,
+                }
+            })
+            .collect();
+
+        committee::select_committee(&nodes, &[0xAB; 32], 0, 0).unwrap()
+    }
+
+    #[test]
+    fn test_validate_transfer_transaction() {
+        let keypair = Keypair::generate();
+        let payload = TransactionPayload::Transfer {
+            to: Address([0x42; 32]),
+            amount: 1_000_000,
+        };
+        let tx = make_signed_transaction(&keypair, payload, MIN_TRANSACTION_FEE);
+        assert!(validate_transaction(&tx, MIN_TRANSACTION_FEE).is_ok());
+    }
+
+    #[test]
+    fn test_validate_transaction_bad_signature() {
+        let keypair = Keypair::generate();
+        let payload = TransactionPayload::Transfer {
+            to: Address([0x42; 32]),
+            amount: 1_000_000,
+        };
+        let mut tx = make_signed_transaction(&keypair, payload, MIN_TRANSACTION_FEE);
+        tx.signature[0] ^= 0xFF; // Corrupt signature
+        assert!(validate_transaction(&tx, MIN_TRANSACTION_FEE).is_err());
+    }
+
+    #[test]
+    fn test_validate_transaction_fee_too_low() {
+        let keypair = Keypair::generate();
+        let payload = TransactionPayload::Transfer {
+            to: Address([0x42; 32]),
+            amount: 1_000_000,
+        };
+        let tx = make_signed_transaction(&keypair, payload, 0);
+        assert!(validate_transaction(&tx, MIN_TRANSACTION_FEE).is_err());
+    }
+
+    #[test]
+    fn test_validate_zero_transfer_amount() {
+        let keypair = Keypair::generate();
+        let payload = TransactionPayload::Transfer {
+            to: Address([0x42; 32]),
+            amount: 0,
+        };
+        let tx = make_signed_transaction(&keypair, payload, MIN_TRANSACTION_FEE);
+        assert!(validate_transaction(&tx, MIN_TRANSACTION_FEE).is_err());
+    }
+
+    #[test]
+    fn test_validate_contract_deploy_too_large() {
+        let keypair = Keypair::generate();
+        let payload = TransactionPayload::DeployContract {
+            bytecode: vec![0u8; MAX_CONTRACT_BYTECODE_SIZE + 1],
+            init_args: vec![],
+        };
+        let tx = make_signed_transaction(&keypair, payload, MIN_TRANSACTION_FEE);
+        assert!(validate_transaction(&tx, MIN_TRANSACTION_FEE).is_err());
+    }
+
+    #[test]
+    fn test_validate_contract_deploy_empty() {
+        let keypair = Keypair::generate();
+        let payload = TransactionPayload::DeployContract {
+            bytecode: vec![],
+            init_args: vec![],
+        };
+        let tx = make_signed_transaction(&keypair, payload, MIN_TRANSACTION_FEE);
+        assert!(validate_transaction(&tx, MIN_TRANSACTION_FEE).is_err());
+    }
+
+    #[test]
+    fn test_validate_poll_too_few_options() {
+        let keypair = Keypair::generate();
+        let payload = TransactionPayload::CreatePoll {
+            question: "Test?".into(),
+            options: vec!["Yes".into()],
+            duration_secs: 3600,
+            geographic_filter: None,
+        };
+        let tx = make_signed_transaction(&keypair, payload, MIN_TRANSACTION_FEE);
+        assert!(validate_transaction(&tx, MIN_TRANSACTION_FEE).is_err());
+    }
+
+    #[test]
+    fn test_validate_block_transactions_no_duplicates() {
+        let keypair = Keypair::generate();
+        let payload = TransactionPayload::Transfer {
+            to: Address([0x42; 32]),
+            amount: 1_000_000,
+        };
+        let tx = make_signed_transaction(&keypair, payload, MIN_TRANSACTION_FEE);
+        let txs = vec![tx.clone(), tx]; // Duplicate
+        assert!(validate_block_transactions(&txs, MIN_TRANSACTION_FEE).is_err());
+    }
+
+    #[test]
+    fn test_validate_block_transactions_too_many() {
+        let keypair = Keypair::generate();
+        let txs: Vec<Transaction> = (0..MAX_TRANSACTIONS_PER_BLOCK + 1)
+            .map(|i| {
+                let payload = TransactionPayload::Transfer {
+                    to: Address([0x42; 32]),
+                    amount: (i as u64 + 1) * 1000,
+                };
+                // Build each with a unique nonce to get unique hashes
+                let nonce = i as u64;
+                let fee = MIN_TRANSACTION_FEE;
+                let timestamp = Utc::now();
+                let payload_bytes = bincode::serialize(&payload).unwrap();
+                let mut signing_message = Vec::new();
+                signing_message.extend_from_slice(&nonce.to_le_bytes());
+                signing_message.extend_from_slice(&fee.to_le_bytes());
+                let ts_bytes = bincode::serialize(&timestamp).unwrap();
+                signing_message.extend_from_slice(&ts_bytes);
+                signing_message.extend_from_slice(&payload_bytes);
+                let signature = keypair.sign(&signing_message);
+                let hash = sha256(&signing_message);
+                Transaction {
+                    hash: TxHash(hash),
+                    payload,
+                    sender_pubkey: keypair.public_key_bytes(),
+                    signature,
+                    nonce,
+                    fee,
+                    timestamp,
+                }
+            })
+            .collect();
+
+        assert!(validate_block_transactions(&txs, MIN_TRANSACTION_FEE).is_err());
+    }
+
+    #[test]
+    fn test_validate_block_header_height_mismatch() {
+        let committee = make_test_committee();
+        let producer = committee.members[0].node_id;
+
+        let header = BlockHeader {
+            height: 5, // Wrong height
+            timestamp: Utc::now(),
+            parent_hash: BlockHash([0xAA; 32]),
+            transactions_root: [0; 32],
+            state_root: [0; 32],
+            attestations_root: [0; 32],
+            producer,
+            vrf_proof: vec![],
+            active_miners: 100,
+            geographic_diversity: 5,
+        };
+
+        let ctx = ValidationContext {
+            current_height: 1,
+            previous_block_hash: [0xAA; 32],
+            committee,
+            max_block_size: MAX_BLOCK_SIZE,
+            min_transaction_fee: MIN_TRANSACTION_FEE,
+        };
+
+        assert!(validate_block_header(&header, &ctx).is_err());
+    }
+
+    #[test]
+    fn test_validate_block_header_parent_hash_mismatch() {
+        let committee = make_test_committee();
+        let producer = committee.members[0].node_id;
+
+        let header = BlockHeader {
+            height: 1,
+            timestamp: Utc::now(),
+            parent_hash: BlockHash([0xBB; 32]), // Wrong parent
+            transactions_root: [0; 32],
+            state_root: [0; 32],
+            attestations_root: [0; 32],
+            producer,
+            vrf_proof: vec![],
+            active_miners: 100,
+            geographic_diversity: 5,
+        };
+
+        let ctx = ValidationContext {
+            current_height: 1,
+            previous_block_hash: [0xAA; 32],
+            committee,
+            max_block_size: MAX_BLOCK_SIZE,
+            min_transaction_fee: MIN_TRANSACTION_FEE,
+        };
+
+        assert!(validate_block_header(&header, &ctx).is_err());
+    }
+
+    #[test]
+    fn test_validate_block_header_non_committee_producer() {
+        let committee = make_test_committee();
+
+        let header = BlockHeader {
+            height: 1,
+            timestamp: Utc::now(),
+            parent_hash: BlockHash([0xAA; 32]),
+            transactions_root: [0; 32],
+            state_root: [0; 32],
+            attestations_root: [0; 32],
+            producer: NodeId([0xFF; 32]), // Not in committee
+            vrf_proof: vec![],
+            active_miners: 100,
+            geographic_diversity: 5,
+        };
+
+        let ctx = ValidationContext {
+            current_height: 1,
+            previous_block_hash: [0xAA; 32],
+            committee,
+            max_block_size: MAX_BLOCK_SIZE,
+            min_transaction_fee: MIN_TRANSACTION_FEE,
+        };
+
+        assert!(validate_block_header(&header, &ctx).is_err());
+    }
+
+    #[test]
+    fn test_validate_block_header_valid() {
+        let committee = make_test_committee();
+        let producer = committee.members[0].node_id;
+
+        let header = BlockHeader {
+            height: 1,
+            timestamp: Utc::now(),
+            parent_hash: BlockHash([0xAA; 32]),
+            transactions_root: [0; 32],
+            state_root: [0; 32],
+            attestations_root: [0; 32],
+            producer,
+            vrf_proof: vec![],
+            active_miners: 100,
+            geographic_diversity: 5,
+        };
+
+        let ctx = ValidationContext {
+            current_height: 1,
+            previous_block_hash: [0xAA; 32],
+            committee,
+            max_block_size: MAX_BLOCK_SIZE,
+            min_transaction_fee: MIN_TRANSACTION_FEE,
+        };
+
+        assert!(validate_block_header(&header, &ctx).is_ok());
+    }
+
+    #[test]
+    fn test_validate_stake_zero_amount() {
+        let keypair = Keypair::generate();
+        let payload = TransactionPayload::Stake { amount: 0 };
+        let tx = make_signed_transaction(&keypair, payload, MIN_TRANSACTION_FEE);
+        assert!(validate_transaction(&tx, MIN_TRANSACTION_FEE).is_err());
+    }
+
+    #[test]
+    fn test_validate_governance_proposal_empty_title() {
+        let keypair = Keypair::generate();
+        let payload = TransactionPayload::GovernanceProposal {
+            title: "".into(),
+            description: "Some description".into(),
+            proposal_data: vec![],
+        };
+        let tx = make_signed_transaction(&keypair, payload, MIN_TRANSACTION_FEE);
+        assert!(validate_transaction(&tx, MIN_TRANSACTION_FEE).is_err());
+    }
+
+    #[test]
+    fn test_validate_contract_call_empty_function() {
+        let keypair = Keypair::generate();
+        let payload = TransactionPayload::CallContract {
+            contract: Address([0x42; 32]),
+            function: "".into(),
+            args: vec![],
+            gas_limit: 1000,
+        };
+        let tx = make_signed_transaction(&keypair, payload, MIN_TRANSACTION_FEE);
+        assert!(validate_transaction(&tx, MIN_TRANSACTION_FEE).is_err());
+    }
+}

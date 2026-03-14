@@ -1,0 +1,19 @@
+[package]
+name = "gratia-wallet"
+description = "Gratia protocol - wallet, key management, transaction signing, and recovery"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+gratia-core = { path = "../gratia-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+bincode = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+ed25519-dalek = { workspace = true }
+sha2 = { workspace = true }
+rand = { workspace = true }
+hex = { workspace = true }

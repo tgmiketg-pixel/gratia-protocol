@@ -1,0 +1,28 @@
+[package]
+name = "gratia-ffi"
+description = "Gratia protocol - UniFFI bridge for mobile (Android/iOS)"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+# UniFFI for generating Kotlin (Android) and Swift (iOS) bindings
+uniffi = { version = "0.28", features = ["cli"] }
+
+# Internal crates
+gratia-core = { path = "../gratia-core" }
+gratia-wallet = { path = "../gratia-wallet" }
+gratia-pol = { path = "../gratia-pol" }
+gratia-staking = { path = "../gratia-staking" }
+
+# Workspace dependencies
+serde = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+hex = { workspace = true }
+tracing = { workspace = true }
+
+[build-dependencies]
+uniffi = { version = "0.28", features = ["build"] }

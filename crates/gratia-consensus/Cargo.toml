@@ -1,0 +1,20 @@
+[package]
+name = "gratia-consensus"
+description = "Gratia protocol - Consensus engine with VRF block production and validator committees"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+gratia-core = { path = "../gratia-core" }
+serde = { workspace = true }
+bincode = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+ed25519-dalek = { workspace = true }
+curve25519-dalek = { workspace = true }
+sha2 = { workspace = true }
+rand = { workspace = true }
+rand_chacha = { workspace = true }
+hex = { workspace = true }
