@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- WHY: Minimal XML theme for the Activity window before Compose takes over.
+         Using the AppCompat DayNight NoActionBar parent since Material3 XML theme
+         requires the Material Components library which we don't need — Compose
+         handles all Material3 theming in Kotlin. -->
+    <style name="Theme.Gratia" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

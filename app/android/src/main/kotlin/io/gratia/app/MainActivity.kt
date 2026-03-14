@@ -8,12 +8,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalance
-import androidx.compose.material.icons.filled.BoltCircle
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.HowToVote
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.AccountBalance
-import androidx.compose.material.icons.outlined.BoltCircle
+import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.CellTower
 import androidx.compose.material.icons.outlined.HowToVote
 import androidx.compose.material.icons.outlined.Settings
@@ -94,8 +94,8 @@ val bottomNavTabs = listOf(
     BottomNavTab(
         route = GratiaRoutes.MINING,
         labelResId = R.string.tab_mining,
-        selectedIcon = Icons.Filled.BoltCircle,
-        unselectedIcon = Icons.Outlined.BoltCircle,
+        selectedIcon = Icons.Filled.Bolt,
+        unselectedIcon = Icons.Outlined.Bolt,
     ),
     BottomNavTab(
         route = GratiaRoutes.NETWORK,

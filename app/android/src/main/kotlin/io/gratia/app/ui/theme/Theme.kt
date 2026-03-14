@@ -27,7 +27,6 @@ private val GratiaGoldDark = Color(0xFFFF8F00)       // Accent in dark mode
 
 // Surface and background tones
 private val DarkSurface = Color(0xFF121212)
-private val DarkSurfaceContainer = Color(0xFF1E1E1E)
 private val LightBackground = Color(0xFFFBFDF9)
 private val LightSurface = Color(0xFFFFFFFF)
 
@@ -51,7 +50,6 @@ private val DarkColorScheme = darkColorScheme(
     tertiary = GratiaTealLight,
     background = DarkSurface,
     surface = DarkSurface,
-    surfaceContainer = DarkSurfaceContainer,
     error = ErrorRed,
     onBackground = Color.White,
     onSurface = Color.White,

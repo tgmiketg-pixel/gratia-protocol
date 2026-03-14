@@ -22,7 +22,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-import uniffi.gratia.FfiMiningStatus
+import io.gratia.app.bridge.GratiaCoreManager
+import io.gratia.app.bridge.MiningStatus
 
 /**
  * Foreground service for active GRAT mining.
@@ -196,16 +197,15 @@ class MiningService : Service() {
      * and notification updates.
      */
     private fun startMining() {
-        val node = ProofOfLifeService.gratiaNode
-        if (node == null) {
-            Log.e(TAG, "Cannot start mining — GratiaNode not initialized")
+        if (!GratiaCoreManager.isInitialized) {
+            Log.e(TAG, "Cannot start mining — GratiaCoreManager not initialized")
             stopSelf()
             return
         }
 
-        // Attempt to start mining in the Rust core.
+        // Attempt to start mining in the Rust core via the bridge.
         try {
-            val status = node.startMining()
+            val status = GratiaCoreManager.startMining()
             Log.i(TAG, "Mining started: state=${status.state}")
             updateUiState(status)
         } catch (e: Exception) {
@@ -235,10 +235,9 @@ class MiningService : Service() {
         notificationJob?.cancel()
         notificationJob = null
 
-        val node = ProofOfLifeService.gratiaNode
-        if (node != null) {
+        if (GratiaCoreManager.isInitialized) {
             try {
-                node.stopMining()
+                GratiaCoreManager.stopMining()
                 Log.i(TAG, "Mining stopped in Rust core")
             } catch (e: Exception) {
                 Log.e(TAG, "Error stopping mining in Rust core: ${e.message}")
@@ -256,7 +255,7 @@ class MiningService : Service() {
      * BroadcastReceiver might miss (e.g., gradual battery drain below 80%).
      */
     private suspend fun monitorConditions() {
-        val node = ProofOfLifeService.gratiaNode ?: return
+        if (!GratiaCoreManager.isInitialized) return
 
         while (serviceScope.isActive) {
             try {
@@ -270,8 +269,8 @@ class MiningService : Service() {
                 val isPluggedIn = batteryManager.isCharging
                 val cpuTemp = readCpuTemperature()
 
-                // Update Rust core with current power state.
-                val status = node.updatePowerState(isPluggedIn, batteryPercent.toUByte())
+                // Update Rust core with current power state via the bridge.
+                val status = GratiaCoreManager.updatePowerState(isPluggedIn, batteryPercent)
 
                 // Check thermal conditions.
                 val isThrottled = cpuTemp >= THERMAL_THROTTLE_TEMP_C
@@ -434,10 +433,10 @@ class MiningService : Service() {
     /**
      * Update the observable mining state for the UI layer.
      */
-    private fun updateUiState(status: FfiMiningStatus) {
+    private fun updateUiState(status: MiningStatus) {
         _miningState.value = MiningUiState.Mining(
-            batteryPercent = status.batteryPercent.toInt(),
-            presenceScore = status.presenceScore.toInt(),
+            batteryPercent = status.batteryPercent,
+            presenceScore = status.presenceScore,
             sessionEarningsLux = sessionEarningsLux,
             sessionDurationMs = System.currentTimeMillis() - sessionStartTimeMs
         )

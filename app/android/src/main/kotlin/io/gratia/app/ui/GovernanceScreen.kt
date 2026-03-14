@@ -22,13 +22,13 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Divider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.SuggestionChipDefaults
@@ -118,7 +118,7 @@ private fun GovernanceListScreen(
         },
     ) { padding ->
         Column(modifier = Modifier.padding(padding)) {
-            PrimaryTabRow(selectedTabIndex = selectedTab) {
+            TabRow(selectedTabIndex = selectedTab) {
                 tabs.forEachIndexed { index, title ->
                     Tab(
                         selected = selectedTab == index,
@@ -255,7 +255,7 @@ private fun VoteBar(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         LinearProgressIndicator(
-            progress = { forFraction },
+            progress = forFraction,
             modifier = Modifier
                 .weight(1f)
                 .height(8.dp),
@@ -457,7 +457,7 @@ private fun ProposalDetailScreen(
                             VoteResultRow("For", proposal.votesFor, totalVotes, Color(0xFF4CAF50))
                             VoteResultRow("Against", proposal.votesAgainst, totalVotes, MaterialTheme.colorScheme.error)
                             VoteResultRow("Abstain", proposal.votesAbstain, totalVotes, Color(0xFF9E9E9E))
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                            Divider(modifier = Modifier.padding(vertical = 8.dp))
                             Text(
                                 text = "$totalVotes total votes",
                                 style = MaterialTheme.typography.bodySmall,
@@ -566,7 +566,7 @@ private fun VoteResultRow(label: String, count: Int, total: Int, color: Color) {
         }
         Spacer(modifier = Modifier.height(4.dp))
         LinearProgressIndicator(
-            progress = { fraction },
+            progress = fraction,
             modifier = Modifier.fillMaxWidth(),
             color = color,
             trackColor = MaterialTheme.colorScheme.surfaceVariant,
@@ -740,7 +740,7 @@ private fun PollOptionResult(
         }
         Spacer(modifier = Modifier.height(4.dp))
         LinearProgressIndicator(
-            progress = { fraction },
+            progress = fraction,
             modifier = Modifier.fillMaxWidth(),
             color = barColor,
             trackColor = MaterialTheme.colorScheme.surfaceVariant,

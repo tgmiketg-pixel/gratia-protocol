@@ -336,7 +336,7 @@ private fun BatteryStatusCard(status: MiningStatus) {
                     }
                     Spacer(modifier = Modifier.height(4.dp))
                     LinearProgressIndicator(
-                        progress = { status.batteryPercent / 100f },
+                        progress = status.batteryPercent / 100f,
                         modifier = Modifier.fillMaxWidth(),
                         trackColor = MaterialTheme.colorScheme.surfaceVariant,
                     )
@@ -479,7 +479,7 @@ private fun PresenceScoreCard(score: Int) {
             }
             Spacer(modifier = Modifier.height(4.dp))
             LinearProgressIndicator(
-                progress = { score / 100f },
+                progress = score / 100f,
                 modifier = Modifier.fillMaxWidth(),
                 trackColor = MaterialTheme.colorScheme.surfaceVariant,
             )
