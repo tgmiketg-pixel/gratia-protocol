@@ -83,6 +83,19 @@ class GratiaApplication : Application() {
         try {
             GratiaCoreManager.initialize(dataDir)
             Log.i(TAG, "Rust core initialized successfully")
+
+            // Auto-create a wallet on first launch if one doesn't exist.
+            // WHY: The consensus engine needs a signing key (derived from the wallet)
+            // for VRF block producer selection. Without a wallet, consensus can't start.
+            // This matches the onboarding design: "install, use phone normally" — no
+            // manual wallet creation step required.
+            try {
+                val address = GratiaCoreManager.createWallet()
+                Log.i(TAG, "Wallet created: $address")
+            } catch (e: Exception) {
+                // Wallet already exists — this is fine (normal on subsequent launches)
+                Log.d(TAG, "Wallet already exists or creation skipped: ${e.message}")
+            }
         } catch (e: Exception) {
             // WHY: We log but don't crash here. The app can still display the UI
             // and will show appropriate error states. This handles the case where

@@ -31,6 +31,9 @@
     <!-- Wake lock: keep CPU alive during mining while plugged in -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- Internet: required for libp2p QUIC transport (peer-to-peer networking) -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- Network state: check connectivity for consensus participation -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
