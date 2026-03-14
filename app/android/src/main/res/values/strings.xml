@@ -58,6 +58,9 @@
     <string name="governance_polls_label">Polls</string>
     <string name="governance_no_proposals">No active proposals</string>
 
+    <!-- Network screen -->
+    <string name="tab_network">Network</string>
+
     <!-- Settings screen -->
     <string name="settings_wallet_section">Wallet</string>
     <string name="settings_security_section">Security</string>

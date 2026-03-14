@@ -279,6 +279,180 @@ class MiningViewModel : ViewModel() {
 }
 
 // ============================================================================
+// Network UI state
+// ============================================================================
+
+data class NetworkUiState(
+    val isNetworkRunning: Boolean = false,
+    val peerCount: Int = 0,
+    val listenAddress: String? = null,
+    val consensusState: String = "stopped",
+    val currentSlot: Long = 0,
+    val currentHeight: Long = 0,
+    val isCommitteeMember: Boolean = false,
+    val blocksProduced: Long = 0,
+    val recentEvents: List<String> = emptyList(),
+    val isLoading: Boolean = false,
+    val connectPeerAddress: String = "",
+    val errorMessage: String? = null,
+)
+
+class NetworkViewModel : ViewModel() {
+
+    private val _uiState = MutableStateFlow(NetworkUiState())
+    val uiState: StateFlow<NetworkUiState> = _uiState.asStateFlow()
+
+    private var pollingActive = false
+
+    fun startNetwork() {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
+            try {
+                val status = io.gratia.app.bridge.GratiaCoreManager.startNetwork()
+                _uiState.value = _uiState.value.copy(
+                    isNetworkRunning = status.isRunning,
+                    peerCount = status.peerCount,
+                    listenAddress = status.listenAddress,
+                    isLoading = false,
+                )
+                startPolling()
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    errorMessage = e.message,
+                )
+            }
+        }
+    }
+
+    fun stopNetwork() {
+        viewModelScope.launch {
+            pollingActive = false
+            try {
+                io.gratia.app.bridge.GratiaCoreManager.stopNetwork()
+                io.gratia.app.bridge.GratiaCoreManager.stopConsensus()
+            } catch (_: Exception) {}
+            _uiState.value = NetworkUiState()
+        }
+    }
+
+    fun startConsensus() {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(errorMessage = null)
+            try {
+                val status = io.gratia.app.bridge.GratiaCoreManager.startConsensus()
+                _uiState.value = _uiState.value.copy(
+                    consensusState = status.state,
+                    currentSlot = status.currentSlot,
+                    currentHeight = status.currentHeight,
+                    isCommitteeMember = status.isCommitteeMember,
+                    blocksProduced = status.blocksProduced,
+                )
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    errorMessage = e.message,
+                )
+            }
+        }
+    }
+
+    fun stopConsensus() {
+        viewModelScope.launch {
+            try {
+                io.gratia.app.bridge.GratiaCoreManager.stopConsensus()
+                _uiState.value = _uiState.value.copy(
+                    consensusState = "stopped",
+                    currentSlot = 0,
+                    currentHeight = 0,
+                    isCommitteeMember = false,
+                )
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun connectPeer(address: String) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(errorMessage = null)
+            try {
+                io.gratia.app.bridge.GratiaCoreManager.connectPeer(address)
+                addEvent("Dialing $address")
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    errorMessage = e.message,
+                )
+            }
+        }
+    }
+
+    fun updateConnectPeerAddress(address: String) {
+        _uiState.value = _uiState.value.copy(connectPeerAddress = address)
+    }
+
+    fun clearError() {
+        _uiState.value = _uiState.value.copy(errorMessage = null)
+    }
+
+    private fun startPolling() {
+        if (pollingActive) return
+        pollingActive = true
+        viewModelScope.launch {
+            // WHY: Poll every 2 seconds — fast enough to show live block production
+            // (4-second slots) without excessive CPU usage on mobile.
+            while (pollingActive) {
+                delay(2000)
+                pollStatus()
+            }
+        }
+    }
+
+    private suspend fun pollStatus() {
+        try {
+            // Poll network status
+            val netStatus = io.gratia.app.bridge.GratiaCoreManager.getNetworkStatus()
+            _uiState.value = _uiState.value.copy(
+                isNetworkRunning = netStatus.isRunning,
+                peerCount = netStatus.peerCount,
+                listenAddress = netStatus.listenAddress,
+            )
+
+            // Poll consensus status
+            val conStatus = io.gratia.app.bridge.GratiaCoreManager.getConsensusStatus()
+            _uiState.value = _uiState.value.copy(
+                consensusState = conStatus.state,
+                currentSlot = conStatus.currentSlot,
+                currentHeight = conStatus.currentHeight,
+                isCommitteeMember = conStatus.isCommitteeMember,
+                blocksProduced = conStatus.blocksProduced,
+            )
+
+            // Poll network events
+            val events = io.gratia.app.bridge.GratiaCoreManager.pollNetworkEvents()
+            for (event in events) {
+                val msg = when (event) {
+                    is io.gratia.app.bridge.NetworkEvent.PeerConnected ->
+                        "Peer connected: ${event.peerId.take(12)}..."
+                    is io.gratia.app.bridge.NetworkEvent.PeerDisconnected ->
+                        "Peer disconnected: ${event.peerId.take(12)}..."
+                    is io.gratia.app.bridge.NetworkEvent.BlockReceived ->
+                        "Block #${event.height} received"
+                    is io.gratia.app.bridge.NetworkEvent.TransactionReceived ->
+                        "Transaction ${event.hashHex.take(8)}... received"
+                }
+                addEvent(msg)
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun addEvent(message: String) {
+        val events = _uiState.value.recentEvents.toMutableList()
+        events.add(0, message)
+        // WHY: Keep only last 50 events to bound memory usage.
+        if (events.size > 50) events.removeAt(events.size - 1)
+        _uiState.value = _uiState.value.copy(recentEvents = events)
+    }
+}
+
+// ============================================================================
 // Settings UI state
 // ============================================================================
 

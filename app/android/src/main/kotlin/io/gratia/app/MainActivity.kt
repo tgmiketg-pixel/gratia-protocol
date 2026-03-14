@@ -9,10 +9,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.BoltCircle
+import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.HowToVote
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.AccountBalance
 import androidx.compose.material.icons.outlined.BoltCircle
+import androidx.compose.material.icons.outlined.CellTower
 import androidx.compose.material.icons.outlined.HowToVote
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
@@ -61,6 +63,7 @@ class MainActivity : ComponentActivity() {
 object GratiaRoutes {
     const val WALLET = "wallet"
     const val MINING = "mining"
+    const val NETWORK = "network"
     const val GOVERNANCE = "governance"
     const val SETTINGS = "settings"
 }
@@ -93,6 +96,12 @@ val bottomNavTabs = listOf(
         labelResId = R.string.tab_mining,
         selectedIcon = Icons.Filled.BoltCircle,
         unselectedIcon = Icons.Outlined.BoltCircle,
+    ),
+    BottomNavTab(
+        route = GratiaRoutes.NETWORK,
+        labelResId = R.string.tab_network,
+        selectedIcon = Icons.Filled.CellTower,
+        unselectedIcon = Icons.Outlined.CellTower,
     ),
     BottomNavTab(
         route = GratiaRoutes.GOVERNANCE,
@@ -166,6 +175,9 @@ fun GratiaApp() {
             composable(GratiaRoutes.MINING) {
                 // TODO: MiningScreen() — implemented by UI agent
                 ScreenPlaceholder(name = stringResource(R.string.tab_mining))
+            }
+            composable(GratiaRoutes.NETWORK) {
+                io.gratia.app.ui.NetworkScreen()
             }
             composable(GratiaRoutes.GOVERNANCE) {
                 // TODO: GovernanceScreen() — implemented by UI agent
