@@ -754,6 +754,12 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -785,6 +791,8 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_finalize_day(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    fun uniffi_gratia_ffi_fn_method_gratianode_get_consensus_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_mining_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_network_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -803,10 +811,14 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_stake(`ptr`: Pointer,`amount`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_start_consensus(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_start_mining(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_start_network(`ptr`: Pointer,`listenPort`: Short,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_stop_consensus(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_gratia_ffi_fn_method_gratianode_stop_mining(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_stop_network(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -935,6 +947,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_finalize_day(
     ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_get_consensus_status(
+    ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_mining_status(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_network_status(
@@ -953,9 +967,13 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_stake(
     ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_start_consensus(
+    ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_start_mining(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_start_network(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_stop_consensus(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_stop_mining(
     ): Short
@@ -995,6 +1013,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_finalize_day() != 29277.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_consensus_status() != 58194.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_mining_status() != 12667.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1022,10 +1043,16 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_stake() != 33587.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_start_consensus() != 59213.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_start_mining() != 41256.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_start_network() != 17866.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_stop_consensus() != 56015.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_stop_mining() != 55353.toShort()) {
@@ -1512,6 +1539,11 @@ public interface GratiaNodeInterface {
     fun `finalizeDay`(): kotlin.Boolean
     
     /**
+     * Get the current consensus status.
+     */
+    fun `getConsensusStatus`(): FfiConsensusStatus
+    
+    /**
      * Get the current mining status.
      */
     fun `getMiningStatus`(): FfiMiningStatus
@@ -1571,6 +1603,17 @@ public interface GratiaNodeInterface {
     fun `stake`(`amount`: kotlin.ULong): kotlin.String
     
     /**
+     * Start the consensus engine and slot timer.
+     *
+     * Initializes the consensus engine with a demo committee of this node
+     * plus any connected peers. Starts a background slot timer that advances
+     * the consensus every 4 seconds.
+     *
+     * The network must be started first so received blocks can be processed.
+     */
+    fun `startConsensus`(): FfiConsensusStatus
+    
+    /**
      * Request to start mining.
      *
      * Returns the current mining status. Mining will only activate if all
@@ -1587,6 +1630,11 @@ public interface GratiaNodeInterface {
      * `listen_port` specifies the UDP port to listen on (0 = OS-assigned).
      */
     fun `startNetwork`(`listenPort`: kotlin.UShort): FfiNetworkStatus
+    
+    /**
+     * Stop the consensus engine.
+     */
+    fun `stopConsensus`()
     
     /**
      * Stop mining.
@@ -1796,6 +1844,22 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
 
     
     /**
+     * Get the current consensus status.
+     */
+    @Throws(FfiException::class)override fun `getConsensusStatus`(): FfiConsensusStatus {
+            return FfiConverterTypeFfiConsensusStatus.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_get_consensus_status(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Get the current mining status.
      */
     @Throws(FfiException::class)override fun `getMiningStatus`(): FfiMiningStatus {
@@ -1954,6 +2018,28 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
 
     
     /**
+     * Start the consensus engine and slot timer.
+     *
+     * Initializes the consensus engine with a demo committee of this node
+     * plus any connected peers. Starts a background slot timer that advances
+     * the consensus every 4 seconds.
+     *
+     * The network must be started first so received blocks can be processed.
+     */
+    @Throws(FfiException::class)override fun `startConsensus`(): FfiConsensusStatus {
+            return FfiConverterTypeFfiConsensusStatus.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_start_consensus(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Request to start mining.
      *
      * Returns the current mining status. Mining will only activate if all
@@ -1990,6 +2076,21 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
     }
     )
     }
+    
+
+    
+    /**
+     * Stop the consensus engine.
+     */
+    @Throws(FfiException::class)override fun `stopConsensus`()
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_stop_consensus(
+        it, _status)
+}
+    }
+    
     
 
     
@@ -2119,6 +2220,68 @@ public object FfiConverterTypeGratiaNode: FfiConverter<GratiaNode, Pointer> {
         // The Rust code always expects pointers written as 8 bytes,
         // and will fail to compile if they don't fit.
         buf.putLong(Pointer.nativeValue(lower(value)))
+    }
+}
+
+
+
+/**
+ * Consensus status for the mobile UI.
+ */
+data class FfiConsensusStatus (
+    /**
+     * Consensus state: "syncing", "active", "producing", or "stopped".
+     */
+    var `state`: kotlin.String, 
+    /**
+     * Current slot number.
+     */
+    var `currentSlot`: kotlin.ULong, 
+    /**
+     * Current block height (last finalized block).
+     */
+    var `currentHeight`: kotlin.ULong, 
+    /**
+     * Whether this node is on the current validator committee.
+     */
+    var `isCommitteeMember`: kotlin.Boolean, 
+    /**
+     * Number of blocks this node has produced.
+     */
+    var `blocksProduced`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiConsensusStatus: FfiConverterRustBuffer<FfiConsensusStatus> {
+    override fun read(buf: ByteBuffer): FfiConsensusStatus {
+        return FfiConsensusStatus(
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiConsensusStatus) = (
+            FfiConverterString.allocationSize(value.`state`) +
+            FfiConverterULong.allocationSize(value.`currentSlot`) +
+            FfiConverterULong.allocationSize(value.`currentHeight`) +
+            FfiConverterBoolean.allocationSize(value.`isCommitteeMember`) +
+            FfiConverterULong.allocationSize(value.`blocksProduced`)
+    )
+
+    override fun write(value: FfiConsensusStatus, buf: ByteBuffer) {
+            FfiConverterString.write(value.`state`, buf)
+            FfiConverterULong.write(value.`currentSlot`, buf)
+            FfiConverterULong.write(value.`currentHeight`, buf)
+            FfiConverterBoolean.write(value.`isCommitteeMember`, buf)
+            FfiConverterULong.write(value.`blocksProduced`, buf)
     }
 }
 

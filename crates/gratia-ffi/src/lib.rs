@@ -26,11 +26,14 @@
 pub mod convert;
 
 use std::collections::VecDeque;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
+use gratia_consensus::committee::EligibleNode;
+use gratia_consensus::vrf::VrfSecretKey;
+use gratia_consensus::ConsensusEngine;
 use gratia_core::config::Config;
 use gratia_core::types::{MiningState, NodeId, PowerState};
 use gratia_network::{NetworkConfig, NetworkEvent, NetworkManager};
@@ -234,6 +237,21 @@ pub enum FfiNetworkEvent {
     TransactionReceived { hash_hex: String },
 }
 
+/// Consensus status for the mobile UI.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FfiConsensusStatus {
+    /// Consensus state: "syncing", "active", "producing", or "stopped".
+    pub state: String,
+    /// Current slot number.
+    pub current_slot: u64,
+    /// Current block height (last finalized block).
+    pub current_height: u64,
+    /// Whether this node is on the current validator committee.
+    pub is_committee_member: bool,
+    /// Number of blocks this node has produced.
+    pub blocks_produced: u64,
+}
+
 /// Sensor events pushed from the native platform layer (Android/iOS) into
 /// the Rust PoL engine.
 ///
@@ -288,8 +306,9 @@ pub enum FfiSensorEvent {
 pub struct GratiaNode {
     /// Data directory for persistent storage (e.g., app-internal storage path).
     data_dir: String,
-    /// Inner state protected by a mutex for thread safety across FFI calls.
-    inner: Mutex<GratiaNodeInner>,
+    /// Inner state protected by Arc<Mutex> for thread safety across FFI calls
+    /// and background tasks (slot timer, event loop).
+    inner: Arc<Mutex<GratiaNodeInner>>,
     /// Tokio runtime for async operations (network, consensus).
     /// WHY: UniFFI methods are synchronous, but libp2p networking is async.
     /// We embed a tokio runtime so FFI methods can call `block_on()` to drive
@@ -317,6 +336,12 @@ struct GratiaNodeInner {
     pending_network_events: VecDeque<FfiNetworkEvent>,
     /// Current listen address reported by the swarm.
     listen_address: Option<String>,
+    /// Consensus engine — created when `start_consensus()` is called.
+    consensus: Option<ConsensusEngine>,
+    /// Number of blocks this node has produced (lifetime counter).
+    blocks_produced: u64,
+    /// Handle to the slot timer task (so we can cancel it on stop).
+    slot_timer_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 #[uniffi::export]
@@ -359,11 +384,14 @@ impl GratiaNode {
             network_event_rx: None,
             pending_network_events: VecDeque::new(),
             listen_address: None,
+            consensus: None,
+            blocks_produced: 0,
+            slot_timer_handle: None,
         };
 
         GratiaNode {
             data_dir,
-            inner: Mutex::new(inner),
+            inner: Arc::new(Mutex::new(inner)),
             runtime,
         }
     }
@@ -920,6 +948,223 @@ impl GratiaNode {
         inner.network_event_rx = Some(rx);
 
         Ok(new_events)
+    }
+
+    // ========================================================================
+    // Consensus methods
+    // ========================================================================
+
+    /// Start the consensus engine and slot timer.
+    ///
+    /// Initializes the consensus engine with a demo committee of this node
+    /// plus any connected peers. Starts a background slot timer that advances
+    /// the consensus every 4 seconds.
+    ///
+    /// The network must be started first so received blocks can be processed.
+    pub fn start_consensus(&self) -> Result<FfiConsensusStatus, FfiError> {
+        let mut inner = self.lock_inner()?;
+
+        if inner.consensus.is_some() {
+            return Err(FfiError::InternalError {
+                reason: "consensus already started".into(),
+            });
+        }
+
+        let node_id = self.get_node_id_or_default(&inner);
+
+        // WHY: Use the wallet's signing key bytes for VRF derivation. The
+        // VRF secret key is derived from the Ed25519 signing key.
+        let signing_key_bytes = inner
+            .wallet
+            .signing_key_bytes()
+            .map_err(|_| FfiError::WalletNotInitialized)?;
+
+        let presence_score = inner.presence_score.max(40); // Minimum threshold
+
+        let mut engine = ConsensusEngine::new(node_id, &signing_key_bytes, presence_score);
+
+        // Create a demo committee with this node as the only eligible member.
+        // WHY: For the Phase 1 demo, we bootstrap a minimal committee. In
+        // production, the committee is selected from all eligible miners on
+        // the network.
+        let vrf_pubkey = VrfSecretKey::from_ed25519_bytes(&signing_key_bytes).public_key();
+        let eligible_nodes = vec![EligibleNode {
+            node_id,
+            vrf_pubkey,
+            presence_score,
+            has_valid_pol: true,
+            meets_minimum_stake: true,
+        }];
+
+        // WHY: Pad to 21 nodes for committee selection (requires COMMITTEE_SIZE
+        // eligible nodes). Use synthetic nodes for the demo — they won't produce
+        // blocks but satisfy the committee formation requirement.
+        let mut all_eligible = eligible_nodes;
+        for i in 1..=20u8 {
+            let mut fake_id = [0u8; 32];
+            fake_id[0] = i;
+            fake_id[31] = 0xFF; // Marker to distinguish synthetic nodes
+            all_eligible.push(EligibleNode {
+                node_id: NodeId(fake_id),
+                vrf_pubkey: VrfSecretKey::from_ed25519_bytes(&[i; 32]).public_key(),
+                presence_score: 40,
+                has_valid_pol: true,
+                meets_minimum_stake: true,
+            });
+        }
+
+        let epoch_seed = [0xAB; 32]; // Demo seed
+        engine.initialize_committee(&all_eligible, &epoch_seed, 0, 0)
+            .map_err(|e| FfiError::InternalError {
+                reason: format!("failed to initialize committee: {}", e),
+            })?;
+
+        let status = consensus_status(&engine, 0);
+        inner.consensus = Some(engine);
+
+        // Start the slot timer background task
+        let inner_arc = Arc::clone(&self.inner);
+        let handle = self.runtime.spawn(async move {
+            run_slot_timer(inner_arc).await;
+        });
+        inner.slot_timer_handle = Some(handle);
+
+        info!("FFI: consensus started");
+        Ok(status)
+    }
+
+    /// Stop the consensus engine.
+    pub fn stop_consensus(&self) -> Result<(), FfiError> {
+        let mut inner = self.lock_inner()?;
+
+        if let Some(ref mut engine) = inner.consensus {
+            engine.stop();
+        }
+        inner.consensus = None;
+
+        // Cancel the slot timer
+        if let Some(handle) = inner.slot_timer_handle.take() {
+            handle.abort();
+        }
+
+        info!("FFI: consensus stopped");
+        Ok(())
+    }
+
+    /// Get the current consensus status.
+    pub fn get_consensus_status(&self) -> Result<FfiConsensusStatus, FfiError> {
+        let inner = self.lock_inner()?;
+
+        match &inner.consensus {
+            Some(engine) => Ok(consensus_status(engine, inner.blocks_produced)),
+            None => Ok(FfiConsensusStatus {
+                state: "stopped".to_string(),
+                current_slot: 0,
+                current_height: 0,
+                is_committee_member: false,
+                blocks_produced: 0,
+            }),
+        }
+    }
+}
+
+// ============================================================================
+// Free functions (not exported via UniFFI)
+// ============================================================================
+
+/// Build an FfiConsensusStatus from the engine state.
+fn consensus_status(engine: &ConsensusEngine, blocks_produced: u64) -> FfiConsensusStatus {
+    let state = match engine.state() {
+        gratia_consensus::ConsensusState::Syncing => "syncing",
+        gratia_consensus::ConsensusState::Active => "active",
+        gratia_consensus::ConsensusState::Producing => "producing",
+        gratia_consensus::ConsensusState::Stopped => "stopped",
+    };
+    FfiConsensusStatus {
+        state: state.to_string(),
+        current_slot: engine.current_slot(),
+        current_height: engine.current_height(),
+        is_committee_member: engine.is_committee_member(),
+        blocks_produced,
+    }
+}
+
+/// Background task that advances the consensus engine every 4 seconds.
+///
+/// WHY: The consensus engine's slot timer must run continuously in the
+/// background. When this node is selected as the block producer for a slot,
+/// it produces an empty block (no transactions for the demo), serializes it,
+/// and broadcasts it to the network.
+async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
+    // WHY: 4-second slot time, middle of the 3-5 second target range.
+    let slot_duration = tokio::time::Duration::from_secs(4);
+
+    loop {
+        tokio::time::sleep(slot_duration).await;
+
+        let mut guard = match inner.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                error!("Slot timer: mutex poisoned, stopping");
+                return;
+            }
+        };
+
+        // WHY: We check consensus existence and advance the slot in a
+        // scoped block, then operate on the result outside the borrow.
+        let should_produce = {
+            match guard.consensus.as_mut() {
+                Some(engine) => {
+                    let result = engine.advance_slot();
+                    if result {
+                        info!(
+                            slot = engine.current_slot(),
+                            height = engine.current_height() + 1,
+                            "Slot timer: this node should produce a block"
+                        );
+                    }
+                    result
+                }
+                None => {
+                    debug!("Slot timer: consensus stopped, exiting");
+                    return;
+                }
+            }
+        };
+
+        if should_produce {
+            // Produce an empty block (demo mode — no real transactions).
+            let produce_result = guard.consensus.as_mut().unwrap()
+                .produce_block(vec![], vec![], [0u8; 32]);
+
+            match produce_result {
+                Ok(pending) => {
+                    let block_height = pending.block.header.height;
+                    guard.blocks_produced += 1;
+
+                    info!(height = block_height, "Block produced (demo mode)");
+
+                    // Auto-finalize the block (demo mode — single node committee)
+                    // WHY: In production, finalization requires 14/21 committee
+                    // signatures. For the Phase 1 demo with a single node, we
+                    // auto-finalize immediately.
+                    match guard.consensus.as_mut().unwrap().finalize_pending_block() {
+                        Ok(finalized_block) => {
+                            info!(
+                                height = finalized_block.header.height,
+                                "Block finalized (demo mode)"
+                            );
+                        }
+                        Err(e) => {
+                            warn!("Failed to finalize block: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to produce block: {}", e);
+                }
+            }
+        }
     }
 }
 

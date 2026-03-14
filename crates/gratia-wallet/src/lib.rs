@@ -374,6 +374,19 @@ impl<K: Keystore> WalletManager<K> {
         self.inheritance.as_ref()
     }
 
+    /// Export the raw signing key as 32 bytes.
+    ///
+    /// WHY: Needed by the consensus engine to derive the VRF secret key
+    /// for block producer selection. Returns an error if no wallet exists
+    /// or if the keystore doesn't support key export (hardware enclaves).
+    pub fn signing_key_bytes(&self) -> Result<[u8; 32], GratiaError> {
+        let bytes = self.keystore.export_secret_key()?;
+        let arr: [u8; 32] = bytes
+            .try_into()
+            .map_err(|_| GratiaError::Other("signing key is not 32 bytes".into()))?;
+        Ok(arr)
+    }
+
     /// Record a Proof of Life event to reset the dead-man switch.
     pub fn record_proof_of_life(&mut self) {
         if let Some(ref mut config) = self.inheritance {

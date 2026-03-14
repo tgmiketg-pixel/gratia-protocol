@@ -3,6 +3,7 @@ package io.gratia.app.bridge
 import android.util.Log
 import uniffi.gratia_ffi.GratiaNode
 import uniffi.gratia_ffi.FfiException
+import uniffi.gratia_ffi.FfiConsensusStatus
 import uniffi.gratia_ffi.FfiMiningStatus
 import uniffi.gratia_ffi.FfiNetworkEvent
 import uniffi.gratia_ffi.FfiNetworkStatus
@@ -339,6 +340,42 @@ object GratiaCoreManager {
     }
 
     // ========================================================================
+    // Consensus methods
+    // ========================================================================
+
+    /**
+     * Start the consensus engine and slot timer.
+     *
+     * Initializes the consensus engine with a demo committee and starts
+     * producing blocks every 4 seconds when this node is selected.
+     *
+     * Requires: wallet created, network started (optional but recommended).
+     *
+     * @return Current consensus status.
+     */
+    fun startConsensus(): ConsensusStatus {
+        val ffi = callNode { it.startConsensus() }
+        return ffi.toBridge()
+    }
+
+    /**
+     * Stop the consensus engine.
+     */
+    fun stopConsensus() {
+        callNode { it.stopConsensus() }
+    }
+
+    /**
+     * Get the current consensus status.
+     *
+     * @return Consensus status with state, slot, height, and block count.
+     */
+    fun getConsensusStatus(): ConsensusStatus {
+        val ffi = callNode { it.getConsensusStatus() }
+        return ffi.toBridge()
+    }
+
+    // ========================================================================
     // Private helpers
     // ========================================================================
 
@@ -474,6 +511,18 @@ sealed class SensorEvent(val type: String) {
 }
 
 /**
+ * Consensus status for the UI layer.
+ * Mirrors [FfiConsensusStatus] from the Rust FFI.
+ */
+data class ConsensusStatus(
+    val state: String,
+    val currentSlot: Long,
+    val currentHeight: Long,
+    val isCommitteeMember: Boolean,
+    val blocksProduced: Long,
+)
+
+/**
  * Network status for the UI layer.
  * Mirrors [FfiNetworkStatus] from the Rust FFI.
  */
@@ -510,6 +559,15 @@ class GratiaBridgeException(message: String, cause: Throwable? = null) :
 // ============================================================================
 // Extension functions for FFI -> Bridge conversion
 // ============================================================================
+
+/** Convert [FfiConsensusStatus] to bridge-layer [ConsensusStatus]. */
+private fun FfiConsensusStatus.toBridge() = ConsensusStatus(
+    state = state,
+    currentSlot = currentSlot.toLong(),
+    currentHeight = currentHeight.toLong(),
+    isCommitteeMember = isCommitteeMember,
+    blocksProduced = blocksProduced.toLong(),
+)
 
 /** Convert [FfiMiningStatus] to bridge-layer [MiningStatus]. */
 private fun FfiMiningStatus.toBridge() = MiningStatus(
