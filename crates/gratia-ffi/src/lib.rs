@@ -25,13 +25,15 @@
 
 pub mod convert;
 
+use std::collections::VecDeque;
 use std::sync::Mutex;
 
 use chrono::Utc;
 use tracing::{error, info, warn};
 
 use gratia_core::config::Config;
-use gratia_core::types::{MiningState, PowerState};
+use gratia_core::types::{MiningState, NodeId, PowerState};
+use gratia_network::{NetworkConfig, NetworkEvent, NetworkManager};
 use gratia_pol::collector::SensorEventBuffer;
 use gratia_pol::ProofOfLifeManager;
 use gratia_staking::StakingManager;
@@ -80,6 +82,9 @@ pub enum FfiError {
 
     #[error("Wallet is frozen due to an active recovery claim")]
     WalletFrozen,
+
+    #[error("Network error: {reason}")]
+    NetworkError { reason: String },
 
     #[error("Internal error: {reason}")]
     InternalError { reason: String },
@@ -205,6 +210,30 @@ pub struct FfiStakeInfo {
     pub meets_minimum: bool,
 }
 
+/// Network status for the mobile UI.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FfiNetworkStatus {
+    /// Whether the network layer is running.
+    pub is_running: bool,
+    /// Number of connected peers.
+    pub peer_count: u32,
+    /// Current listen address (if available).
+    pub listen_address: Option<String>,
+}
+
+/// A network event delivered to the mobile app via polling.
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum FfiNetworkEvent {
+    /// A peer connected.
+    PeerConnected { peer_id: String },
+    /// A peer disconnected.
+    PeerDisconnected { peer_id: String },
+    /// A block was received from the network.
+    BlockReceived { height: u64, producer: String },
+    /// A transaction was received from the network.
+    TransactionReceived { hash_hex: String },
+}
+
 /// Sensor events pushed from the native platform layer (Android/iOS) into
 /// the Rust PoL engine.
 ///
@@ -261,6 +290,11 @@ pub struct GratiaNode {
     data_dir: String,
     /// Inner state protected by a mutex for thread safety across FFI calls.
     inner: Mutex<GratiaNodeInner>,
+    /// Tokio runtime for async operations (network, consensus).
+    /// WHY: UniFFI methods are synchronous, but libp2p networking is async.
+    /// We embed a tokio runtime so FFI methods can call `block_on()` to drive
+    /// async operations. The runtime is created once at node initialization.
+    runtime: tokio::runtime::Runtime,
 }
 
 /// Mutable inner state of the GratiaNode.
@@ -275,6 +309,14 @@ struct GratiaNodeInner {
     mining_state: MiningState,
     /// Composite Presence Score (placeholder — will be calculated from sensor flags).
     presence_score: u8,
+    /// Network manager — created when `start_network()` is called.
+    network: Option<NetworkManager>,
+    /// Network event receiver — polls events from the background swarm task.
+    network_event_rx: Option<tokio::sync::mpsc::Receiver<NetworkEvent>>,
+    /// Buffered network events for delivery to the mobile app via `poll_network_events()`.
+    pending_network_events: VecDeque<FfiNetworkEvent>,
+    /// Current listen address reported by the swarm.
+    listen_address: Option<String>,
 }
 
 #[uniffi::export]
@@ -288,6 +330,15 @@ impl GratiaNode {
         let config = Config::default();
 
         info!("initializing GratiaNode with data_dir: {}", data_dir);
+
+        // WHY: Multi-threaded runtime with 2 worker threads — enough for the
+        // libp2p swarm event loop + slot timer without hogging all CPU cores
+        // on a mobile device.
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("failed to create tokio runtime");
 
         let inner = GratiaNodeInner {
             wallet: WalletManager::new_software(),
@@ -304,11 +355,16 @@ impl GratiaNode {
             },
             mining_state: MiningState::ProofOfLife,
             presence_score: 0,
+            network: None,
+            network_event_rx: None,
+            pending_network_events: VecDeque::new(),
+            listen_address: None,
         };
 
         GratiaNode {
             data_dir,
             inner: Mutex::new(inner),
+            runtime,
         }
     }
 
@@ -694,6 +750,176 @@ impl GratiaNode {
                 })
             }
         }
+    }
+
+    // ========================================================================
+    // Network methods
+    // ========================================================================
+
+    /// Start the peer-to-peer network layer.
+    ///
+    /// Initializes the libp2p swarm with QUIC transport, Gossipsub for
+    /// block/transaction propagation, and mDNS for local peer discovery.
+    ///
+    /// `listen_port` specifies the UDP port to listen on (0 = OS-assigned).
+    pub fn start_network(&self, listen_port: u16) -> Result<FfiNetworkStatus, FfiError> {
+        let mut inner = self.lock_inner()?;
+
+        if inner.network.is_some() {
+            return Err(FfiError::NetworkError {
+                reason: "network already started".into(),
+            });
+        }
+
+        let node_id = self.get_node_id_or_default(&inner);
+
+        let mut net_config = NetworkConfig::new(node_id);
+        // WHY: Use the caller-specified port. Port 0 lets the OS pick a free port,
+        // which is the default for mobile (avoids port conflicts).
+        net_config.transport.listen_addresses =
+            vec![format!("/ip4/0.0.0.0/udp/{}/quic-v1", listen_port)];
+
+        let mut network = NetworkManager::new(net_config);
+
+        let event_rx = self.runtime.block_on(async {
+            network.start().await
+        }).map_err(|e| FfiError::NetworkError {
+            reason: e.to_string(),
+        })?;
+
+        inner.network = Some(network);
+        inner.network_event_rx = Some(event_rx);
+
+        info!("FFI: network started on port {}", listen_port);
+
+        Ok(FfiNetworkStatus {
+            is_running: true,
+            peer_count: 0,
+            listen_address: inner.listen_address.clone(),
+        })
+    }
+
+    /// Stop the peer-to-peer network layer.
+    pub fn stop_network(&self) -> Result<(), FfiError> {
+        let mut inner = self.lock_inner()?;
+
+        if let Some(mut network) = inner.network.take() {
+            self.runtime.block_on(async {
+                let _ = network.stop().await;
+            });
+        }
+
+        inner.network_event_rx = None;
+        inner.pending_network_events.clear();
+        inner.listen_address = None;
+
+        info!("FFI: network stopped");
+        Ok(())
+    }
+
+    /// Connect to a remote peer by multiaddr string.
+    ///
+    /// For local WiFi demo, use: "/ip4/<peer-ip>/udp/<port>/quic-v1"
+    /// Example: "/ip4/192.168.1.42/udp/9000/quic-v1"
+    pub fn connect_peer(&self, addr: String) -> Result<(), FfiError> {
+        let inner = self.lock_inner()?;
+
+        let network = inner.network.as_ref().ok_or(FfiError::NetworkError {
+            reason: "network not started".into(),
+        })?;
+
+        self.runtime.block_on(async {
+            network.dial_peer(&addr).await
+        }).map_err(|e| FfiError::NetworkError {
+            reason: e.to_string(),
+        })?;
+
+        info!("FFI: dialing peer at {}", addr);
+        Ok(())
+    }
+
+    /// Get the current network status.
+    pub fn get_network_status(&self) -> Result<FfiNetworkStatus, FfiError> {
+        let inner = self.lock_inner()?;
+
+        let (is_running, peer_count) = match &inner.network {
+            Some(network) => (network.is_running(), network.connected_peer_count() as u32),
+            None => (false, 0),
+        };
+
+        Ok(FfiNetworkStatus {
+            is_running,
+            peer_count,
+            listen_address: inner.listen_address.clone(),
+        })
+    }
+
+    /// Poll for network events.
+    ///
+    /// Returns a list of events that have occurred since the last poll.
+    /// Call this periodically from the mobile app (e.g., every 500ms) to
+    /// receive peer connection/disconnection and block/transaction notifications.
+    pub fn poll_network_events(&self) -> Result<Vec<FfiNetworkEvent>, FfiError> {
+        let mut inner = self.lock_inner()?;
+
+        // WHY: Take the receiver out temporarily to avoid borrow conflicts.
+        // We need mutable access to both the receiver (try_recv) and the
+        // pending_network_events queue simultaneously.
+        let mut rx = match inner.network_event_rx.take() {
+            Some(rx) => rx,
+            None => return Ok(Vec::new()),
+        };
+
+        // Drain available events from the channel
+        let mut new_events = Vec::new();
+        loop {
+            match rx.try_recv() {
+                Ok(event) => {
+                    let ffi_event = match event {
+                        NetworkEvent::PeerConnected { peer_id, .. } => {
+                            if let Some(network) = &mut inner.network {
+                                network.on_peer_connected(peer_id, true);
+                            }
+                            FfiNetworkEvent::PeerConnected {
+                                peer_id: peer_id.to_string(),
+                            }
+                        }
+                        NetworkEvent::PeerDisconnected { peer_id } => {
+                            if let Some(network) = &mut inner.network {
+                                network.on_peer_disconnected(&peer_id, true);
+                            }
+                            FfiNetworkEvent::PeerDisconnected {
+                                peer_id: peer_id.to_string(),
+                            }
+                        }
+                        NetworkEvent::BlockReceived(block) => {
+                            FfiNetworkEvent::BlockReceived {
+                                height: block.header.height,
+                                producer: hex::encode(block.header.producer.0),
+                            }
+                        }
+                        NetworkEvent::TransactionReceived(tx) => {
+                            FfiNetworkEvent::TransactionReceived {
+                                hash_hex: hex::encode(tx.hash.0),
+                            }
+                        }
+                        // Other events (attestations, sync) — skip for now
+                        _ => continue,
+                    };
+                    new_events.push(ffi_event);
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    warn!("FFI: network event channel disconnected");
+                    break;
+                }
+            }
+        }
+
+        // Put the receiver back
+        inner.network_event_rx = Some(rx);
+
+        Ok(new_events)
     }
 }
 

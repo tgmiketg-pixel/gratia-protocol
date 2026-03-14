@@ -16,6 +16,8 @@ gratia-core = { path = "../gratia-core" }
 gratia-wallet = { path = "../gratia-wallet" }
 gratia-pol = { path = "../gratia-pol" }
 gratia-staking = { path = "../gratia-staking" }
+gratia-network = { path = "../gratia-network" }
+gratia-consensus = { path = "../gratia-consensus" }
 
 # Workspace dependencies
 serde = { workspace = true }
@@ -23,6 +25,7 @@ thiserror = { workspace = true }
 chrono = { workspace = true }
 hex = { workspace = true }
 tracing = { workspace = true }
+tokio = { workspace = true }
 
 [[bin]]
 name = "uniffi-bindgen"

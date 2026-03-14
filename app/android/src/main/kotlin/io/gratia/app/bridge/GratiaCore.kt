@@ -4,6 +4,8 @@ import android.util.Log
 import uniffi.gratia_ffi.GratiaNode
 import uniffi.gratia_ffi.FfiException
 import uniffi.gratia_ffi.FfiMiningStatus
+import uniffi.gratia_ffi.FfiNetworkEvent
+import uniffi.gratia_ffi.FfiNetworkStatus
 import uniffi.gratia_ffi.FfiProofOfLifeStatus
 import uniffi.gratia_ffi.FfiSensorEvent
 import uniffi.gratia_ffi.FfiStakeInfo
@@ -259,6 +261,84 @@ object GratiaCoreManager {
     }
 
     // ========================================================================
+    // Network methods
+    // ========================================================================
+
+    /**
+     * Start the peer-to-peer network layer.
+     *
+     * Initializes the libp2p swarm with QUIC transport, Gossipsub for
+     * block/transaction propagation, and mDNS for local peer discovery.
+     *
+     * @param listenPort UDP port to listen on (0 = OS-assigned).
+     * @return Current network status.
+     */
+    fun startNetwork(listenPort: Int = 0): NetworkStatus {
+        val ffi = callNode { it.startNetwork(listenPort.toUShort()) }
+        return NetworkStatus(
+            isRunning = ffi.isRunning,
+            peerCount = ffi.peerCount.toInt(),
+            listenAddress = ffi.listenAddress,
+        )
+    }
+
+    /**
+     * Stop the peer-to-peer network layer.
+     */
+    fun stopNetwork() {
+        callNode { it.stopNetwork() }
+    }
+
+    /**
+     * Connect to a remote peer by multiaddr string.
+     *
+     * For local WiFi demo, use: "/ip4/<peer-ip>/udp/<port>/quic-v1"
+     *
+     * @param addr Multiaddr string of the peer to connect to.
+     */
+    fun connectPeer(addr: String) {
+        callNode { it.connectPeer(addr) }
+    }
+
+    /**
+     * Get the current network status.
+     *
+     * @return Network status with running state, peer count, and listen address.
+     */
+    fun getNetworkStatus(): NetworkStatus {
+        val ffi = callNode { it.getNetworkStatus() }
+        return NetworkStatus(
+            isRunning = ffi.isRunning,
+            peerCount = ffi.peerCount.toInt(),
+            listenAddress = ffi.listenAddress,
+        )
+    }
+
+    /**
+     * Poll for network events.
+     *
+     * Returns a list of events that have occurred since the last poll.
+     * Call periodically (e.g., every 500ms) from the UI layer.
+     *
+     * @return List of network events (peer connections, received blocks, etc.).
+     */
+    fun pollNetworkEvents(): List<NetworkEvent> {
+        val ffiEvents = callNode { it.pollNetworkEvents() }
+        return ffiEvents.map { ffi ->
+            when (ffi) {
+                is uniffi.gratia_ffi.FfiNetworkEvent.PeerConnected ->
+                    NetworkEvent.PeerConnected(ffi.peerId)
+                is uniffi.gratia_ffi.FfiNetworkEvent.PeerDisconnected ->
+                    NetworkEvent.PeerDisconnected(ffi.peerId)
+                is uniffi.gratia_ffi.FfiNetworkEvent.BlockReceived ->
+                    NetworkEvent.BlockReceived(ffi.height.toLong(), ffi.producer)
+                is uniffi.gratia_ffi.FfiNetworkEvent.TransactionReceived ->
+                    NetworkEvent.TransactionReceived(ffi.hashHex)
+            }
+        }
+    }
+
+    // ========================================================================
     // Private helpers
     // ========================================================================
 
@@ -391,6 +471,34 @@ sealed class SensorEvent(val type: String) {
         is BluetoothScan -> FfiSensorEvent.BluetoothScan(peerHashes.map { it.toULong() })
         is ChargeEvent -> FfiSensorEvent.ChargeEvent(isCharging)
     }
+}
+
+/**
+ * Network status for the UI layer.
+ * Mirrors [FfiNetworkStatus] from the Rust FFI.
+ */
+data class NetworkStatus(
+    val isRunning: Boolean,
+    val peerCount: Int,
+    val listenAddress: String?,
+)
+
+/**
+ * Network events delivered from the Rust core to the UI.
+ * Mirrors [FfiNetworkEvent] from the Rust FFI.
+ */
+sealed class NetworkEvent {
+    /** A peer connected to this node. */
+    data class PeerConnected(val peerId: String) : NetworkEvent()
+
+    /** A peer disconnected from this node. */
+    data class PeerDisconnected(val peerId: String) : NetworkEvent()
+
+    /** A block was received from the network. */
+    data class BlockReceived(val height: Long, val producer: String) : NetworkEvent()
+
+    /** A transaction was received from the network. */
+    data class TransactionReceived(val hashHex: String) : NetworkEvent()
 }
 
 /**

@@ -744,6 +744,16 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -769,11 +779,15 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_gratia_ffi_fn_constructor_gratianode_new(`dataDir`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
+    fun uniffi_gratia_ffi_fn_method_gratianode_connect_peer(`ptr`: Pointer,`addr`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_gratia_ffi_fn_method_gratianode_create_wallet(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_finalize_day(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     fun uniffi_gratia_ffi_fn_method_gratianode_get_mining_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_get_network_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_proof_of_life_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -783,14 +797,20 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_wallet_info(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_poll_network_events(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_send_transfer(`ptr`: Pointer,`to`: RustBuffer.ByValue,`amount`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_stake(`ptr`: Pointer,`amount`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_start_mining(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_start_network(`ptr`: Pointer,`listenPort`: Short,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_stop_mining(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_stop_network(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_gratia_ffi_fn_method_gratianode_submit_sensor_event(`ptr`: Pointer,`event`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_gratia_ffi_fn_method_gratianode_unstake(`ptr`: Pointer,`amount`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -909,11 +929,15 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_gratia_ffi_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_gratia_ffi_checksum_method_gratianode_connect_peer(
+    ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_create_wallet(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_finalize_day(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_mining_status(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_get_network_status(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_proof_of_life_status(
     ): Short
@@ -923,13 +947,19 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_wallet_info(
     ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_poll_network_events(
+    ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_send_transfer(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_stake(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_start_mining(
     ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_start_network(
+    ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_stop_mining(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_stop_network(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_submit_sensor_event(
     ): Short
@@ -956,6 +986,9 @@ private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
 
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: UniffiLib) {
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_connect_peer() != 21663.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_create_wallet() != 41645.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -963,6 +996,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_mining_status() != 12667.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_network_status() != 38657.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_proof_of_life_status() != 59779.toShort()) {
@@ -977,6 +1013,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_wallet_info() != 25150.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_poll_network_events() != 10879.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_send_transfer() != 18482.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -986,7 +1025,13 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_start_mining() != 41256.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_start_network() != 17866.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_stop_mining() != 55353.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_stop_network() != 26688.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_submit_sensor_event() != 26895.toShort()) {
@@ -1068,6 +1113,29 @@ public object FfiConverterUByte: FfiConverter<UByte, Byte> {
 
     override fun write(value: UByte, buf: ByteBuffer) {
         buf.put(value.toByte())
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterUShort: FfiConverter<UShort, Short> {
+    override fun lift(value: Short): UShort {
+        return value.toUShort()
+    }
+
+    override fun read(buf: ByteBuffer): UShort {
+        return lift(buf.getShort())
+    }
+
+    override fun lower(value: UShort): Short {
+        return value.toShort()
+    }
+
+    override fun allocationSize(value: UShort) = 2UL
+
+    override fun write(value: UShort, buf: ByteBuffer) {
+        buf.putShort(value.toShort())
     }
 }
 
@@ -1418,6 +1486,14 @@ private class JavaLangRefCleanable(
 public interface GratiaNodeInterface {
     
     /**
+     * Connect to a remote peer by multiaddr string.
+     *
+     * For local WiFi demo, use: "/ip4/<peer-ip>/udp/<port>/quic-v1"
+     * Example: "/ip4/192.168.1.42/udp/9000/quic-v1"
+     */
+    fun `connectPeer`(`addr`: kotlin.String)
+    
+    /**
      * Generate a new wallet keypair. Returns the wallet address string.
      *
      * Can only be called once per device. Returns `WalletAlreadyExists` if
@@ -1441,6 +1517,11 @@ public interface GratiaNodeInterface {
     fun `getMiningStatus`(): FfiMiningStatus
     
     /**
+     * Get the current network status.
+     */
+    fun `getNetworkStatus`(): FfiNetworkStatus
+    
+    /**
      * Get the current Proof of Life status.
      */
     fun `getProofOfLifeStatus`(): FfiProofOfLifeStatus
@@ -1459,6 +1540,15 @@ public interface GratiaNodeInterface {
      * Get current wallet information (address, balance, mining state).
      */
     fun `getWalletInfo`(): FfiWalletInfo
+    
+    /**
+     * Poll for network events.
+     *
+     * Returns a list of events that have occurred since the last poll.
+     * Call this periodically from the mobile app (e.g., every 500ms) to
+     * receive peer connection/disconnection and block/transaction notifications.
+     */
+    fun `pollNetworkEvents`(): List<FfiNetworkEvent>
     
     /**
      * Send a GRAT transfer to another address.
@@ -1489,12 +1579,27 @@ public interface GratiaNodeInterface {
     fun `startMining`(): FfiMiningStatus
     
     /**
+     * Start the peer-to-peer network layer.
+     *
+     * Initializes the libp2p swarm with QUIC transport, Gossipsub for
+     * block/transaction propagation, and mDNS for local peer discovery.
+     *
+     * `listen_port` specifies the UDP port to listen on (0 = OS-assigned).
+     */
+    fun `startNetwork`(`listenPort`: kotlin.UShort): FfiNetworkStatus
+    
+    /**
      * Stop mining.
      *
      * Returns the updated mining status. The node reverts to Proof of Life
      * passive collection mode.
      */
     fun `stopMining`(): FfiMiningStatus
+    
+    /**
+     * Stop the peer-to-peer network layer.
+     */
+    fun `stopNetwork`()
     
     /**
      * Submit a sensor event from the native platform layer.
@@ -1633,6 +1738,24 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
 
     
     /**
+     * Connect to a remote peer by multiaddr string.
+     *
+     * For local WiFi demo, use: "/ip4/<peer-ip>/udp/<port>/quic-v1"
+     * Example: "/ip4/192.168.1.42/udp/9000/quic-v1"
+     */
+    @Throws(FfiException::class)override fun `connectPeer`(`addr`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_connect_peer(
+        it, FfiConverterString.lower(`addr`),_status)
+}
+    }
+    
+    
+
+    
+    /**
      * Generate a new wallet keypair. Returns the wallet address string.
      *
      * Can only be called once per device. Returns `WalletAlreadyExists` if
@@ -1680,6 +1803,22 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
     callWithPointer {
     uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_get_mining_status(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Get the current network status.
+     */
+    @Throws(FfiException::class)override fun `getNetworkStatus`(): FfiNetworkStatus {
+            return FfiConverterTypeFfiNetworkStatus.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_get_network_status(
         it, _status)
 }
     }
@@ -1753,6 +1892,26 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
 
     
     /**
+     * Poll for network events.
+     *
+     * Returns a list of events that have occurred since the last poll.
+     * Call this periodically from the mobile app (e.g., every 500ms) to
+     * receive peer connection/disconnection and block/transaction notifications.
+     */
+    @Throws(FfiException::class)override fun `pollNetworkEvents`(): List<FfiNetworkEvent> {
+            return FfiConverterSequenceTypeFfiNetworkEvent.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_poll_network_events(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Send a GRAT transfer to another address.
      *
      * `to` is the recipient address as a hex string (with or without "grat:" prefix).
@@ -1814,6 +1973,27 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
 
     
     /**
+     * Start the peer-to-peer network layer.
+     *
+     * Initializes the libp2p swarm with QUIC transport, Gossipsub for
+     * block/transaction propagation, and mDNS for local peer discovery.
+     *
+     * `listen_port` specifies the UDP port to listen on (0 = OS-assigned).
+     */
+    @Throws(FfiException::class)override fun `startNetwork`(`listenPort`: kotlin.UShort): FfiNetworkStatus {
+            return FfiConverterTypeFfiNetworkStatus.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_start_network(
+        it, FfiConverterUShort.lower(`listenPort`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Stop mining.
      *
      * Returns the updated mining status. The node reverts to Proof of Life
@@ -1829,6 +2009,21 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
     }
     )
     }
+    
+
+    
+    /**
+     * Stop the peer-to-peer network layer.
+     */
+    @Throws(FfiException::class)override fun `stopNetwork`()
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_stop_network(
+        it, _status)
+}
+    }
+    
     
 
     
@@ -1987,6 +2182,54 @@ public object FfiConverterTypeFfiMiningStatus: FfiConverterRustBuffer<FfiMiningS
             FfiConverterBoolean.write(value.`isPluggedIn`, buf)
             FfiConverterBoolean.write(value.`currentDayPolValid`, buf)
             FfiConverterUByte.write(value.`presenceScore`, buf)
+    }
+}
+
+
+
+/**
+ * Network status for the mobile UI.
+ */
+data class FfiNetworkStatus (
+    /**
+     * Whether the network layer is running.
+     */
+    var `isRunning`: kotlin.Boolean, 
+    /**
+     * Number of connected peers.
+     */
+    var `peerCount`: kotlin.UInt, 
+    /**
+     * Current listen address (if available).
+     */
+    var `listenAddress`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiNetworkStatus: FfiConverterRustBuffer<FfiNetworkStatus> {
+    override fun read(buf: ByteBuffer): FfiNetworkStatus {
+        return FfiNetworkStatus(
+            FfiConverterBoolean.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiNetworkStatus) = (
+            FfiConverterBoolean.allocationSize(value.`isRunning`) +
+            FfiConverterUInt.allocationSize(value.`peerCount`) +
+            FfiConverterOptionalString.allocationSize(value.`listenAddress`)
+    )
+
+    override fun write(value: FfiNetworkStatus, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`isRunning`, buf)
+            FfiConverterUInt.write(value.`peerCount`, buf)
+            FfiConverterOptionalString.write(value.`listenAddress`, buf)
     }
 }
 
@@ -2297,6 +2540,14 @@ sealed class FfiException: kotlin.Exception() {
             get() = ""
     }
     
+    class NetworkException(
+        
+        val `reason`: kotlin.String
+        ) : FfiException() {
+        override val message
+            get() = "reason=${ `reason` }"
+    }
+    
     class InternalException(
         
         val `reason`: kotlin.String
@@ -2340,7 +2591,10 @@ public object FfiConverterTypeFfiError : FfiConverterRustBuffer<FfiException> {
                 FfiConverterString.read(buf),
                 )
             8 -> FfiException.WalletFrozen()
-            9 -> FfiException.InternalException(
+            9 -> FfiException.NetworkException(
+                FfiConverterString.read(buf),
+                )
+            10 -> FfiException.InternalException(
                 FfiConverterString.read(buf),
                 )
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
@@ -2386,6 +2640,11 @@ public object FfiConverterTypeFfiError : FfiConverterRustBuffer<FfiException> {
             is FfiException.WalletFrozen -> (
                 // Add the size for the Int that specifies the variant plus the size needed for all fields
                 4UL
+            )
+            is FfiException.NetworkException -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
             )
             is FfiException.InternalException -> (
                 // Add the size for the Int that specifies the variant plus the size needed for all fields
@@ -2435,8 +2694,13 @@ public object FfiConverterTypeFfiError : FfiConverterRustBuffer<FfiException> {
                 buf.putInt(8)
                 Unit
             }
-            is FfiException.InternalException -> {
+            is FfiException.NetworkException -> {
                 buf.putInt(9)
+                FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+            is FfiException.InternalException -> {
+                buf.putInt(10)
                 FfiConverterString.write(value.`reason`, buf)
                 Unit
             }
@@ -2444,6 +2708,135 @@ public object FfiConverterTypeFfiError : FfiConverterRustBuffer<FfiException> {
     }
 
 }
+
+
+
+/**
+ * A network event delivered to the mobile app via polling.
+ */
+sealed class FfiNetworkEvent {
+    
+    /**
+     * A peer connected.
+     */
+    data class PeerConnected(
+        val `peerId`: kotlin.String) : FfiNetworkEvent() {
+        companion object
+    }
+    
+    /**
+     * A peer disconnected.
+     */
+    data class PeerDisconnected(
+        val `peerId`: kotlin.String) : FfiNetworkEvent() {
+        companion object
+    }
+    
+    /**
+     * A block was received from the network.
+     */
+    data class BlockReceived(
+        val `height`: kotlin.ULong, 
+        val `producer`: kotlin.String) : FfiNetworkEvent() {
+        companion object
+    }
+    
+    /**
+     * A transaction was received from the network.
+     */
+    data class TransactionReceived(
+        val `hashHex`: kotlin.String) : FfiNetworkEvent() {
+        companion object
+    }
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiNetworkEvent : FfiConverterRustBuffer<FfiNetworkEvent>{
+    override fun read(buf: ByteBuffer): FfiNetworkEvent {
+        return when(buf.getInt()) {
+            1 -> FfiNetworkEvent.PeerConnected(
+                FfiConverterString.read(buf),
+                )
+            2 -> FfiNetworkEvent.PeerDisconnected(
+                FfiConverterString.read(buf),
+                )
+            3 -> FfiNetworkEvent.BlockReceived(
+                FfiConverterULong.read(buf),
+                FfiConverterString.read(buf),
+                )
+            4 -> FfiNetworkEvent.TransactionReceived(
+                FfiConverterString.read(buf),
+                )
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: FfiNetworkEvent) = when(value) {
+        is FfiNetworkEvent.PeerConnected -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`peerId`)
+            )
+        }
+        is FfiNetworkEvent.PeerDisconnected -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`peerId`)
+            )
+        }
+        is FfiNetworkEvent.BlockReceived -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterULong.allocationSize(value.`height`)
+                + FfiConverterString.allocationSize(value.`producer`)
+            )
+        }
+        is FfiNetworkEvent.TransactionReceived -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`hashHex`)
+            )
+        }
+    }
+
+    override fun write(value: FfiNetworkEvent, buf: ByteBuffer) {
+        when(value) {
+            is FfiNetworkEvent.PeerConnected -> {
+                buf.putInt(1)
+                FfiConverterString.write(value.`peerId`, buf)
+                Unit
+            }
+            is FfiNetworkEvent.PeerDisconnected -> {
+                buf.putInt(2)
+                FfiConverterString.write(value.`peerId`, buf)
+                Unit
+            }
+            is FfiNetworkEvent.BlockReceived -> {
+                buf.putInt(3)
+                FfiConverterULong.write(value.`height`, buf)
+                FfiConverterString.write(value.`producer`, buf)
+                Unit
+            }
+            is FfiNetworkEvent.TransactionReceived -> {
+                buf.putInt(4)
+                FfiConverterString.write(value.`hashHex`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
 
 
 
@@ -2768,6 +3161,34 @@ public object FfiConverterSequenceTypeFfiTransactionInfo: FfiConverterRustBuffer
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeFfiTransactionInfo.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeFfiNetworkEvent: FfiConverterRustBuffer<List<FfiNetworkEvent>> {
+    override fun read(buf: ByteBuffer): List<FfiNetworkEvent> {
+        val len = buf.getInt()
+        return List<FfiNetworkEvent>(len) {
+            FfiConverterTypeFfiNetworkEvent.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FfiNetworkEvent>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFfiNetworkEvent.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FfiNetworkEvent>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFfiNetworkEvent.write(it, buf)
         }
     }
 }

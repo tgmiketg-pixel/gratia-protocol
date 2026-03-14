@@ -25,16 +25,23 @@ pub mod gossip;
 pub mod sync;
 pub mod transport;
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
+use std::time::Duration;
 
-use libp2p::PeerId;
+use libp2p::futures::StreamExt;
+use libp2p::swarm::NetworkBehaviour;
+use libp2p::{
+    gossipsub, identify, mdns, swarm::SwarmEvent, Multiaddr, PeerId, Swarm, SwarmBuilder,
+};
 use tokio::sync::mpsc;
 
 use gratia_core::types::{Block, BlockHash, NodeId, ProofOfLifeAttestation, Transaction};
 
 use crate::discovery::PeerDiscovery;
 use crate::error::NetworkError;
-use crate::gossip::GossipHandler;
+use crate::gossip::{GossipHandler, GossipMessage, ALL_TOPICS};
 use crate::sync::{SyncManager, SyncState};
 use crate::transport::{ConnectionManager, TransportConfig};
 
@@ -114,6 +121,27 @@ impl NetworkConfig {
 }
 
 // ============================================================================
+// Composed libp2p Behaviour
+// ============================================================================
+
+/// The composed libp2p NetworkBehaviour for a Gratia node.
+///
+/// WHY: libp2p's derive macro auto-generates the NetworkBehaviour implementation,
+/// producing a combined `GratiaBehaviourEvent` enum that wraps events from
+/// each sub-behaviour.
+#[derive(NetworkBehaviour)]
+struct GratiaBehaviour {
+    /// Gossipsub for block/transaction/attestation propagation.
+    gossipsub: gossipsub::Behaviour,
+    /// Identify protocol — exchanges peer metadata on connect.
+    identify: identify::Behaviour,
+    /// mDNS for local network peer discovery (same Wi-Fi).
+    /// WHY: Essential for the Phase 1 demo where phones need to find each other
+    /// on the same local network without a bootstrap server.
+    mdns: mdns::tokio::Behaviour,
+}
+
+// ============================================================================
 // Network Manager
 // ============================================================================
 
@@ -131,7 +159,7 @@ pub struct NetworkManager {
     /// Network configuration.
     config: NetworkConfig,
 
-    /// Gossip message handler (validation, deduplication).
+    /// Gossip message handler (validation, deduplication) — for outbound prep.
     gossip: GossipHandler,
 
     /// Peer discovery cache.
@@ -192,64 +220,116 @@ impl NetworkManager {
 
     /// Start the network layer.
     ///
-    /// This builds the libp2p Swarm with QUIC transport, Noise encryption,
-    /// Gossipsub, Kademlia, and Identify behaviours, then spawns a background
-    /// tokio task to drive the event loop.
+    /// Builds the libp2p Swarm with QUIC transport, Gossipsub, Identify,
+    /// and mDNS behaviours, then spawns a background tokio task to drive
+    /// the swarm event loop.
     ///
     /// Returns a receiver for network events that the consensus layer should poll.
-    ///
-    /// NOTE: The actual libp2p SwarmBuilder integration requires careful async
-    /// wiring. The exact API calls may need adjustment based on libp2p 0.54
-    /// specifics when building on the target platform.
     pub async fn start(&mut self) -> Result<mpsc::Receiver<NetworkEvent>, NetworkError> {
         if self.running {
             return Err(NetworkError::AlreadyStarted);
         }
 
-        // Validate transport config before starting
         self.config
             .transport
             .validate()
             .map_err(|e| NetworkError::Transport(e))?;
 
-        // Channel for network events (from event loop -> consensus layer)
+        // Channel for network events (event loop -> consensus layer)
         // WHY: Buffer of 256 — handles burst of blocks/txs without backpressure
-        // on the event loop. If consensus is slow, events queue here.
         let (event_tx, event_rx) = mpsc::channel::<NetworkEvent>(256);
 
-        // Channel for commands (from application -> event loop)
-        // WHY: Buffer of 128 — application rarely sends more than a few
-        // commands per second (publish block, publish tx, sync requests).
+        // Channel for commands (application -> event loop)
+        // WHY: Buffer of 128 — application sends few commands per second
         let (command_tx, command_rx) = mpsc::channel::<NetworkCommand>(128);
 
         self.command_tx = Some(command_tx);
 
-        // ---------------------------------------------------------------
-        // libp2p Swarm construction
-        //
-        // In libp2p 0.54, the Swarm is built with SwarmBuilder:
-        //
-        //   let swarm = libp2p::SwarmBuilder::with_new_identity()
-        //       .with_tokio()
-        //       .with_quic()
-        //       .with_behaviour(|key| {
-        //           // Compose: Gossipsub + Kademlia + Identify
-        //           GratiaBehaviour { gossipsub, kademlia, identify }
-        //       })?
-        //       .with_swarm_config(|cfg| {
-        //           cfg.with_idle_connection_timeout(Duration::from_secs(300))
-        //       })
-        //       .build();
-        //
-        // The event loop then polls swarm.select_next_some() in a loop,
-        // matching on SwarmEvent variants and forwarding relevant events
-        // through event_tx.
-        //
-        // For now, we mark the network as running. The full swarm integration
-        // will be wired when we have end-to-end testing on physical devices.
-        // ---------------------------------------------------------------
+        // Build the libp2p Swarm
+        let mut swarm = SwarmBuilder::with_new_identity()
+            .with_tokio()
+            .with_quic()
+            .with_behaviour(|key| {
+                // Gossipsub configuration tuned for mobile
+                let gossipsub_config = gossipsub::ConfigBuilder::default()
+                    // WHY: Custom message ID function — dedup by content hash
+                    // rather than source+seqno, so the same message from
+                    // different propagation paths is correctly deduplicated.
+                    .message_id_fn(|msg| {
+                        let mut hasher = DefaultHasher::new();
+                        msg.data.hash(&mut hasher);
+                        gossipsub::MessageId::from(hasher.finish().to_be_bytes().to_vec())
+                    })
+                    // WHY: 30 second heartbeat — longer than default (1s) to reduce
+                    // battery drain from gossip protocol overhead on mobile.
+                    .heartbeat_interval(Duration::from_secs(30))
+                    // WHY: Mesh target of 4 peers (instead of default 6) — reduces
+                    // bandwidth on mobile while maintaining reasonable propagation.
+                    .mesh_n(4)
+                    .mesh_n_low(2)
+                    .mesh_n_high(8)
+                    // WHY: 300 KB max transmit size — matches our MAX_MESSAGE_SIZE
+                    // (256 KB block + serialization overhead).
+                    .max_transmit_size(300 * 1024)
+                    .build()
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+                let gossipsub = gossipsub::Behaviour::new(
+                    gossipsub::MessageAuthenticity::Signed(key.clone()),
+                    gossipsub_config,
+                )
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+                let identify = identify::Behaviour::new(identify::Config::new(
+                    "/gratia/0.1.0".to_string(),
+                    key.public(),
+                ));
+
+                let mdns = mdns::tokio::Behaviour::new(
+                    mdns::Config::default(),
+                    key.public().to_peer_id(),
+                )?;
+
+                Ok(GratiaBehaviour {
+                    gossipsub,
+                    identify,
+                    mdns,
+                })
+            })
+            .map_err(|e| NetworkError::Transport(e.to_string()))?
+            .with_swarm_config(|cfg| {
+                cfg.with_idle_connection_timeout(Duration::from_secs(
+                    self.config.transport.idle_timeout_secs,
+                ))
+            })
+            .build();
+
+        // Subscribe to all gossip topics
+        for topic_str in ALL_TOPICS {
+            let topic = gossipsub::IdentTopic::new(*topic_str);
+            swarm
+                .behaviour_mut()
+                .gossipsub
+                .subscribe(&topic)
+                .map_err(|e| NetworkError::SubscriptionError {
+                    topic: topic_str.to_string(),
+                    reason: e.to_string(),
+                })?;
+        }
+
+        // Listen on configured addresses
+        for addr in self.config.transport.parsed_listen_addresses() {
+            swarm
+                .listen_on(addr.clone())
+                .map_err(|e| NetworkError::ListenFailure(e.to_string()))?;
+            tracing::info!(%addr, "Listening");
+        }
 
         self.running = true;
+
+        // Spawn the event loop as a background task
+        let node_id = self.config.local_node_id;
+        tokio::spawn(run_swarm_event_loop(swarm, command_rx, event_tx, node_id));
 
         tracing::info!(
             node_id = %self.config.local_node_id,
@@ -284,7 +364,6 @@ impl NetworkManager {
     pub async fn broadcast_block(&self, block: Block) -> Result<(), NetworkError> {
         let tx = self.command_tx.as_ref().ok_or(NetworkError::NotStarted)?;
 
-        // Pre-validate that the block can be serialized within size limits
         let _ = self.gossip.prepare_block(block.clone())?;
 
         tx.send(NetworkCommand::PublishBlock(Box::new(block)))
@@ -318,6 +397,23 @@ impl NetworkManager {
         let _ = self.gossip.prepare_attestation(attestation.clone())?;
 
         tx.send(NetworkCommand::PublishAttestation(Box::new(attestation)))
+            .await
+            .map_err(|e| NetworkError::ChannelError(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Dial a remote peer by multiaddr string.
+    ///
+    /// Used for manual peer connection (e.g., entering another phone's address).
+    pub async fn dial_peer(&self, addr: &str) -> Result<(), NetworkError> {
+        let tx = self.command_tx.as_ref().ok_or(NetworkError::NotStarted)?;
+
+        // Validate address parses before sending
+        addr.parse::<Multiaddr>()
+            .map_err(|e| NetworkError::DialFailure(format!("invalid address '{}': {}", addr, e)))?;
+
+        tx.send(NetworkCommand::DialPeer(addr.to_string()))
             .await
             .map_err(|e| NetworkError::ChannelError(e.to_string()))?;
 
@@ -380,8 +476,6 @@ impl NetworkManager {
     }
 
     /// Process an incoming gossip message from the swarm event loop.
-    /// This is called internally by the event loop when a gossipsub
-    /// message arrives.
     pub fn handle_gossip_message(
         &mut self,
         topic: &str,
@@ -413,34 +507,220 @@ impl NetworkManager {
 }
 
 // ============================================================================
-// libp2p Behaviour Composition (type definitions)
+// Swarm Event Loop
 // ============================================================================
 
-/// The composed libp2p NetworkBehaviour for a Gratia node.
+/// The background task that drives the libp2p swarm.
 ///
-/// In libp2p 0.54, custom behaviours are composed using the derive macro:
-///
-/// ```ignore
-/// #[derive(libp2p::swarm::NetworkBehaviour)]
-/// pub struct GratiaBehaviour {
-///     pub gossipsub: libp2p::gossipsub::Behaviour,
-///     pub kademlia: libp2p::kad::Behaviour<libp2p::kad::store::MemoryStore>,
-///     pub identify: libp2p::identify::Behaviour,
-/// }
-/// ```
-///
-/// The derive macro auto-generates the `NetworkBehaviour` implementation,
-/// producing a combined `GratiaBehaviourEvent` enum that wraps events from
-/// each sub-behaviour. The swarm event loop matches on these events to
-/// dispatch to the appropriate handler.
-///
-/// NOTE: This derive requires the `libp2p::swarm::NetworkBehaviour` derive
-/// macro which is available in libp2p 0.54. The exact generated event type
-/// name follows the pattern `{StructName}Event`.
+/// This function runs in a tokio task spawned by `NetworkManager::start()`.
+/// It processes swarm events (incoming messages, connections) and application
+/// commands (publish, dial, shutdown) in a select loop.
+async fn run_swarm_event_loop(
+    mut swarm: Swarm<GratiaBehaviour>,
+    mut command_rx: mpsc::Receiver<NetworkCommand>,
+    event_tx: mpsc::Sender<NetworkEvent>,
+    node_id: NodeId,
+) {
+    // WHY: Separate gossip handler for the event loop — deduplication must
+    // happen where messages first arrive (here), not in the application layer.
+    let mut gossip_handler = GossipHandler::new();
 
-// WHY: We define the behaviour struct here rather than inline in start()
-// so that tests and downstream code can reference the types if needed.
-// The actual instantiation happens in the swarm builder closure.
+    tracing::info!(%node_id, "Swarm event loop started");
+
+    loop {
+        tokio::select! {
+            // ── Swarm events ──────────────────────────────────────────────
+            event = swarm.select_next_some() => {
+                match event {
+                    // Gossipsub message received
+                    SwarmEvent::Behaviour(GratiaBehaviourEvent::Gossipsub(
+                        gossipsub::Event::Message { message, .. }
+                    )) => {
+                        let topic = message.topic.as_str();
+                        match gossip_handler.process_incoming(topic, &message.data) {
+                            Ok(Some(msg)) => {
+                                let net_event = match msg {
+                                    GossipMessage::NewBlock(block) => {
+                                        tracing::debug!(
+                                            height = block.header.height,
+                                            "Received block via gossip"
+                                        );
+                                        NetworkEvent::BlockReceived(block)
+                                    }
+                                    GossipMessage::NewTransaction(tx) => {
+                                        NetworkEvent::TransactionReceived(tx)
+                                    }
+                                    GossipMessage::NewAttestation(att) => {
+                                        NetworkEvent::AttestationReceived(att)
+                                    }
+                                };
+                                if event_tx.send(net_event).await.is_err() {
+                                    tracing::warn!("Event receiver dropped, shutting down");
+                                    return;
+                                }
+                            }
+                            Ok(None) => {
+                                // Duplicate message — silently ignore
+                            }
+                            Err(e) => {
+                                tracing::debug!("Gossip message rejected: {}", e);
+                            }
+                        }
+                    }
+
+                    // Gossipsub subscription event
+                    SwarmEvent::Behaviour(GratiaBehaviourEvent::Gossipsub(
+                        gossipsub::Event::Subscribed { peer_id, topic }
+                    )) => {
+                        tracing::debug!(%peer_id, %topic, "Peer subscribed to topic");
+                    }
+
+                    // mDNS discovered peers on local network
+                    SwarmEvent::Behaviour(GratiaBehaviourEvent::Mdns(
+                        mdns::Event::Discovered(peers)
+                    )) => {
+                        for (peer_id, addr) in peers {
+                            tracing::info!(%peer_id, %addr, "mDNS discovered peer");
+                            swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
+                            if let Err(e) = swarm.dial(addr.clone()) {
+                                tracing::debug!(%peer_id, %addr, "Failed to dial mDNS peer: {}", e);
+                            }
+                        }
+                    }
+
+                    // mDNS peer expired
+                    SwarmEvent::Behaviour(GratiaBehaviourEvent::Mdns(
+                        mdns::Event::Expired(peers)
+                    )) => {
+                        for (peer_id, _addr) in peers {
+                            tracing::debug!(%peer_id, "mDNS peer expired");
+                            swarm.behaviour_mut().gossipsub.remove_explicit_peer(&peer_id);
+                        }
+                    }
+
+                    // Identify — peer identified itself
+                    SwarmEvent::Behaviour(GratiaBehaviourEvent::Identify(
+                        identify::Event::Received { peer_id, info, .. }
+                    )) => {
+                        tracing::debug!(
+                            %peer_id,
+                            protocol = %info.protocol_version,
+                            agent = %info.agent_version,
+                            "Peer identified"
+                        );
+                    }
+
+                    // New connection established
+                    SwarmEvent::ConnectionEstablished {
+                        peer_id,
+                        endpoint,
+                        connection_id: _,
+                        num_established: _,
+                        concurrent_dial_errors: _,
+                        established_in: _,
+                    } => {
+                        let is_inbound = endpoint.is_listener();
+                        tracing::info!(
+                            %peer_id,
+                            direction = if is_inbound { "inbound" } else { "outbound" },
+                            "Connection established"
+                        );
+                        let _ = event_tx.send(NetworkEvent::PeerConnected {
+                            peer_id,
+                            node_id: None,
+                        }).await;
+                    }
+
+                    // Connection closed
+                    SwarmEvent::ConnectionClosed {
+                        peer_id,
+                        cause,
+                        connection_id: _,
+                        endpoint: _,
+                        num_established: _,
+                    } => {
+                        tracing::info!(
+                            %peer_id,
+                            cause = ?cause,
+                            "Connection closed"
+                        );
+                        let _ = event_tx.send(NetworkEvent::PeerDisconnected {
+                            peer_id,
+                        }).await;
+                    }
+
+                    // New listen address
+                    SwarmEvent::NewListenAddr { address, .. } => {
+                        tracing::info!(%address, "New listen address");
+                    }
+
+                    // Other swarm events — log at debug level
+                    other => {
+                        tracing::trace!("Swarm event: {:?}", other);
+                    }
+                }
+            }
+
+            // ── Application commands ──────────────────────────────────────
+            cmd = command_rx.recv() => {
+                match cmd {
+                    Some(NetworkCommand::PublishBlock(block)) => {
+                        let msg = GossipMessage::NewBlock(block);
+                        if let Ok(data) = msg.to_bytes() {
+                            let topic = gossipsub::IdentTopic::new(gossip::TOPIC_BLOCKS);
+                            if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic, data) {
+                                tracing::error!("Failed to publish block: {}", e);
+                            }
+                        }
+                    }
+                    Some(NetworkCommand::PublishTransaction(tx)) => {
+                        let msg = GossipMessage::NewTransaction(tx);
+                        if let Ok(data) = msg.to_bytes() {
+                            let topic = gossipsub::IdentTopic::new(gossip::TOPIC_TRANSACTIONS);
+                            if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic, data) {
+                                tracing::error!("Failed to publish transaction: {}", e);
+                            }
+                        }
+                    }
+                    Some(NetworkCommand::PublishAttestation(att)) => {
+                        let msg = GossipMessage::NewAttestation(att);
+                        if let Ok(data) = msg.to_bytes() {
+                            let topic = gossipsub::IdentTopic::new(gossip::TOPIC_ATTESTATIONS);
+                            if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic, data) {
+                                tracing::error!("Failed to publish attestation: {}", e);
+                            }
+                        }
+                    }
+                    Some(NetworkCommand::DialPeer(addr_str)) => {
+                        match addr_str.parse::<Multiaddr>() {
+                            Ok(addr) => {
+                                tracing::info!(%addr, "Dialing peer");
+                                if let Err(e) = swarm.dial(addr) {
+                                    tracing::error!("Failed to dial: {}", e);
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("Invalid multiaddr '{}': {}", addr_str, e);
+                            }
+                        }
+                    }
+                    Some(NetworkCommand::SyncRequest { .. }) => {
+                        // TODO: Implement sync request/response protocol (Phase 2)
+                        tracing::debug!("Sync request received but not yet implemented");
+                    }
+                    Some(NetworkCommand::Shutdown) | None => {
+                        tracing::info!("Swarm event loop shutting down");
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -474,7 +754,6 @@ mod tests {
         let config = NetworkConfig::new(test_node_id());
         let mut nm = NetworkManager::new(config);
 
-        // Create a valid block message
         let block = gratia_core::types::Block {
             header: gratia_core::types::BlockHeader {
                 height: 1,
@@ -557,5 +836,43 @@ mod tests {
 
         let result = nm.stop().await;
         assert!(matches!(result, Err(NetworkError::NotStarted)));
+    }
+
+    #[tokio::test]
+    async fn test_start_and_stop() {
+        let config = NetworkConfig::new(test_node_id());
+        let mut nm = NetworkManager::new(config);
+
+        let _event_rx = nm.start().await.unwrap();
+        assert!(nm.is_running());
+
+        nm.stop().await.unwrap();
+        assert!(!nm.is_running());
+    }
+
+    #[tokio::test]
+    async fn test_start_twice_fails() {
+        let config = NetworkConfig::new(test_node_id());
+        let mut nm = NetworkManager::new(config);
+
+        let _event_rx = nm.start().await.unwrap();
+        let result = nm.start().await;
+        assert!(matches!(result, Err(NetworkError::AlreadyStarted)));
+
+        nm.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_dial_peer_validates_address() {
+        let config = NetworkConfig::new(test_node_id());
+        let mut nm = NetworkManager::new(config);
+
+        let _event_rx = nm.start().await.unwrap();
+
+        // Invalid address should fail
+        let result = nm.dial_peer("not-a-valid-addr").await;
+        assert!(matches!(result, Err(NetworkError::DialFailure(_))));
+
+        nm.stop().await.unwrap();
     }
 }
