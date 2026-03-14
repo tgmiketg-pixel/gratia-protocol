@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Gratia brand colors.
+         These are used by the XML-based theme (styles.xml) for the splash screen
+         and any non-Compose UI elements. The Compose theme defines its own
+         Color values in Theme.kt — these two sources should stay in sync. -->
+
+    <!-- Primary: Teal — trust and technology -->
+    <color name="gratia_primary">#00897B</color>
+    <color name="gratia_primary_light">#4DB6AC</color>
+    <color name="gratia_primary_dark">#00695C</color>
+
+    <!-- Secondary: Gold — rewards, earning -->
+    <color name="gratia_secondary">#FFA726</color>
+    <color name="gratia_secondary_dark">#FF8F00</color>
+
+    <!-- Backgrounds -->
+    <color name="gratia_background_light">#FBFDF9</color>
+    <color name="gratia_background_dark">#121212</color>
+    <color name="gratia_surface_dark">#1E1E1E</color>
+
+    <!-- Status -->
+    <color name="gratia_error">#B00020</color>
+    <color name="gratia_error_dark">#CF6679</color>
+    <color name="gratia_success">#4CAF50</color>
+    <color name="gratia_warning">#FF9800</color>
+
+    <!-- Common -->
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
+</resources>

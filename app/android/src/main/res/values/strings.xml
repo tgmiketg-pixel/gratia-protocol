@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Gratia</string>
+
+    <!-- Bottom navigation tabs -->
+    <string name="tab_wallet">Wallet</string>
+    <string name="tab_mining">Mining</string>
+    <string name="tab_governance">Governance</string>
+    <string name="tab_settings">Settings</string>
+
+    <!-- Notification channels -->
+    <string name="channel_pol_name">Proof of Life</string>
+    <string name="channel_pol_description">Background sensor collection for daily Proof of Life verification</string>
+    <string name="channel_mining_name">Mining</string>
+    <string name="channel_mining_description">Active mining status and rewards</string>
+
+    <!-- Common actions -->
+    <string name="action_send">Send</string>
+    <string name="action_receive">Receive</string>
+    <string name="action_stake">Stake</string>
+    <string name="action_unstake">Unstake</string>
+    <string name="action_start_mining">Start Mining</string>
+    <string name="action_stop_mining">Stop Mining</string>
+    <string name="action_copy_address">Copy Address</string>
+
+    <!-- Mining states -->
+    <string name="mining_state_proof_of_life">Proof of Life</string>
+    <string name="mining_state_pending">Pending Activation</string>
+    <string name="mining_state_mining">Mining Active</string>
+    <string name="mining_state_throttled">Throttled (Cooling)</string>
+    <string name="mining_state_battery_low">Battery Too Low</string>
+
+    <!-- Error messages -->
+    <string name="error_wallet_not_initialized">No wallet found. Create a wallet to get started.</string>
+    <string name="error_wallet_already_exists">A wallet already exists on this device.</string>
+    <string name="error_insufficient_balance">Insufficient balance for this transaction.</string>
+    <string name="error_mining_not_available">Mining conditions not met.</string>
+    <string name="error_core_not_initialized">Core system is starting up. Please wait.</string>
+
+    <!-- Wallet screen -->
+    <string name="wallet_balance_label">Balance</string>
+    <string name="wallet_address_label">Your Address</string>
+    <string name="wallet_history_label">Transaction History</string>
+    <string name="wallet_no_transactions">No transactions yet</string>
+    <string name="wallet_create_prompt">Create Wallet</string>
+
+    <!-- Mining screen -->
+    <string name="mining_status_label">Mining Status</string>
+    <string name="mining_battery_label">Battery</string>
+    <string name="mining_plugged_in">Plugged In</string>
+    <string name="mining_not_plugged_in">Not Plugged In</string>
+    <string name="mining_pol_valid">Proof of Life Valid</string>
+    <string name="mining_pol_invalid">Proof of Life Not Yet Valid</string>
+    <string name="mining_presence_score_label">Presence Score</string>
+
+    <!-- Governance screen -->
+    <string name="governance_proposals_label">Proposals</string>
+    <string name="governance_polls_label">Polls</string>
+    <string name="governance_no_proposals">No active proposals</string>
+
+    <!-- Settings screen -->
+    <string name="settings_wallet_section">Wallet</string>
+    <string name="settings_security_section">Security</string>
+    <string name="settings_privacy_section">Privacy</string>
+    <string name="settings_about_section">About</string>
+    <string name="settings_version_label">Version</string>
+</resources>
