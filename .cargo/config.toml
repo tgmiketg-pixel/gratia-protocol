@@ -1,0 +1,18 @@
+# Cargo cross-compilation configuration for Android targets.
+#
+# WHY: The Gratia protocol core is written in Rust and must be compiled
+# to native ARM64 shared libraries (.so) for inclusion in the Android app.
+# The NDK provides the clang cross-compiler and sysroot for Android targets.
+
+[target.aarch64-linux-android]
+# WHY: API level 26 matches our minSdk = 26 (Android 8.0, 2017+ phones).
+# Using a higher API level than minSdk would cause runtime linker errors on
+# older devices. Using a lower level is safe but unnecessary.
+linker = "C:/Users/Michael/AppData/Local/Android/Sdk/ndk/27.1.12297006/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android26-clang.cmd"
+
+[env]
+# WHY: Some crates (e.g., ring) use cc to compile C code and need to know
+# where the Android NDK toolchain is. These env vars point cc to the right
+# compiler and sysroot.
+CC_aarch64-linux-android = "C:/Users/Michael/AppData/Local/Android/Sdk/ndk/27.1.12297006/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android26-clang.cmd"
+AR_aarch64-linux-android = "C:/Users/Michael/AppData/Local/Android/Sdk/ndk/27.1.12297006/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ar.exe"

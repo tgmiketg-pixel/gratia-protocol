@@ -24,5 +24,9 @@ chrono = { workspace = true }
 hex = { workspace = true }
 tracing = { workspace = true }
 
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+
 [build-dependencies]
 uniffi = { version = "0.28", features = ["build"] }

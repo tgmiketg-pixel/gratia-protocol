@@ -1,17 +1,23 @@
 package io.gratia.app.bridge
 
 import android.util.Log
+import uniffi.gratia_ffi.GratiaNode
+import uniffi.gratia_ffi.FfiException
+import uniffi.gratia_ffi.FfiMiningStatus
+import uniffi.gratia_ffi.FfiProofOfLifeStatus
+import uniffi.gratia_ffi.FfiSensorEvent
+import uniffi.gratia_ffi.FfiStakeInfo
+import uniffi.gratia_ffi.FfiTransactionInfo
+import uniffi.gratia_ffi.FfiWalletInfo
 
 /**
  * Bridge to the Rust core via UniFFI.
  *
- * This singleton manages the lifecycle of the GratiaNode (the Rust-side entry
+ * This singleton manages the lifecycle of the [GratiaNode] (the Rust-side entry
  * point) and exposes its methods to the Kotlin UI and service layers.
  *
- * Currently returns mock/placeholder data so the Android UI can be developed
- * independently of the Rust core. When the UniFFI bindings are generated, the
- * placeholder implementations will be replaced with real calls to the
- * auto-generated `uniffi.gratia.GratiaNode` class.
+ * All Rust FFI calls are wrapped with error handling that maps [FfiException]
+ * variants to [GratiaBridgeException] for the Kotlin callers.
  */
 object GratiaCoreManager {
 
@@ -25,11 +31,8 @@ object GratiaCoreManager {
     var isInitialized: Boolean = false
         private set
 
-    /** Data directory passed to the Rust core for persistent storage. */
-    private var dataDir: String? = null
-
-    // TODO: Replace with real UniFFI-generated GratiaNode instance:
-    //   private var node: uniffi.gratia.GratiaNode? = null
+    /** The UniFFI-generated Rust node instance. */
+    private var node: GratiaNode? = null
 
     // ========================================================================
     // Initialization
@@ -49,14 +52,14 @@ object GratiaCoreManager {
             return
         }
 
-        this.dataDir = dataDir
-
-        // TODO: Load the native library and create the real GratiaNode:
-        //   System.loadLibrary("gratia_ffi")
-        //   node = uniffi.gratia.GratiaNode(dataDir)
-
-        isInitialized = true
-        Log.i(TAG, "GratiaCoreManager initialized (mock mode)")
+        try {
+            node = GratiaNode(dataDir)
+            isInitialized = true
+            Log.i(TAG, "GratiaCoreManager initialized (Rust core loaded)")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize Rust core", e)
+            throw GratiaBridgeException("Failed to initialize Rust core: ${e.message}", e)
+        }
     }
 
     // ========================================================================
@@ -70,30 +73,20 @@ object GratiaCoreManager {
      * @throws GratiaBridgeException if wallet already exists or core not initialized.
      */
     fun createWallet(): String {
-        ensureInitialized()
-
-        // TODO: return node!!.createWallet()
-
-        // Mock: return a deterministic placeholder address
-        Log.i(TAG, "createWallet() — returning mock address")
-        return "grat:" + "a1b2c3d4e5f6".repeat(5) + "a1b2c3d4"
+        return callNode { it.createWallet() }
     }
 
     /**
-     * Get current wallet information.
+     * Get current wallet information (address, balance, mining state).
      *
      * @return Wallet info containing address, balance, and mining state.
      */
     fun getWalletInfo(): WalletInfo {
-        ensureInitialized()
-
-        // TODO: val ffi = node!!.getWalletInfo()
-        //       return WalletInfo(ffi.address, ffi.balanceLux, ffi.miningState)
-
+        val ffi = callNode { it.getWalletInfo() }
         return WalletInfo(
-            address = "grat:" + "a1b2c3d4e5f6".repeat(5) + "a1b2c3d4",
-            balanceLux = 0L,
-            miningState = "proof_of_life",
+            address = ffi.address,
+            balanceLux = ffi.balanceLux.toLong(),
+            miningState = ffi.miningState,
         )
     }
 
@@ -105,12 +98,7 @@ object GratiaCoreManager {
      * @return Transaction hash as hex string.
      */
     fun sendTransfer(to: String, amountLux: Long): String {
-        ensureInitialized()
-
-        // TODO: return node!!.sendTransfer(to, amountLux.toULong())
-
-        Log.i(TAG, "sendTransfer() — mock: to=$to, amount=$amountLux Lux")
-        return "mock_tx_" + System.currentTimeMillis().toString(16)
+        return callNode { it.sendTransfer(to, amountLux.toULong()) }
     }
 
     /**
@@ -119,11 +107,17 @@ object GratiaCoreManager {
      * @return List of transaction records.
      */
     fun getTransactionHistory(): List<TransactionInfo> {
-        ensureInitialized()
-
-        // TODO: return node!!.getTransactionHistory().map { TransactionInfo.fromFfi(it) }
-
-        return emptyList()
+        val ffiList = callNode { it.getTransactionHistory() }
+        return ffiList.map { ffi ->
+            TransactionInfo(
+                hashHex = ffi.hashHex,
+                direction = ffi.direction,
+                counterparty = ffi.counterparty,
+                amountLux = ffi.amountLux.toLong(),
+                timestampMillis = ffi.timestampMillis,
+                status = ffi.status,
+            )
+        }
     }
 
     // ========================================================================
@@ -136,18 +130,7 @@ object GratiaCoreManager {
      * @return Mining status containing state, battery, PoL validity, etc.
      */
     fun getMiningStatus(): MiningStatus {
-        ensureInitialized()
-
-        // TODO: val ffi = node!!.getMiningStatus()
-        //       return MiningStatus.fromFfi(ffi)
-
-        return MiningStatus(
-            state = "proof_of_life",
-            batteryPercent = 0,
-            isPluggedIn = false,
-            currentDayPolValid = false,
-            presenceScore = 0,
-        )
+        return callNode { it.getMiningStatus() }.toBridge()
     }
 
     /**
@@ -160,19 +143,9 @@ object GratiaCoreManager {
      * @return Updated mining status.
      */
     fun updatePowerState(isPluggedIn: Boolean, batteryPercent: Int): MiningStatus {
-        ensureInitialized()
-
-        // TODO: val ffi = node!!.updatePowerState(isPluggedIn, batteryPercent.toUByte())
-        //       return MiningStatus.fromFfi(ffi)
-
-        Log.d(TAG, "updatePowerState() — plugged=$isPluggedIn, battery=$batteryPercent%")
-        return MiningStatus(
-            state = if (isPluggedIn && batteryPercent >= 80) "pending_activation" else "proof_of_life",
-            batteryPercent = batteryPercent,
-            isPluggedIn = isPluggedIn,
-            currentDayPolValid = false,
-            presenceScore = 0,
-        )
+        return callNode {
+            it.updatePowerState(isPluggedIn, batteryPercent.toUByte())
+        }.toBridge()
     }
 
     /**
@@ -185,13 +158,7 @@ object GratiaCoreManager {
      * @throws GratiaBridgeException if conditions are not met.
      */
     fun startMining(): MiningStatus {
-        ensureInitialized()
-
-        // TODO: val ffi = node!!.startMining()
-        //       return MiningStatus.fromFfi(ffi)
-
-        Log.i(TAG, "startMining() — mock")
-        return getMiningStatus()
+        return callNode { it.startMining() }.toBridge()
     }
 
     /**
@@ -200,13 +167,7 @@ object GratiaCoreManager {
      * @return Updated mining status.
      */
     fun stopMining(): MiningStatus {
-        ensureInitialized()
-
-        // TODO: val ffi = node!!.stopMining()
-        //       return MiningStatus.fromFfi(ffi)
-
-        Log.i(TAG, "stopMining() — mock")
-        return getMiningStatus()
+        return callNode { it.stopMining() }.toBridge()
     }
 
     // ========================================================================
@@ -219,16 +180,12 @@ object GratiaCoreManager {
      * @return PoL status with validity, consecutive days, and parameter completion.
      */
     fun getProofOfLifeStatus(): ProofOfLifeStatus {
-        ensureInitialized()
-
-        // TODO: val ffi = node!!.getProofOfLifeStatus()
-        //       return ProofOfLifeStatus.fromFfi(ffi)
-
+        val ffi = callNode { it.getProofOfLifeStatus() }
         return ProofOfLifeStatus(
-            isValidToday = false,
-            consecutiveDays = 0L,
-            isOnboarded = false,
-            parametersMet = emptyList(),
+            isValidToday = ffi.isValidToday,
+            consecutiveDays = ffi.consecutiveDays.toLong(),
+            isOnboarded = ffi.isOnboarded,
+            parametersMet = ffi.parametersMet,
         )
     }
 
@@ -242,11 +199,8 @@ object GratiaCoreManager {
      * @param event The sensor event to submit.
      */
     fun submitSensorEvent(event: SensorEvent) {
-        ensureInitialized()
-
-        // TODO: node!!.submitSensorEvent(event.toFfi())
-
-        Log.d(TAG, "submitSensorEvent() — ${event.type}")
+        val ffiEvent = event.toFfi()
+        callNode { it.submitSensorEvent(ffiEvent) }
     }
 
     /**
@@ -258,12 +212,7 @@ object GratiaCoreManager {
      * @return True if the day was valid (all PoL parameters met).
      */
     fun finalizeDay(): Boolean {
-        ensureInitialized()
-
-        // TODO: return node!!.finalizeDay()
-
-        Log.i(TAG, "finalizeDay() — mock: returning false")
-        return false
+        return callNode { it.finalizeDay() }
     }
 
     // ========================================================================
@@ -280,12 +229,7 @@ object GratiaCoreManager {
      * @return Transaction hash as hex string.
      */
     fun stake(amountLux: Long): String {
-        ensureInitialized()
-
-        // TODO: return node!!.stake(amountLux.toULong())
-
-        Log.i(TAG, "stake() — mock: $amountLux Lux")
-        return "mock_stake_" + System.currentTimeMillis().toString(16)
+        return callNode { it.stake(amountLux.toULong()) }
     }
 
     /**
@@ -295,12 +239,7 @@ object GratiaCoreManager {
      * @return Transaction hash as hex string.
      */
     fun unstake(amountLux: Long): String {
-        ensureInitialized()
-
-        // TODO: return node!!.unstake(amountLux.toULong())
-
-        Log.i(TAG, "unstake() — mock: $amountLux Lux")
-        return "mock_unstake_" + System.currentTimeMillis().toString(16)
+        return callNode { it.unstake(amountLux.toULong()) }
     }
 
     /**
@@ -309,17 +248,13 @@ object GratiaCoreManager {
      * @return Staking info with effective stake, overflow, and minimum status.
      */
     fun getStakeInfo(): StakeInfo {
-        ensureInitialized()
-
-        // TODO: val ffi = node!!.getStakeInfo()
-        //       return StakeInfo.fromFfi(ffi)
-
+        val ffi = callNode { it.getStakeInfo() }
         return StakeInfo(
-            nodeStakeLux = 0L,
-            overflowAmountLux = 0L,
-            totalCommittedLux = 0L,
-            stakedAtMillis = 0L,
-            meetsMinimum = false,
+            nodeStakeLux = ffi.nodeStakeLux.toLong(),
+            overflowAmountLux = ffi.overflowAmountLux.toLong(),
+            totalCommittedLux = ffi.totalCommittedLux.toLong(),
+            stakedAtMillis = ffi.stakedAtMillis,
+            meetsMinimum = ffi.meetsMinimum,
         )
     }
 
@@ -327,9 +262,19 @@ object GratiaCoreManager {
     // Private helpers
     // ========================================================================
 
-    private fun ensureInitialized() {
-        if (!isInitialized) {
-            throw GratiaBridgeException("Rust core not initialized. Call initialize() first.")
+    /**
+     * Execute a block against the initialized GratiaNode, mapping FFI errors
+     * to [GratiaBridgeException].
+     */
+    private fun <T> callNode(block: (GratiaNode) -> T): T {
+        val n = node ?: throw GratiaBridgeException(
+            "Rust core not initialized. Call initialize() first."
+        )
+        return try {
+            block(n)
+        } catch (e: FfiException) {
+            Log.e(TAG, "FFI error: ${e.message}", e)
+            throw GratiaBridgeException(e.message ?: "Unknown FFI error", e)
         }
     }
 }
@@ -432,6 +377,20 @@ sealed class SensorEvent(val type: String) {
 
     /** Charge state changed (plugged in or unplugged). */
     data class ChargeEvent(val isCharging: Boolean) : SensorEvent("charge_event")
+
+    /**
+     * Convert this bridge-layer sensor event to the UniFFI-generated FFI type.
+     */
+    fun toFfi(): FfiSensorEvent = when (this) {
+        is Unlock -> FfiSensorEvent.Unlock
+        is Interaction -> FfiSensorEvent.Interaction(durationSecs.toUInt())
+        is OrientationChange -> FfiSensorEvent.OrientationChange
+        is Motion -> FfiSensorEvent.Motion
+        is GpsUpdate -> FfiSensorEvent.GpsUpdate(lat, lon)
+        is WifiScan -> FfiSensorEvent.WifiScan(bssidHashes.map { it.toULong() })
+        is BluetoothScan -> FfiSensorEvent.BluetoothScan(peerHashes.map { it.toULong() })
+        is ChargeEvent -> FfiSensorEvent.ChargeEvent(isCharging)
+    }
 }
 
 /**
@@ -439,3 +398,16 @@ sealed class SensorEvent(val type: String) {
  */
 class GratiaBridgeException(message: String, cause: Throwable? = null) :
     RuntimeException(message, cause)
+
+// ============================================================================
+// Extension functions for FFI -> Bridge conversion
+// ============================================================================
+
+/** Convert [FfiMiningStatus] to bridge-layer [MiningStatus]. */
+private fun FfiMiningStatus.toBridge() = MiningStatus(
+    state = state,
+    batteryPercent = batteryPercent.toInt(),
+    isPluggedIn = isPluggedIn,
+    currentDayPolValid = currentDayPolValid,
+    presenceScore = presenceScore.toInt(),
+)

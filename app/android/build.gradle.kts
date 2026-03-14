@@ -7,6 +7,10 @@ android {
     namespace = "io.gratia.app"
     compileSdk = 34
 
+    // WHY: NDK 27.1 is the version installed on this machine and provides
+    // the ARM64 cross-compilation toolchain for the Rust core.
+    ndkVersion = "27.1.12297006"
+
     defaultConfig {
         applicationId = "io.gratia.app"
         // WHY: minSdk 26 (Android 8.0) covers phones from 2017+ and gives us access
@@ -18,6 +22,13 @@ android {
         versionName = "0.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // WHY: Only target ARM64 — Gratia is a mobile-only blockchain that requires
+        // real ARM hardware for consensus. x86/x86_64 are emulator-only architectures
+        // and are intentionally excluded.
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
 
         vectorDrawables {
             useSupportLibrary = true
@@ -64,17 +75,15 @@ android {
         }
     }
 
-    // TODO: Add Rust/UniFFI native library build integration.
-    // This requires:
-    //   1. Android NDK installed and configured (ndkVersion = "26.x.x")
-    //   2. Rust cross-compilation target: aarch64-linux-android
-    //   3. A Gradle task that runs `cargo build --target aarch64-linux-android --release`
-    //      for the gratia-ffi crate and copies the resulting .so into jniLibs/
-    //   4. UniFFI binding generation: `uniffi-bindgen generate` to produce the
-    //      Kotlin bindings from the .udl file at crates/gratia-ffi/uniffi/gratia.udl
+    // Rust/UniFFI native library integration:
+    //   1. Run `scripts/build-android.sh` to cross-compile the Rust core and
+    //      generate Kotlin bindings.
+    //   2. The .so is placed in src/main/jniLibs/arm64-v8a/libgratia_ffi.so
+    //   3. UniFFI-generated Kotlin bindings are in src/main/kotlin/uniffi/gratia_ffi/
+    //   4. JNA loads the native library at runtime via the generated bindings.
     //
-    // For now, the GratiaCore bridge uses mock/placeholder data so the UI can
-    // be developed independently of the Rust core.
+    // The GratiaCoreManager bridge (io.gratia.app.bridge) wraps the UniFFI-generated
+    // classes with a Kotlin-friendly API for the UI and service layers.
 }
 
 dependencies {
@@ -109,6 +118,10 @@ dependencies {
 
     // Coroutines for async work (sensor data collection, Rust bridge calls)
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+
+    // WHY: JNA (Java Native Access) is required by UniFFI-generated Kotlin bindings
+    // to load and call into the Rust native library (libgratia_ffi.so).
+    implementation("net.java.dev.jna:jna:5.14.0@aar")
 
     // Testing
     testImplementation("junit:junit:4.13.2")
