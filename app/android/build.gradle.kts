@@ -65,8 +65,8 @@ android {
 
     composeOptions {
         // WHY: Kotlin compiler extension version must match the Compose BOM.
-        // 1.5.8 is compatible with Kotlin 1.9.22 and Compose BOM 2024.01.00.
-        kotlinCompilerExtensionVersion = "1.5.8"
+        // 1.5.14 is compatible with Kotlin 1.9.22 and Compose BOM 2024.06.00.
+        kotlinCompilerExtensionVersion = "1.5.14"
     }
 
     packaging {
@@ -88,7 +88,10 @@ android {
 
 dependencies {
     // Jetpack Compose BOM — single version source for all Compose libraries
-    val composeBom = platform("androidx.compose:compose-bom:2024.01.00")
+    // WHY: BOM 2024.06.00 aligns all Compose libraries (Material3 1.2.x,
+    // animation-core, foundation, etc.) to avoid NoSuchMethodError crashes
+    // from version mismatches between Compose sub-libraries.
+    val composeBom = platform("androidx.compose:compose-bom:2024.06.00")
     implementation(composeBom)
     androidTestImplementation(composeBom)
 

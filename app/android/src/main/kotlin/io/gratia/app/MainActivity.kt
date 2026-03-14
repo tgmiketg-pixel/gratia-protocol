@@ -169,23 +169,19 @@ fun GratiaApp() {
             modifier = Modifier.padding(innerPadding),
         ) {
             composable(GratiaRoutes.WALLET) {
-                // TODO: WalletScreen() — implemented by UI agent
-                ScreenPlaceholder(name = stringResource(R.string.tab_wallet))
+                io.gratia.app.ui.WalletScreen()
             }
             composable(GratiaRoutes.MINING) {
-                // TODO: MiningScreen() — implemented by UI agent
-                ScreenPlaceholder(name = stringResource(R.string.tab_mining))
+                io.gratia.app.ui.MiningScreen()
             }
             composable(GratiaRoutes.NETWORK) {
                 io.gratia.app.ui.NetworkScreen()
             }
             composable(GratiaRoutes.GOVERNANCE) {
-                // TODO: GovernanceScreen() — implemented by UI agent
-                ScreenPlaceholder(name = stringResource(R.string.tab_governance))
+                io.gratia.app.ui.GovernanceScreen()
             }
             composable(GratiaRoutes.SETTINGS) {
-                // TODO: SettingsScreen() — implemented by UI agent
-                ScreenPlaceholder(name = stringResource(R.string.tab_settings))
+                io.gratia.app.ui.SettingsScreen()
             }
         }
     }

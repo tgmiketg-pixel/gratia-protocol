@@ -8,7 +8,7 @@ pluginManagement {
     // AGP 8.2.2 is compatible with Gradle 8.11, Kotlin 1.9.22, and Compose BOM 2024.01.00.
     plugins {
         id("com.android.application") version "8.2.2"
-        id("org.jetbrains.kotlin.android") version "1.9.22"
+        id("org.jetbrains.kotlin.android") version "1.9.24"
     }
 }
 

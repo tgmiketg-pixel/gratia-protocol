@@ -2,11 +2,13 @@ package io.gratia.app.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 // ============================================================================
 // Data classes mirroring FFI types for the UI layer.
@@ -99,27 +101,67 @@ class WalletViewModel : ViewModel() {
     }
 
     fun loadWalletData() {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
-            // Simulate network/bridge delay
-            delay(300)
-            _uiState.value = _uiState.value.copy(
-                walletInfo = mockWalletInfo(),
-                transactions = mockTransactions(),
-                isLoading = false,
-            )
+            try {
+                val bridge = io.gratia.app.bridge.GratiaCoreManager
+                val info = bridge.getWalletInfo()
+                val txs = bridge.getTransactionHistory()
+                _uiState.value = _uiState.value.copy(
+                    walletInfo = WalletInfo(
+                        address = info.address,
+                        balanceLux = info.balanceLux,
+                        miningState = info.miningState,
+                    ),
+                    transactions = txs.map { tx ->
+                        TransactionInfo(
+                            hashHex = tx.hashHex,
+                            direction = tx.direction,
+                            counterparty = tx.counterparty,
+                            amountLux = tx.amountLux,
+                            timestampMillis = tx.timestampMillis,
+                            status = tx.status,
+                        )
+                    },
+                    isLoading = false,
+                )
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    errorMessage = e.message,
+                )
+            }
         }
     }
 
     fun refresh() {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = _uiState.value.copy(isRefreshing = true)
-            delay(500)
-            _uiState.value = _uiState.value.copy(
-                walletInfo = mockWalletInfo(),
-                transactions = mockTransactions(),
-                isRefreshing = false,
-            )
+            try {
+                val bridge = io.gratia.app.bridge.GratiaCoreManager
+                val info = bridge.getWalletInfo()
+                val txs = bridge.getTransactionHistory()
+                _uiState.value = _uiState.value.copy(
+                    walletInfo = WalletInfo(
+                        address = info.address,
+                        balanceLux = info.balanceLux,
+                        miningState = info.miningState,
+                    ),
+                    transactions = txs.map { tx ->
+                        TransactionInfo(
+                            hashHex = tx.hashHex,
+                            direction = tx.direction,
+                            counterparty = tx.counterparty,
+                            amountLux = tx.amountLux,
+                            timestampMillis = tx.timestampMillis,
+                            status = tx.status,
+                        )
+                    },
+                    isRefreshing = false,
+                )
+            } catch (_: Exception) {
+                _uiState.value = _uiState.value.copy(isRefreshing = false)
+            }
         }
     }
 
@@ -140,7 +182,7 @@ class WalletViewModel : ViewModel() {
     }
 
     fun sendTransfer(toAddress: String, amountLux: Long) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = _uiState.value.copy(showSendDialog = false)
             // In production: call GratiaNode.sendTransfer(toAddress, amountLux)
             delay(200)
@@ -218,64 +260,70 @@ class MiningViewModel : ViewModel() {
     }
 
     fun loadMiningData() {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = _uiState.value.copy(isLoading = true)
-            delay(300)
-            _uiState.value = MiningUiState(
-                miningStatus = mockMiningStatus(),
-                polStatus = mockPolStatus(),
-                isLoading = false,
-                earningsToday = 2_150_000L,   // 2.15 GRAT
-                earningsThisWeek = 14_750_000L, // 14.75 GRAT
-                earningsTotal = 42_750_000L,  // 42.75 GRAT
-            )
+            try {
+                val bridge = io.gratia.app.bridge.GratiaCoreManager
+                val mining = bridge.getMiningStatus()
+                val pol = bridge.getProofOfLifeStatus()
+                _uiState.value = MiningUiState(
+                    miningStatus = MiningStatus(
+                        state = mining.state,
+                        batteryPercent = mining.batteryPercent,
+                        isPluggedIn = mining.isPluggedIn,
+                        currentDayPolValid = mining.currentDayPolValid,
+                        presenceScore = mining.presenceScore,
+                    ),
+                    polStatus = ProofOfLifeStatus(
+                        isValidToday = pol.isValidToday,
+                        consecutiveDays = pol.consecutiveDays,
+                        isOnboarded = pol.isOnboarded,
+                        parametersMet = pol.parametersMet,
+                    ),
+                    isLoading = false,
+                    earningsToday = 0L,
+                    earningsThisWeek = 0L,
+                    earningsTotal = 0L,
+                )
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(isLoading = false)
+            }
         }
     }
 
     fun startMining() {
-        viewModelScope.launch {
-            // In production: call GratiaNode.startMining()
-            val current = _uiState.value.miningStatus ?: return@launch
-            _uiState.value = _uiState.value.copy(
-                miningStatus = current.copy(state = "mining")
-            )
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val result = io.gratia.app.bridge.GratiaCoreManager.startMining()
+                _uiState.value = _uiState.value.copy(
+                    miningStatus = MiningStatus(
+                        state = result.state,
+                        batteryPercent = result.batteryPercent,
+                        isPluggedIn = result.isPluggedIn,
+                        currentDayPolValid = result.currentDayPolValid,
+                        presenceScore = result.presenceScore,
+                    )
+                )
+            } catch (_: Exception) {}
         }
     }
 
     fun stopMining() {
-        viewModelScope.launch {
-            // In production: call GratiaNode.stopMining()
-            val current = _uiState.value.miningStatus ?: return@launch
-            _uiState.value = _uiState.value.copy(
-                miningStatus = current.copy(state = "proof_of_life")
-            )
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val result = io.gratia.app.bridge.GratiaCoreManager.stopMining()
+                _uiState.value = _uiState.value.copy(
+                    miningStatus = MiningStatus(
+                        state = result.state,
+                        batteryPercent = result.batteryPercent,
+                        isPluggedIn = result.isPluggedIn,
+                        currentDayPolValid = result.currentDayPolValid,
+                        presenceScore = result.presenceScore,
+                    )
+                )
+            } catch (_: Exception) {}
         }
     }
-
-    private fun mockMiningStatus() = MiningStatus(
-        state = "mining",
-        batteryPercent = 92,
-        isPluggedIn = true,
-        currentDayPolValid = true,
-        presenceScore = 78,
-    )
-
-    private fun mockPolStatus() = ProofOfLifeStatus(
-        isValidToday = true,
-        consecutiveDays = 23,
-        isOnboarded = true,
-        parametersMet = listOf(
-            "unlocks",
-            "unlock_spread",
-            "interactions",
-            "orientation",
-            "motion",
-            "gps",
-            "network",
-            "bt_variation",
-            "charge_event",
-        ),
-    )
 }
 
 // ============================================================================
@@ -305,7 +353,7 @@ class NetworkViewModel : ViewModel() {
     private var pollingActive = false
 
     fun startNetwork() {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
             try {
                 val status = io.gratia.app.bridge.GratiaCoreManager.startNetwork()
@@ -326,7 +374,7 @@ class NetworkViewModel : ViewModel() {
     }
 
     fun stopNetwork() {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             pollingActive = false
             try {
                 io.gratia.app.bridge.GratiaCoreManager.stopNetwork()
@@ -337,7 +385,7 @@ class NetworkViewModel : ViewModel() {
     }
 
     fun startConsensus() {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = _uiState.value.copy(errorMessage = null)
             try {
                 val status = io.gratia.app.bridge.GratiaCoreManager.startConsensus()
@@ -357,7 +405,7 @@ class NetworkViewModel : ViewModel() {
     }
 
     fun stopConsensus() {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 io.gratia.app.bridge.GratiaCoreManager.stopConsensus()
                 _uiState.value = _uiState.value.copy(
@@ -371,7 +419,7 @@ class NetworkViewModel : ViewModel() {
     }
 
     fun connectPeer(address: String) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = _uiState.value.copy(errorMessage = null)
             try {
                 io.gratia.app.bridge.GratiaCoreManager.connectPeer(address)
@@ -395,7 +443,7 @@ class NetworkViewModel : ViewModel() {
     private fun startPolling() {
         if (pollingActive) return
         pollingActive = true
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             // WHY: Poll every 2 seconds — fast enough to show live block production
             // (4-second slots) without excessive CPU usage on mobile.
             while (pollingActive) {
@@ -489,7 +537,7 @@ class SettingsViewModel : ViewModel() {
     }
 
     fun loadSettings() {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = _uiState.value.copy(isLoading = true)
             delay(200)
             _uiState.value = SettingsUiState(
@@ -529,7 +577,7 @@ class SettingsViewModel : ViewModel() {
     }
 
     fun stake(amountLux: Long) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = _uiState.value.copy(showStakeDialog = false)
             // In production: call GratiaNode.stake(amountLux)
             delay(200)
@@ -546,7 +594,7 @@ class SettingsViewModel : ViewModel() {
     }
 
     fun unstake(amountLux: Long) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = _uiState.value.copy(showUnstakeDialog = false)
             // In production: call GratiaNode.unstake(amountLux)
             delay(200)
@@ -617,7 +665,7 @@ class GovernanceViewModel : ViewModel() {
     }
 
     fun loadGovernanceData() {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = _uiState.value.copy(isLoading = true)
             delay(300)
             _uiState.value = GovernanceUiState(
@@ -638,7 +686,7 @@ class GovernanceViewModel : ViewModel() {
     }
 
     fun voteOnProposal(proposalId: String, vote: String) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             // In production: call governance contract
             delay(200)
             clearSelectedProposal()
@@ -655,7 +703,7 @@ class GovernanceViewModel : ViewModel() {
     }
 
     fun voteOnPoll(pollId: String, optionIndex: Int) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             // In production: call polling contract
             delay(200)
             clearSelectedPoll()
