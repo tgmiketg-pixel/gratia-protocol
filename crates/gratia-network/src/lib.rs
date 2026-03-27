@@ -46,6 +46,31 @@ use crate::sync::{SyncManager, SyncPayload, SyncProtocolMessage, SyncRequest, Sy
 use crate::transport::{ConnectionManager, TransportConfig};
 
 // ============================================================================
+// Block Provider Trait
+// ============================================================================
+
+/// Trait for providing blocks to the sync protocol.
+///
+/// WHY: The network event loop doesn't own the state database.
+/// The FFI/application layer wraps StateManager in this trait so
+/// the sync handler can fetch blocks by height range when peers
+/// request them.
+pub trait BlockProvider: Send + Sync + 'static {
+    /// Get blocks in the given height range (inclusive).
+    /// Returns blocks that exist in the range, stopping at the first gap.
+    fn get_blocks(&self, from_height: u64, to_height: u64) -> Vec<Block>;
+}
+
+/// No-op block provider used when state is not yet initialized.
+pub struct NoBlockProvider;
+
+impl BlockProvider for NoBlockProvider {
+    fn get_blocks(&self, _from: u64, _to: u64) -> Vec<Block> {
+        Vec::new()
+    }
+}
+
+// ============================================================================
 // Network Events
 // ============================================================================
 
@@ -180,6 +205,10 @@ pub struct NetworkManager {
     /// Channel sender for outbound messages (to the swarm event loop).
     /// Populated when `start()` is called.
     command_tx: Option<mpsc::Sender<NetworkCommand>>,
+
+    /// Block provider for serving sync requests.
+    /// WHY: Set after state is initialized (start_consensus), not at network start.
+    block_provider: std::sync::Arc<dyn BlockProvider>,
 }
 
 /// Commands sent from the application to the network event loop.
@@ -229,6 +258,7 @@ impl NetworkManager {
             connections: ConnectionManager::new(transport_config),
             running: false,
             command_tx: None,
+            block_provider: std::sync::Arc::new(NoBlockProvider),
         }
     }
 
@@ -361,7 +391,8 @@ impl NetworkManager {
 
         // Spawn the event loop as a background task
         let node_id = self.config.local_node_id;
-        tokio::spawn(run_swarm_event_loop(swarm, command_rx, event_tx, node_id));
+        let block_provider = self.block_provider.clone();
+        tokio::spawn(run_swarm_event_loop(swarm, command_rx, event_tx, node_id, block_provider));
 
         tracing::info!(
             node_id = %self.config.local_node_id,
@@ -369,6 +400,13 @@ impl NetworkManager {
         );
 
         Ok(event_rx)
+    }
+
+    /// Set the block provider for serving sync requests.
+    /// WHY: Called after state is initialized (typically in start_consensus)
+    /// so that the sync protocol can serve blocks to peers requesting them.
+    pub fn set_block_provider(&mut self, provider: std::sync::Arc<dyn BlockProvider>) {
+        self.block_provider = provider;
     }
 
     /// Stop the network layer gracefully.
@@ -631,6 +669,7 @@ async fn run_swarm_event_loop(
     mut command_rx: mpsc::Receiver<NetworkCommand>,
     event_tx: mpsc::Sender<NetworkEvent>,
     node_id: NodeId,
+    block_provider: std::sync::Arc<dyn BlockProvider>,
 ) {
     // WHY: Separate gossip handler for the event loop — deduplication must
     // happen where messages first arrive (here), not in the application layer.
@@ -673,6 +712,7 @@ async fn run_swarm_event_loop(
                                 &mut swarm,
                                 &event_tx,
                                 &local_peer_id,
+                                block_provider.as_ref(),
                             ).await;
                             continue;
                         }
@@ -986,6 +1026,7 @@ async fn handle_sync_message(
     swarm: &mut Swarm<GratiaBehaviour>,
     event_tx: &mpsc::Sender<NetworkEvent>,
     _local_peer_id: &PeerId,
+    block_provider: &dyn BlockProvider,
 ) {
     let msg = match SyncProtocolMessage::from_bytes(data) {
         Ok(m) => m,
@@ -1022,15 +1063,11 @@ async fn handle_sync_message(
             );
 
             // WHY: Respond to the requesting peer with our local data.
-            // The get_blocks closure currently returns None because the event
-            // loop doesn't have direct access to block storage. The caller
-            // (FFI/consensus layer) should wire this up with actual storage.
-            // For GetChainTip requests, the SyncManager has the data directly.
-            let response = sync_manager.handle_sync_request(&request, |_from, _to| {
-                // TODO: Wire to actual block storage once gratia-state is
-                // integrated into the event loop. For now, return None which
-                // produces a SyncResponse::Error, but GetChainTip still works.
-                None
+            // The block_provider is set by the FFI layer after state initialization,
+            // giving the sync handler access to stored blocks.
+            let response = sync_manager.handle_sync_request(&request, |from, to| {
+                let blocks = block_provider.get_blocks(from, to);
+                if blocks.is_empty() { None } else { Some(blocks) }
             });
 
             // Send the response back to the requesting peer

@@ -90,11 +90,15 @@ impl StateManager {
         let current_tip = self.db.get_chain_tip()?;
 
         // Validate chain continuity.
-        if block.header.height != current_height + 1 && current_height != 0 {
+        // WHY: Genesis block must be height 1, all subsequent blocks must be
+        // exactly current_height + 1. Without this check, an attacker could
+        // submit a genesis block at any height on an empty chain.
+        let expected_height = current_height + 1;
+        if block.header.height != expected_height {
             return Err(GratiaError::BlockValidationFailed {
                 reason: format!(
                     "expected height {}, got {}",
-                    current_height + 1,
+                    expected_height,
                     block.header.height
                 ),
             });
@@ -134,7 +138,7 @@ impl StateManager {
         self.db.set_state_root(&state_root)?;
 
         // Advance chain tip and height.
-        let block_hash = block.header.hash();
+        let block_hash = block.header.hash()?;
         self.db.set_chain_tip(&block_hash)?;
         self.db.set_block_height(block.header.height)?;
 
@@ -249,6 +253,20 @@ impl StateManager {
     /// Get the current block height.
     pub fn block_height(&self) -> Result<u64, GratiaError> {
         self.db.get_block_height()
+    }
+
+    /// Get blocks in a height range (inclusive), stopping at the first gap.
+    /// WHY: Used by the sync protocol to serve block ranges to peers.
+    /// Caps at 50 blocks per call to bound response size for mobile.
+    pub fn get_blocks_by_height_range(&self, from: u64, to: u64) -> Vec<Block> {
+        let mut blocks = Vec::new();
+        for height in from..=to.min(from + 49) {
+            match self.get_block_by_height(height) {
+                Ok(Some(block)) => blocks.push(block),
+                _ => break,
+            }
+        }
+        blocks
     }
 
     /// Get the current state root.
@@ -809,7 +827,7 @@ mod tests {
         let mgr = make_manager();
 
         let block = make_block(1, BlockHash([0u8; 32]), vec![]);
-        let block_hash = block.header.hash();
+        let block_hash = block.header.hash().unwrap();
         mgr.apply_block(&block).unwrap();
 
         // Retrieve by hash.
