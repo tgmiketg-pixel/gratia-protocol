@@ -260,6 +260,10 @@ pub struct FfiNetworkStatus {
     pub peer_count: u32,
     /// Current listen address (if available).
     pub listen_address: Option<String>,
+    /// Sync status: "synced", "syncing 123/456", "unknown", or "not_started".
+    pub sync_status: String,
+    /// Local chain height.
+    pub local_height: u64,
 }
 
 /// A network event delivered to the mobile app via polling.
@@ -526,6 +530,32 @@ impl GratiaNodeInner {
         { self.debug_bypass_checks }
         #[cfg(not(debug_assertions))]
         { false }
+    }
+
+    /// Get a human-readable sync status string for the UI.
+    fn get_sync_status_string(&self) -> String {
+        match &self.sync_manager {
+            Some(sm) => {
+                match sm.state() {
+                    SyncState::Synced => "synced".to_string(),
+                    SyncState::Syncing { local_height, target_height } => {
+                        format!("syncing {}/{}", local_height, target_height)
+                    }
+                    SyncState::Behind { local_height, network_height } => {
+                        format!("behind {}/{}", local_height, network_height)
+                    }
+                    SyncState::Unknown => "unknown".to_string(),
+                }
+            }
+            None => "not_started".to_string(),
+        }
+    }
+
+    /// Get the local chain height.
+    fn get_local_height(&self) -> u64 {
+        self.consensus.as_ref()
+            .map(|e| e.current_height())
+            .unwrap_or(0)
     }
 }
 
@@ -1182,6 +1212,8 @@ impl GratiaNode {
                     .map(|n| n.connected_peer_count() as u32)
                     .unwrap_or(0),
                 listen_address: inner.listen_address.clone(),
+                sync_status: inner.get_sync_status_string(),
+                local_height: inner.get_local_height(),
             });
         }
 
@@ -1219,6 +1251,8 @@ impl GratiaNode {
             is_running: true,
             peer_count: 0,
             listen_address: inner.listen_address.clone(),
+            sync_status: "not_started".to_string(),
+            local_height: 0,
         })
     }
 
@@ -1280,6 +1314,8 @@ impl GratiaNode {
             is_running,
             peer_count,
             listen_address: inner.listen_address.clone(),
+            sync_status: inner.get_sync_status_string(),
+            local_height: inner.get_local_height(),
         })
     }
 
