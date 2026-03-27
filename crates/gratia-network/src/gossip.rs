@@ -6,9 +6,10 @@
 
 use std::collections::HashSet;
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use gratia_core::types::{Block, ProofOfLifeAttestation, Transaction};
+use gratia_core::types::{Block, NodeId, ProofOfLifeAttestation, Transaction};
 
 use crate::error::NetworkError;
 
@@ -21,13 +22,42 @@ use crate::error::NetworkError;
 pub const TOPIC_BLOCKS: &str = "gratia/blocks/1";
 pub const TOPIC_TRANSACTIONS: &str = "gratia/transactions/1";
 pub const TOPIC_ATTESTATIONS: &str = "gratia/attestations/1";
+/// WHY: Separate topic for node announcements so committee-related traffic
+/// doesn't mix with block/tx propagation and can be independently filtered.
+pub const TOPIC_NODE_ANNOUNCE: &str = "gratia/nodes/1";
+/// WHY: Separate topic for sync protocol messages (request/response). These are
+/// point-to-point messages routed through gossipsub with embedded target peer IDs.
+/// Nodes ignore messages not addressed to them. Acceptable for a small testnet;
+/// a dedicated request/response protocol (e.g., libp2p request-response) should
+/// replace this in Phase 3 for bandwidth efficiency.
+pub const TOPIC_SYNC: &str = "gratia/sync/1";
 
 /// All topics the Gratia node subscribes to.
-pub const ALL_TOPICS: &[&str] = &[TOPIC_BLOCKS, TOPIC_TRANSACTIONS, TOPIC_ATTESTATIONS];
+pub const ALL_TOPICS: &[&str] = &[TOPIC_BLOCKS, TOPIC_TRANSACTIONS, TOPIC_ATTESTATIONS, TOPIC_NODE_ANNOUNCE, TOPIC_SYNC];
 
 // ============================================================================
 // Message Types
 // ============================================================================
+
+/// A node's announcement of its eligibility for committee selection.
+/// Broadcast when joining the network and when new peers connect.
+///
+/// WHY: Lives in gratia-network (not gratia-consensus) to avoid a circular
+/// dependency. The FFI layer converts NodeAnnouncement -> EligibleNode when
+/// rebuilding the committee.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeAnnouncement {
+    /// The node's identity (Ed25519 public key hash).
+    pub node_id: NodeId,
+    /// VRF public key bytes (32 bytes compressed Ristretto).
+    pub vrf_pubkey_bytes: [u8; 32],
+    /// Composite Presence Score (40-100).
+    pub presence_score: u8,
+    /// Consecutive days of valid Proof of Life.
+    pub pol_days: u64,
+    /// Timestamp of this announcement.
+    pub timestamp: DateTime<Utc>,
+}
 
 /// A gossip message wrapping the different types of data propagated
 /// over the network. Serialized to bincode for compact mobile-friendly encoding.
@@ -41,6 +71,9 @@ pub enum GossipMessage {
 
     /// A Proof of Life attestation (contains only ZK proofs, no raw sensor data).
     NewAttestation(Box<ProofOfLifeAttestation>),
+
+    /// A node announcing its eligibility for committee selection.
+    NodeAnnouncement(Box<NodeAnnouncement>),
 }
 
 impl GossipMessage {
@@ -50,6 +83,7 @@ impl GossipMessage {
             GossipMessage::NewBlock(_) => TOPIC_BLOCKS,
             GossipMessage::NewTransaction(_) => TOPIC_TRANSACTIONS,
             GossipMessage::NewAttestation(_) => TOPIC_ATTESTATIONS,
+            GossipMessage::NodeAnnouncement(_) => TOPIC_NODE_ANNOUNCE,
         }
     }
 
@@ -67,9 +101,13 @@ impl GossipMessage {
     pub fn message_id(&self) -> Vec<u8> {
         match self {
             GossipMessage::NewBlock(block) => {
-                let hash = block.header.hash();
+                // WHY: Fallback to height-based ID if header serialization fails.
+                // This is a deduplication key, so a degraded ID is acceptable.
                 let mut id = b"block:".to_vec();
-                id.extend_from_slice(&hash.0);
+                match block.header.hash() {
+                    Ok(hash) => id.extend_from_slice(&hash.0),
+                    Err(_) => id.extend_from_slice(&block.header.height.to_be_bytes()),
+                }
                 id
             }
             GossipMessage::NewTransaction(tx) => {
@@ -78,9 +116,19 @@ impl GossipMessage {
                 id
             }
             GossipMessage::NewAttestation(att) => {
+                // WHY: Use nullifier for deduplication — it is the same within
+                // an epoch, so duplicate attestations from the same node in the
+                // same epoch are correctly detected.
                 let mut id = b"att:".to_vec();
-                id.extend_from_slice(&att.node_id.0);
-                id.extend_from_slice(att.date.to_string().as_bytes());
+                id.extend_from_slice(&att.nullifier);
+                id
+            }
+            GossipMessage::NodeAnnouncement(ann) => {
+                // WHY: Dedup by node_id — only the latest announcement from a
+                // given node matters. Re-announcements (e.g., on reconnect) are
+                // expected and will be filtered by the dedup cache.
+                let mut id = b"node:".to_vec();
+                id.extend_from_slice(&ann.node_id.0);
                 id
             }
         }
@@ -123,9 +171,22 @@ pub fn validate_incoming_message(data: &[u8]) -> Result<GossipMessage, NetworkEr
             }
         }
         GossipMessage::NewTransaction(tx) => {
+            // WHY: Reject structurally invalid transactions at the gossip layer
+            // before they ever reach the application. This is a first line of
+            // defense; full Ed25519 verification happens in the FFI layer.
             if tx.signature.is_empty() {
                 return Err(NetworkError::InvalidMessage(
                     "Transaction has empty signature".to_string(),
+                ));
+            }
+            if tx.signature.len() != 64 {
+                return Err(NetworkError::InvalidMessage(
+                    format!("Invalid signature length: {} (expected 64)", tx.signature.len()),
+                ));
+            }
+            if tx.sender_pubkey.len() != 32 {
+                return Err(NetworkError::InvalidMessage(
+                    format!("Invalid pubkey length: {} (expected 32)", tx.sender_pubkey.len()),
                 ));
             }
         }
@@ -139,6 +200,14 @@ pub fn validate_incoming_message(data: &[u8]) -> Result<GossipMessage, NetworkEr
                 return Err(NetworkError::InvalidMessage(format!(
                     "Invalid presence score: {} (must be 40-100)",
                     att.presence_score
+                )));
+            }
+        }
+        GossipMessage::NodeAnnouncement(ann) => {
+            if ann.presence_score < 40 || ann.presence_score > 100 {
+                return Err(NetworkError::InvalidMessage(format!(
+                    "Invalid announcement presence score: {} (must be 40-100)",
+                    ann.presence_score
                 )));
             }
         }
@@ -228,6 +297,8 @@ pub struct GossipHandler {
     tx_cache: DeduplicationCache,
     /// Deduplication cache for attestations.
     attestation_cache: DeduplicationCache,
+    /// Deduplication cache for node announcements.
+    announce_cache: DeduplicationCache,
 }
 
 impl GossipHandler {
@@ -242,6 +313,9 @@ impl GossipHandler {
             // WHY: Attestation cache — one per node per day, but many nodes.
             // 5,000 entries is generous for early network.
             attestation_cache: DeduplicationCache::new(5_000),
+            // WHY: Announce cache — one per node. 500 entries covers all peers
+            // in early network. Re-announcements on reconnect are expected.
+            announce_cache: DeduplicationCache::new(500),
         }
     }
 
@@ -269,6 +343,7 @@ impl GossipHandler {
             GossipMessage::NewBlock(_) => self.block_cache.check_and_insert(&msg_id),
             GossipMessage::NewTransaction(_) => self.tx_cache.check_and_insert(&msg_id),
             GossipMessage::NewAttestation(_) => self.attestation_cache.check_and_insert(&msg_id),
+            GossipMessage::NodeAnnouncement(_) => self.announce_cache.check_and_insert(&msg_id),
         };
 
         if is_new {
@@ -302,6 +377,22 @@ impl GossipHandler {
             });
         }
         Ok((TOPIC_TRANSACTIONS.to_string(), data))
+    }
+
+    /// Prepare a node announcement for gossip publication.
+    pub fn prepare_node_announcement(
+        &self,
+        announcement: NodeAnnouncement,
+    ) -> Result<(String, Vec<u8>), NetworkError> {
+        let msg = GossipMessage::NodeAnnouncement(Box::new(announcement));
+        let data = msg.to_bytes()?;
+        if data.len() > MAX_MESSAGE_SIZE {
+            return Err(NetworkError::MessageTooLarge {
+                size: data.len(),
+                max: MAX_MESSAGE_SIZE,
+            });
+        }
+        Ok((TOPIC_NODE_ANNOUNCE.to_string(), data))
     }
 
     /// Prepare an attestation for gossip publication.
@@ -370,8 +461,8 @@ mod tests {
 
     fn make_test_attestation() -> ProofOfLifeAttestation {
         ProofOfLifeAttestation {
-            node_id: NodeId([5u8; 32]),
-            date: Utc::now().date_naive(),
+            blinded_id: [0xAA; 32],
+            nullifier: [0xBB; 32],
             zk_proof: vec![0u8; 128],
             presence_score: 65,
             sensor_flags: SensorFlags {

@@ -41,8 +41,8 @@ use gratia_core::types::{Block, BlockHash, NodeId, ProofOfLifeAttestation, Trans
 
 use crate::discovery::PeerDiscovery;
 use crate::error::NetworkError;
-use crate::gossip::{GossipHandler, GossipMessage, ALL_TOPICS};
-use crate::sync::{SyncManager, SyncState};
+use crate::gossip::{GossipHandler, GossipMessage, NodeAnnouncement, ALL_TOPICS};
+use crate::sync::{SyncManager, SyncPayload, SyncProtocolMessage, SyncRequest, SyncState, CHAIN_TIP_POLL_INTERVAL_SECS};
 use crate::transport::{ConnectionManager, TransportConfig};
 
 // ============================================================================
@@ -77,6 +77,9 @@ pub enum NetworkEvent {
 
     /// Blocks received via sync (not gossip). Caller should validate and apply.
     SyncBlocksReceived(Vec<Block>),
+
+    /// A peer announced their node info for committee selection.
+    NodeAnnounced(Box<NodeAnnouncement>),
 }
 
 // ============================================================================
@@ -194,8 +197,19 @@ pub enum NetworkCommand {
         from_height: u64,
         to_height: u64,
     },
+    /// Announce this node's info to the network for committee selection.
+    AnnounceNode(Box<NodeAnnouncement>),
     /// Dial a specific peer address.
     DialPeer(String),
+    /// Trigger a sync check — the SyncManager determines what to request.
+    /// WHY: Called by the FFI layer when the app wants to force a sync (e.g.,
+    /// on startup, after network reconnect, or when the user taps "refresh").
+    RequestSync,
+    /// Send a sync response back to a peer (internal, from event loop).
+    SendSyncResponse {
+        target_peer_bytes: Vec<u8>,
+        response: crate::sync::SyncResponse,
+    },
     /// Shut down the network.
     Shutdown,
 }
@@ -327,6 +341,24 @@ impl NetworkManager {
 
         self.running = true;
 
+        // WHY: Dial bootstrap peers on startup so phones can discover each other
+        // across the internet, not just via mDNS on the same Wi-Fi. The bootstrap
+        // node relays gossipsub and Kademlia traffic. If unreachable, the phone
+        // falls back to mDNS-only discovery (same-LAN).
+        for addr_str in &self.config.bootstrap_peers {
+            match addr_str.parse::<Multiaddr>() {
+                Ok(addr) => {
+                    tracing::info!(%addr, "Dialing bootstrap peer");
+                    if let Err(e) = swarm.dial(addr) {
+                        tracing::warn!("Failed to dial bootstrap peer: {}", e);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Invalid bootstrap peer address '{}': {}", addr_str, e);
+                }
+            }
+        }
+
         // Spawn the event loop as a background task
         let node_id = self.config.local_node_id;
         tokio::spawn(run_swarm_event_loop(swarm, command_rx, event_tx, node_id));
@@ -373,6 +405,35 @@ impl NetworkManager {
         Ok(())
     }
 
+    /// Non-blocking broadcast of a block to the network.
+    /// WHY: Used from sync contexts (slot timer under mutex) where we can't
+    /// await. Uses try_send which fails immediately if the channel is full
+    /// rather than blocking. A full channel means the swarm task is backed up —
+    /// dropping one block broadcast is acceptable; it'll be synced via catch-up.
+    pub fn try_broadcast_block_sync(&self, block: &Block) -> Result<(), NetworkError> {
+        let tx = self.command_tx.as_ref().ok_or(NetworkError::NotStarted)?;
+
+        let _ = self.gossip.prepare_block(block.clone())?;
+
+        tx.try_send(NetworkCommand::PublishBlock(Box::new(block.clone())))
+            .map_err(|e| NetworkError::ChannelError(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Non-blocking broadcast of a transaction to the network.
+    /// WHY: Used from sync contexts where we can't await.
+    pub fn try_broadcast_transaction_sync(&self, tx: &Transaction) -> Result<(), NetworkError> {
+        let cmd_tx = self.command_tx.as_ref().ok_or(NetworkError::NotStarted)?;
+
+        let _ = self.gossip.prepare_transaction(tx.clone())?;
+
+        cmd_tx.try_send(NetworkCommand::PublishTransaction(Box::new(tx.clone())))
+            .map_err(|e| NetworkError::ChannelError(e.to_string()))?;
+
+        Ok(())
+    }
+
     /// Broadcast a new transaction to the network via gossipsub.
     pub async fn broadcast_transaction(&self, tx: Transaction) -> Result<(), NetworkError> {
         let cmd_tx = self.command_tx.as_ref().ok_or(NetworkError::NotStarted)?;
@@ -403,6 +464,29 @@ impl NetworkManager {
         Ok(())
     }
 
+    /// Announce this node's eligibility to the network via gossipsub.
+    pub async fn announce_node(&self, announcement: NodeAnnouncement) -> Result<(), NetworkError> {
+        let tx = self.command_tx.as_ref().ok_or(NetworkError::NotStarted)?;
+
+        tx.send(NetworkCommand::AnnounceNode(Box::new(announcement)))
+            .await
+            .map_err(|e| NetworkError::ChannelError(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Non-blocking announce of this node's eligibility to the network.
+    /// WHY: Used from sync contexts (under mutex) where we can't await.
+    /// Uses try_send which fails immediately if the channel is full.
+    pub fn try_announce_node_sync(&self, announcement: &NodeAnnouncement) -> Result<(), NetworkError> {
+        let tx = self.command_tx.as_ref().ok_or(NetworkError::NotStarted)?;
+
+        tx.try_send(NetworkCommand::AnnounceNode(Box::new(announcement.clone())))
+            .map_err(|e| NetworkError::ChannelError(e.to_string()))?;
+
+        Ok(())
+    }
+
     /// Dial a remote peer by multiaddr string.
     ///
     /// Used for manual peer connection (e.g., entering another phone's address).
@@ -415,6 +499,28 @@ impl NetworkManager {
 
         tx.send(NetworkCommand::DialPeer(addr.to_string()))
             .await
+            .map_err(|e| NetworkError::ChannelError(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Request a sync from peers. The SyncManager determines what blocks
+    /// to request and from which peer.
+    pub async fn request_sync(&self) -> Result<(), NetworkError> {
+        let tx = self.command_tx.as_ref().ok_or(NetworkError::NotStarted)?;
+
+        tx.send(NetworkCommand::RequestSync)
+            .await
+            .map_err(|e| NetworkError::ChannelError(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Non-blocking sync request. WHY: Used from sync contexts where we can't await.
+    pub fn try_request_sync(&self) -> Result<(), NetworkError> {
+        let tx = self.command_tx.as_ref().ok_or(NetworkError::NotStarted)?;
+
+        tx.try_send(NetworkCommand::RequestSync)
             .map_err(|e| NetworkError::ChannelError(e.to_string()))?;
 
         Ok(())
@@ -487,6 +593,7 @@ impl NetworkManager {
             gossip::GossipMessage::NewBlock(block) => NetworkEvent::BlockReceived(block),
             gossip::GossipMessage::NewTransaction(tx) => NetworkEvent::TransactionReceived(tx),
             gossip::GossipMessage::NewAttestation(att) => NetworkEvent::AttestationReceived(att),
+            gossip::GossipMessage::NodeAnnouncement(ann) => NetworkEvent::NodeAnnounced(ann),
         }))
     }
 
@@ -515,6 +622,10 @@ impl NetworkManager {
 /// This function runs in a tokio task spawned by `NetworkManager::start()`.
 /// It processes swarm events (incoming messages, connections) and application
 /// commands (publish, dial, shutdown) in a select loop.
+///
+/// Also manages sync state: tracks peer chain tips from gossipped blocks,
+/// periodically polls for chain tips, and handles sync request/response
+/// messages routed through gossipsub.
 async fn run_swarm_event_loop(
     mut swarm: Swarm<GratiaBehaviour>,
     mut command_rx: mpsc::Receiver<NetworkCommand>,
@@ -525,7 +636,22 @@ async fn run_swarm_event_loop(
     // happen where messages first arrive (here), not in the application layer.
     let mut gossip_handler = GossipHandler::new();
 
-    tracing::info!(%node_id, "Swarm event loop started");
+    // WHY: The event loop owns its own SyncManager to track peer chain tips
+    // and coordinate block fetching. This avoids sharing mutable state with
+    // the NetworkManager across the channel boundary.
+    let mut sync_manager = SyncManager::new(0, BlockHash([0u8; 32]));
+
+    // WHY: Periodic chain tip poll ensures we detect when we're behind even
+    // if we miss a gossipped block (e.g., brief disconnection).
+    let mut chain_tip_interval = tokio::time::interval(
+        Duration::from_secs(CHAIN_TIP_POLL_INTERVAL_SECS),
+    );
+
+    // WHY: Get our own PeerId bytes once for filtering incoming sync messages.
+    let local_peer_id = *swarm.local_peer_id();
+    let local_peer_bytes = local_peer_id.to_bytes();
+
+    tracing::info!(%node_id, %local_peer_id, "Swarm event loop started");
 
     loop {
         tokio::select! {
@@ -537,6 +663,20 @@ async fn run_swarm_event_loop(
                         gossipsub::Event::Message { message, .. }
                     )) => {
                         let topic = message.topic.as_str();
+
+                        // Sync messages are handled separately from regular gossip
+                        if topic == gossip::TOPIC_SYNC {
+                            handle_sync_message(
+                                &message.data,
+                                &local_peer_bytes,
+                                &mut sync_manager,
+                                &mut swarm,
+                                &event_tx,
+                                &local_peer_id,
+                            ).await;
+                            continue;
+                        }
+
                         match gossip_handler.process_incoming(topic, &message.data) {
                             Ok(Some(msg)) => {
                                 let net_event = match msg {
@@ -545,6 +685,22 @@ async fn run_swarm_event_loop(
                                             height = block.header.height,
                                             "Received block via gossip"
                                         );
+
+                                        // WHY: When we receive a block via gossip, the
+                                        // producing peer is at least at this height. Use
+                                        // the block's height and hash to update our view
+                                        // of the network's chain tip. The source PeerId
+                                        // from gossipsub tells us who sent it.
+                                        if let Some(source_peer) = message.source {
+                                            if let Ok(block_hash) = block.header.hash() {
+                                                sync_manager.update_peer_state(
+                                                    source_peer,
+                                                    block.header.height,
+                                                    block_hash,
+                                                );
+                                            }
+                                        }
+
                                         NetworkEvent::BlockReceived(block)
                                     }
                                     GossipMessage::NewTransaction(tx) => {
@@ -552,6 +708,14 @@ async fn run_swarm_event_loop(
                                     }
                                     GossipMessage::NewAttestation(att) => {
                                         NetworkEvent::AttestationReceived(att)
+                                    }
+                                    GossipMessage::NodeAnnouncement(ann) => {
+                                        tracing::info!(
+                                            node_id = ?ann.node_id,
+                                            score = ann.presence_score,
+                                            "Received node announcement via gossip"
+                                        );
+                                        NetworkEvent::NodeAnnounced(ann)
                                     }
                                 };
                                 if event_tx.send(net_event).await.is_err() {
@@ -581,6 +745,13 @@ async fn run_swarm_event_loop(
                     )) => {
                         for (peer_id, addr) in peers {
                             tracing::info!(%peer_id, %addr, "mDNS discovered peer");
+                            // WHY: Log to file since tracing doesn't reach Android logcat
+                            let log_msg = format!("mDNS discovered peer: {} at {}", peer_id, addr);
+                            let log_path = "/data/user/0/io.gratia.app.debug/files/gratia-rust.log";
+                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log_path) {
+                                use std::io::Write;
+                                let _ = writeln!(f, "[{}] {}", chrono::Utc::now().format("%H:%M:%S"), log_msg);
+                            }
                             swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
                             if let Err(e) = swarm.dial(addr.clone()) {
                                 tracing::debug!(%peer_id, %addr, "Failed to dial mDNS peer: {}", e);
@@ -644,6 +815,9 @@ async fn run_swarm_event_loop(
                             cause = ?cause,
                             "Connection closed"
                         );
+                        // WHY: Remove peer's chain state so stale data doesn't
+                        // influence sync decisions after disconnect.
+                        sync_manager.remove_peer(&peer_id);
                         let _ = event_tx.send(NetworkEvent::PeerDisconnected {
                             peer_id,
                         }).await;
@@ -659,6 +833,36 @@ async fn run_swarm_event_loop(
                         tracing::trace!("Swarm event: {:?}", other);
                     }
                 }
+            }
+
+            // ── Periodic chain tip poll ──────────────────────────────────
+            _ = chain_tip_interval.tick() => {
+                // WHY: Broadcast a GetChainTip request to all peers so we can
+                // detect if we're behind. The empty target field means all peers
+                // should respond.
+                let msg = SyncProtocolMessage {
+                    source: local_peer_bytes.clone(),
+                    target: vec![], // broadcast
+                    payload: SyncPayload::Request(SyncRequest::GetChainTip),
+                };
+                if let Ok(data) = msg.to_bytes() {
+                    let topic = gossipsub::IdentTopic::new(gossip::TOPIC_SYNC);
+                    if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic, data) {
+                        tracing::debug!("Failed to publish chain tip poll: {}", e);
+                    }
+                }
+
+                // WHY: After polling, check if SyncManager has pending work.
+                // If we're behind, generate and send a block request.
+                try_send_next_sync_request(
+                    &mut sync_manager,
+                    &local_peer_bytes,
+                    &mut swarm,
+                );
+
+                // Notify the application of sync state changes
+                let state = sync_manager.state();
+                let _ = event_tx.send(NetworkEvent::SyncStateChanged(state)).await;
             }
 
             // ── Application commands ──────────────────────────────────────
@@ -691,6 +895,15 @@ async fn run_swarm_event_loop(
                             }
                         }
                     }
+                    Some(NetworkCommand::AnnounceNode(ann)) => {
+                        let msg = GossipMessage::NodeAnnouncement(ann);
+                        if let Ok(data) = msg.to_bytes() {
+                            let topic = gossipsub::IdentTopic::new(gossip::TOPIC_NODE_ANNOUNCE);
+                            if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic, data) {
+                                tracing::error!("Failed to publish node announcement: {}", e);
+                            }
+                        }
+                    }
                     Some(NetworkCommand::DialPeer(addr_str)) => {
                         match addr_str.parse::<Multiaddr>() {
                             Ok(addr) => {
@@ -704,15 +917,269 @@ async fn run_swarm_event_loop(
                             }
                         }
                     }
-                    Some(NetworkCommand::SyncRequest { .. }) => {
-                        // TODO: Implement sync request/response protocol (Phase 2)
-                        tracing::debug!("Sync request received but not yet implemented");
+                    Some(NetworkCommand::SyncRequest { peer, from_height, to_height }) => {
+                        // WHY: Send a targeted sync request to a specific peer
+                        // via the gossipsub sync topic.
+                        let msg = SyncProtocolMessage {
+                            source: local_peer_bytes.clone(),
+                            target: peer.to_bytes(),
+                            payload: SyncPayload::Request(SyncRequest::GetBlocks {
+                                from_height,
+                                to_height,
+                            }),
+                        };
+                        if let Ok(data) = msg.to_bytes() {
+                            let topic = gossipsub::IdentTopic::new(gossip::TOPIC_SYNC);
+                            if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic, data) {
+                                tracing::error!("Failed to publish sync request: {}", e);
+                            } else {
+                                tracing::debug!(
+                                    %peer,
+                                    from_height,
+                                    to_height,
+                                    "Sent sync request to peer"
+                                );
+                            }
+                        }
+                    }
+                    Some(NetworkCommand::RequestSync) => {
+                        // WHY: The application/FFI layer wants to trigger a sync.
+                        // Ask the SyncManager what to request next.
+                        try_send_next_sync_request(
+                            &mut sync_manager,
+                            &local_peer_bytes,
+                            &mut swarm,
+                        );
+                    }
+                    Some(NetworkCommand::SendSyncResponse { target_peer_bytes, response }) => {
+                        let msg = SyncProtocolMessage {
+                            source: local_peer_bytes.clone(),
+                            target: target_peer_bytes,
+                            payload: SyncPayload::Response(response),
+                        };
+                        if let Ok(data) = msg.to_bytes() {
+                            let topic = gossipsub::IdentTopic::new(gossip::TOPIC_SYNC);
+                            if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic, data) {
+                                tracing::error!("Failed to publish sync response: {}", e);
+                            }
+                        }
                     }
                     Some(NetworkCommand::Shutdown) | None => {
                         tracing::info!("Swarm event loop shutting down");
                         return;
                     }
                 }
+            }
+        }
+    }
+}
+
+/// Handle an incoming sync protocol message from gossipsub.
+///
+/// Deserializes the message, checks if it's addressed to us, and either:
+/// - Handles a SyncRequest by responding with our local data
+/// - Handles a SyncResponse by feeding blocks to the SyncManager
+async fn handle_sync_message(
+    data: &[u8],
+    local_peer_bytes: &[u8],
+    sync_manager: &mut SyncManager,
+    swarm: &mut Swarm<GratiaBehaviour>,
+    event_tx: &mpsc::Sender<NetworkEvent>,
+    _local_peer_id: &PeerId,
+) {
+    let msg = match SyncProtocolMessage::from_bytes(data) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::debug!("Failed to deserialize sync message: {}", e);
+            return;
+        }
+    };
+
+    // Ignore messages not addressed to us (unless broadcast)
+    if !msg.is_for_peer(local_peer_bytes) {
+        return;
+    }
+
+    // Don't process our own messages
+    if msg.source == local_peer_bytes {
+        return;
+    }
+
+    let source_peer = match PeerId::from_bytes(&msg.source) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::debug!("Invalid source PeerId in sync message: {}", e);
+            return;
+        }
+    };
+
+    match msg.payload {
+        SyncPayload::Request(request) => {
+            tracing::debug!(
+                %source_peer,
+                ?request,
+                "Received sync request"
+            );
+
+            // WHY: Respond to the requesting peer with our local data.
+            // The get_blocks closure currently returns None because the event
+            // loop doesn't have direct access to block storage. The caller
+            // (FFI/consensus layer) should wire this up with actual storage.
+            // For GetChainTip requests, the SyncManager has the data directly.
+            let response = sync_manager.handle_sync_request(&request, |_from, _to| {
+                // TODO: Wire to actual block storage once gratia-state is
+                // integrated into the event loop. For now, return None which
+                // produces a SyncResponse::Error, but GetChainTip still works.
+                None
+            });
+
+            // Send the response back to the requesting peer
+            let resp_msg = SyncProtocolMessage {
+                source: local_peer_bytes.to_vec(),
+                target: msg.source,
+                payload: SyncPayload::Response(response),
+            };
+            if let Ok(resp_data) = resp_msg.to_bytes() {
+                let topic = gossipsub::IdentTopic::new(gossip::TOPIC_SYNC);
+                if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic, resp_data) {
+                    tracing::debug!("Failed to send sync response: {}", e);
+                }
+            }
+        }
+        SyncPayload::Response(response) => {
+            tracing::debug!(
+                %source_peer,
+                "Received sync response"
+            );
+
+            match response {
+                crate::sync::SyncResponse::ChainTip { height, hash } => {
+                    // WHY: Update the SyncManager's view of this peer's chain.
+                    // This is how we discover we're behind after chain tip polls.
+                    sync_manager.update_peer_state(source_peer, height, hash);
+
+                    tracing::debug!(
+                        %source_peer,
+                        height,
+                        "Updated peer chain tip"
+                    );
+
+                    // After learning about a new chain tip, check if we should sync
+                    if let Some((target_peer, request)) = sync_manager.next_sync_request() {
+                        let req_msg = SyncProtocolMessage {
+                            source: local_peer_bytes.to_vec(),
+                            target: target_peer.to_bytes(),
+                            payload: SyncPayload::Request(request),
+                        };
+                        if let Ok(req_data) = req_msg.to_bytes() {
+                            let topic = gossipsub::IdentTopic::new(gossip::TOPIC_SYNC);
+                            if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic, req_data) {
+                                tracing::debug!("Failed to send sync request after tip update: {}", e);
+                            }
+                        }
+                    }
+
+                    // Notify application of sync state change
+                    let _ = event_tx.send(NetworkEvent::SyncStateChanged(
+                        sync_manager.state()
+                    )).await;
+                }
+                crate::sync::SyncResponse::Blocks(blocks) => {
+                    // WHY: Feed received blocks to the SyncManager for validation,
+                    // then forward to the application layer for consensus validation
+                    // and application to the chain.
+                    match sync_manager.handle_blocks_response(&source_peer, blocks) {
+                        Ok(validated_blocks) => {
+                            if !validated_blocks.is_empty() {
+                                tracing::info!(
+                                    count = validated_blocks.len(),
+                                    from = validated_blocks.first().map(|b| b.header.height),
+                                    to = validated_blocks.last().map(|b| b.header.height),
+                                    "Sync received blocks"
+                                );
+
+                                // Update local state based on the last block received
+                                if let Some(last) = validated_blocks.last() {
+                                    if let Ok(hash) = last.header.hash() {
+                                        sync_manager.update_local_state(
+                                            last.header.height,
+                                            hash,
+                                        );
+                                    }
+                                }
+
+                                let _ = event_tx.send(
+                                    NetworkEvent::SyncBlocksReceived(validated_blocks)
+                                ).await;
+
+                                // WHY: After receiving a batch, check if there are
+                                // more blocks to fetch (we might be many batches behind).
+                                if let Some((next_peer, next_request)) = sync_manager.next_sync_request() {
+                                    let req_msg = SyncProtocolMessage {
+                                        source: local_peer_bytes.to_vec(),
+                                        target: next_peer.to_bytes(),
+                                        payload: SyncPayload::Request(next_request),
+                                    };
+                                    if let Ok(req_data) = req_msg.to_bytes() {
+                                        let topic = gossipsub::IdentTopic::new(gossip::TOPIC_SYNC);
+                                        let _ = swarm.behaviour_mut().gossipsub.publish(topic, req_data);
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                %source_peer,
+                                "Sync blocks response validation failed: {}",
+                                e
+                            );
+                        }
+                    }
+
+                    let _ = event_tx.send(NetworkEvent::SyncStateChanged(
+                        sync_manager.state()
+                    )).await;
+                }
+                crate::sync::SyncResponse::Headers(headers) => {
+                    tracing::debug!(
+                        %source_peer,
+                        count = headers.len(),
+                        "Received sync headers (not yet used for sync decisions)"
+                    );
+                }
+                crate::sync::SyncResponse::Error(err) => {
+                    tracing::debug!(
+                        %source_peer,
+                        "Sync error from peer: {}",
+                        err
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Try to generate and send the next sync request from the SyncManager.
+///
+/// WHY: Extracted into a helper because this is called from multiple places:
+/// periodic chain tip poll, RequestSync command, and after receiving blocks.
+fn try_send_next_sync_request(
+    sync_manager: &mut SyncManager,
+    local_peer_bytes: &[u8],
+    swarm: &mut Swarm<GratiaBehaviour>,
+) {
+    if let Some((peer, request)) = sync_manager.next_sync_request() {
+        let msg = SyncProtocolMessage {
+            source: local_peer_bytes.to_vec(),
+            target: peer.to_bytes(),
+            payload: SyncPayload::Request(request),
+        };
+        if let Ok(data) = msg.to_bytes() {
+            let topic = gossipsub::IdentTopic::new(gossip::TOPIC_SYNC);
+            if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic, data) {
+                tracing::debug!("Failed to send sync request: {}", e);
+            } else {
+                tracing::debug!(%peer, "Sent sync request");
             }
         }
     }
@@ -874,5 +1341,163 @@ mod tests {
         assert!(matches!(result, Err(NetworkError::DialFailure(_))));
 
         nm.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_request_sync_requires_running() {
+        let config = NetworkConfig::new(test_node_id());
+        let nm = NetworkManager::new(config);
+
+        let result = nm.request_sync().await;
+        assert!(matches!(result, Err(NetworkError::NotStarted)));
+    }
+
+    #[tokio::test]
+    async fn test_try_request_sync_requires_running() {
+        let config = NetworkConfig::new(test_node_id());
+        let nm = NetworkManager::new(config);
+
+        let result = nm.try_request_sync();
+        assert!(matches!(result, Err(NetworkError::NotStarted)));
+    }
+
+    #[tokio::test]
+    async fn test_request_sync_sends_command() {
+        let config = NetworkConfig::new(test_node_id());
+        let mut nm = NetworkManager::new(config);
+
+        let _event_rx = nm.start().await.unwrap();
+
+        // Should succeed — sends RequestSync command to event loop
+        let result = nm.request_sync().await;
+        assert!(result.is_ok());
+
+        nm.stop().await.unwrap();
+    }
+
+    #[test]
+    fn test_sync_manager_accessible() {
+        let config = NetworkConfig::new(test_node_id());
+        let mut nm = NetworkManager::new(config);
+
+        // Sync manager should be initialized with unknown state
+        assert_eq!(nm.sync_state(), SyncState::Unknown);
+        assert_eq!(nm.sync_manager().local_height(), 0);
+
+        // Should be able to update via mutable reference
+        let peer = PeerId::random();
+        nm.sync_manager_mut().update_peer_state(peer, 100, BlockHash([1u8; 32]));
+        assert!(matches!(nm.sync_state(), SyncState::Behind { .. }));
+    }
+
+    #[test]
+    fn test_sync_protocol_message_serialization() {
+        use crate::sync::{SyncProtocolMessage, SyncPayload, SyncRequest};
+
+        let peer = PeerId::random();
+        let msg = SyncProtocolMessage {
+            source: peer.to_bytes(),
+            target: vec![], // broadcast
+            payload: SyncPayload::Request(SyncRequest::GetChainTip),
+        };
+
+        let bytes = msg.to_bytes().unwrap();
+        let decoded = SyncProtocolMessage::from_bytes(&bytes).unwrap();
+
+        assert_eq!(decoded.source, peer.to_bytes());
+        assert!(decoded.target.is_empty());
+        assert!(matches!(
+            decoded.payload,
+            SyncPayload::Request(SyncRequest::GetChainTip)
+        ));
+    }
+
+    #[test]
+    fn test_sync_protocol_message_peer_filtering() {
+        use crate::sync::{SyncProtocolMessage, SyncPayload, SyncRequest};
+
+        let source = PeerId::random();
+        let target = PeerId::random();
+        let other = PeerId::random();
+
+        // Targeted message
+        let msg = SyncProtocolMessage {
+            source: source.to_bytes(),
+            target: target.to_bytes(),
+            payload: SyncPayload::Request(SyncRequest::GetChainTip),
+        };
+
+        assert!(msg.is_for_peer(&target.to_bytes()));
+        assert!(!msg.is_for_peer(&other.to_bytes()));
+
+        // Broadcast message (empty target)
+        let broadcast_msg = SyncProtocolMessage {
+            source: source.to_bytes(),
+            target: vec![],
+            payload: SyncPayload::Request(SyncRequest::GetChainTip),
+        };
+
+        assert!(broadcast_msg.is_for_peer(&target.to_bytes()));
+        assert!(broadcast_msg.is_for_peer(&other.to_bytes()));
+    }
+
+    #[test]
+    fn test_sync_protocol_message_blocks_response() {
+        use crate::sync::{SyncProtocolMessage, SyncPayload, SyncResponse};
+
+        let source = PeerId::random();
+        let target = PeerId::random();
+
+        let msg = SyncProtocolMessage {
+            source: source.to_bytes(),
+            target: target.to_bytes(),
+            payload: SyncPayload::Response(SyncResponse::ChainTip {
+                height: 42,
+                hash: BlockHash([7u8; 32]),
+            }),
+        };
+
+        let bytes = msg.to_bytes().unwrap();
+        let decoded = SyncProtocolMessage::from_bytes(&bytes).unwrap();
+
+        match decoded.payload {
+            SyncPayload::Response(SyncResponse::ChainTip { height, hash }) => {
+                assert_eq!(height, 42);
+                assert_eq!(hash, BlockHash([7u8; 32]));
+            }
+            _ => panic!("Expected ChainTip response"),
+        }
+    }
+
+    #[test]
+    fn test_peer_disconnect_removes_sync_state() {
+        let config = NetworkConfig::new(test_node_id());
+        let mut nm = NetworkManager::new(config);
+
+        let peer = PeerId::random();
+        nm.on_peer_connected(peer, true);
+        nm.sync_manager_mut().update_peer_state(peer, 100, BlockHash([1u8; 32]));
+        assert_eq!(nm.sync_manager().tracked_peer_count(), 1);
+
+        nm.on_peer_disconnected(&peer, true);
+        assert_eq!(nm.sync_manager().tracked_peer_count(), 0);
+    }
+
+    #[test]
+    fn test_sync_topic_in_all_topics() {
+        // Verify TOPIC_SYNC is included in ALL_TOPICS so nodes subscribe to it
+        assert!(gossip::ALL_TOPICS.contains(&gossip::TOPIC_SYNC));
+    }
+
+    #[test]
+    fn test_sync_manager_initialized_at_genesis() {
+        let config = NetworkConfig::new(test_node_id());
+        let nm = NetworkManager::new(config);
+
+        // SyncManager should start at height 0 with zero hash
+        assert_eq!(nm.sync_manager().local_height(), 0);
+        assert_eq!(nm.sync_state(), SyncState::Unknown);
+        assert_eq!(nm.sync_manager().tracked_peer_count(), 0);
+        assert_eq!(nm.sync_manager().pending_request_count(), 0);
     }
 }

@@ -15,6 +15,56 @@ use gratia_core::types::{Block, BlockHash};
 use crate::error::NetworkError;
 
 // ============================================================================
+// Sync Protocol Message (gossipsub transport wrapper)
+// ============================================================================
+
+/// Wrapper for sync messages transported over gossipsub.
+///
+/// WHY: We don't have a dedicated request/response protocol yet, so sync
+/// messages travel over gossipsub with embedded routing info. Each node
+/// checks the target field and ignores messages not addressed to it.
+/// This is acceptable for a small testnet (2-10 nodes). In Phase 3,
+/// this should be replaced with libp2p's request-response protocol for
+/// bandwidth efficiency.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncProtocolMessage {
+    /// The source peer (as raw bytes from PeerId::to_bytes()).
+    pub source: Vec<u8>,
+    /// The target peer (as raw bytes from PeerId::to_bytes()).
+    /// Empty vec means broadcast (e.g., chain tip announcements).
+    pub target: Vec<u8>,
+    /// The actual sync payload.
+    pub payload: SyncPayload,
+}
+
+/// The payload inside a sync protocol message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SyncPayload {
+    /// A sync request from a peer.
+    Request(SyncRequest),
+    /// A sync response to a peer.
+    Response(SyncResponse),
+}
+
+impl SyncProtocolMessage {
+    /// Serialize to bytes for gossipsub transport.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, NetworkError> {
+        bincode::serialize(self).map_err(NetworkError::from)
+    }
+
+    /// Deserialize from bytes.
+    pub fn from_bytes(data: &[u8]) -> Result<Self, NetworkError> {
+        bincode::deserialize(data).map_err(NetworkError::from)
+    }
+
+    /// Check if this message is addressed to the given peer.
+    /// Returns true if the target matches or if the target is empty (broadcast).
+    pub fn is_for_peer(&self, peer_bytes: &[u8]) -> bool {
+        self.target.is_empty() || self.target == peer_bytes
+    }
+}
+
+// ============================================================================
 // Sync State
 // ============================================================================
 
@@ -164,14 +214,17 @@ pub struct PeerChainState {
 const MAX_BLOCKS_PER_REQUEST: u64 = 50;
 
 /// Minimum number of peer chain tips needed before determining sync state.
-/// WHY: A single peer could report a false height. Requiring 3+ peer
-/// reports reduces the risk of syncing to a malicious fork.
-const MIN_PEERS_FOR_SYNC_DECISION: usize = 3;
+/// WHY: During testnet with only 2-3 phones, requiring 3 peers would prevent
+/// sync from ever starting. Set to 1 for Phase 2. In production (Phase 3),
+/// this should be raised to 3+ to resist a single dishonest peer reporting
+/// a false height. At that point, the network will have enough nodes.
+const MIN_PEERS_FOR_SYNC_DECISION: usize = 1;
 
 /// How often to check peer chain tips (seconds).
 /// WHY: 30 seconds — frequent enough to detect new blocks quickly,
 /// infrequent enough to avoid spamming peers on mobile connections.
-const CHAIN_TIP_POLL_INTERVAL_SECS: u64 = 30;
+/// Used by the sync event loop to periodically request chain tips from peers.
+pub const CHAIN_TIP_POLL_INTERVAL_SECS: u64 = 30;
 
 /// Manages state synchronization with network peers.
 pub struct SyncManager {
@@ -320,7 +373,7 @@ impl SyncManager {
     ) -> Result<Vec<Block>, NetworkError> {
         let expected = self.pending_requests.remove(peer);
 
-        if let Some((from, to)) = expected {
+        if let Some((from, _to)) = expected {
             // Basic sanity check: are the blocks in the expected range?
             if let Some(first) = blocks.first() {
                 if first.header.height != from {
@@ -389,10 +442,15 @@ impl SyncManager {
 
                 match get_blocks(*from_height, clamped_to) {
                     Some(blocks) => {
-                        let headers: Vec<_> = blocks
-                            .into_iter()
-                            .map(|b| (b.header.height, b.header.hash()))
-                            .collect();
+                        let mut headers = Vec::with_capacity(blocks.len());
+                        for b in blocks {
+                            match b.header.hash() {
+                                Ok(hash) => headers.push((b.header.height, hash)),
+                                Err(e) => return SyncResponse::Error(
+                                    format!("Failed to hash header at height {}: {}", b.header.height, e),
+                                ),
+                            }
+                        }
                         SyncResponse::Headers(headers)
                     }
                     None => SyncResponse::Error("Failed to retrieve headers".to_string()),
@@ -445,12 +503,8 @@ mod tests {
     fn test_sync_manager_needs_min_peers() {
         let mut sm = SyncManager::new(0, BlockHash([0u8; 32]));
 
-        // With fewer than MIN_PEERS_FOR_SYNC_DECISION peers, state remains Unknown
-        sm.update_peer_state(PeerId::random(), 100, BlockHash([1u8; 32]));
-        sm.update_peer_state(PeerId::random(), 100, BlockHash([1u8; 32]));
-        assert_eq!(sm.state(), SyncState::Unknown);
-
-        // Third peer should trigger state evaluation
+        // With MIN_PEERS_FOR_SYNC_DECISION = 1, a single peer report is enough
+        // to determine sync state. This enables 2-phone testnet sync.
         sm.update_peer_state(PeerId::random(), 100, BlockHash([1u8; 32]));
         assert!(matches!(sm.state(), SyncState::Behind { .. }));
     }
@@ -459,10 +513,8 @@ mod tests {
     fn test_sync_manager_synced() {
         let mut sm = SyncManager::new(100, BlockHash([1u8; 32]));
 
-        for _ in 0..3 {
-            sm.update_peer_state(PeerId::random(), 100, BlockHash([1u8; 32]));
-        }
-
+        // Single peer at same height should show as synced
+        sm.update_peer_state(PeerId::random(), 100, BlockHash([1u8; 32]));
         assert!(sm.state().is_synced());
     }
 
@@ -487,7 +539,7 @@ mod tests {
         sm.update_peer_state(PeerId::random(), 100, BlockHash([1u8; 32]));
         sm.update_peer_state(PeerId::random(), 100, BlockHash([1u8; 32]));
 
-        let (selected_peer, request) = sm.next_sync_request().unwrap();
+        let (_selected_peer, request) = sm.next_sync_request().unwrap();
         match request {
             SyncRequest::GetBlocks {
                 from_height,
