@@ -18,7 +18,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.CallMade
 import androidx.compose.material.icons.automirrored.filled.CallReceived
 import androidx.compose.material.icons.filled.ContentCopy
+import io.gratia.app.GratiaLogo
 import androidx.compose.material.icons.filled.QrCode
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -46,6 +48,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import io.gratia.app.ui.theme.*
+import androidx.compose.ui.graphics.asImageBitmap
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -53,6 +63,18 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import android.graphics.Bitmap
+import androidx.compose.foundation.Image
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.qrcode.QRCodeWriter
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.wrapContentSize
+import androidx.core.content.ContextCompat
+import androidx.compose.runtime.LaunchedEffect
+import io.gratia.app.MainActivity
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -67,10 +89,67 @@ fun WalletScreen(
     viewModel: WalletViewModel = viewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    // WHY: Track scanner visibility and scanned address separately from
+    // the ViewModel to keep scanner state local to this composable.
+    var showScanner by remember { mutableStateOf(false) }
+    var scannedAddress by remember { mutableStateOf<String?>(null) }
+
+    // WHY: Observe the NFC-scanned address from MainActivity's reader mode.
+    // When two phones tap together, the reader side receives the other phone's
+    // wallet address via HCE and publishes it to this StateFlow. We consume it
+    // here and open the send dialog pre-filled with the address.
+    // WHY LaunchedEffect: Side effects (setting state, opening dialog) must not
+    // run during composition — they must be triggered reactively when the value changes.
+    val nfcAddress by MainActivity.nfcScannedAddress.collectAsStateWithLifecycle()
+    LaunchedEffect(nfcAddress) {
+        val addr = nfcAddress ?: return@LaunchedEffect
+        scannedAddress = addr
+        MainActivity.clearNfcScannedAddress()
+        if (!state.showSendDialog) {
+            viewModel.showSendDialog()
+        }
+    }
+
+    // Camera permission launcher
+    var cameraPermissionGranted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
+                    == PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        cameraPermissionGranted = granted
+        if (granted) {
+            showScanner = true
+        }
+    }
+
+    // WHY: When the scanner is active, show it full-screen on top of everything.
+    // This avoids complex navigation — just overlay and dismiss.
+    if (showScanner && cameraPermissionGranted) {
+        QrScannerScreen(
+            onQrCodeScanned = { qrContent ->
+                scannedAddress = qrContent
+                showScanner = false
+                // WHY: Ensure the send dialog is visible so the scanned
+                // address appears in the address field immediately.
+                if (!state.showSendDialog) {
+                    viewModel.showSendDialog()
+                }
+            },
+            onDismiss = { showScanner = false },
+        )
+        return
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
+                navigationIcon = { GratiaLogo(modifier = Modifier.padding(start = 12.dp)) },
                 title = { Text("Wallet") },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
@@ -104,8 +183,22 @@ fun WalletScreen(
         // Send dialog
         if (state.showSendDialog) {
             SendDialog(
-                onDismiss = { viewModel.hideSendDialog() },
-                onSend = { address, amount -> viewModel.sendTransfer(address, amount) },
+                initialAddress = scannedAddress,
+                onDismiss = {
+                    viewModel.hideSendDialog()
+                    scannedAddress = null
+                },
+                onSend = { address, amount ->
+                    viewModel.sendTransfer(address, amount)
+                    scannedAddress = null
+                },
+                onScanClick = {
+                    if (cameraPermissionGranted) {
+                        showScanner = true
+                    } else {
+                        cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                    }
+                },
             )
         }
 
@@ -168,6 +261,7 @@ private fun BalanceCard(
     onSendClick: () -> Unit,
     onReceiveClick: () -> Unit,
 ) {
+    val context = LocalContext.current
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -189,7 +283,11 @@ private fun BalanceCard(
                     modifier = Modifier.weight(1f),
                 )
                 IconButton(
-                    onClick = { /* Copy to clipboard — platform integration needed */ },
+                    onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        val clip = ClipData.newPlainText("Gratia Address", wallet.address)
+                        clipboard.setPrimaryClip(clip)
+                    },
                     modifier = Modifier.size(32.dp),
                 ) {
                     Icon(
@@ -263,7 +361,7 @@ private fun TransactionRow(tx: TransactionInfo) {
         Icons.AutoMirrored.Filled.CallMade
     }
     val directionColor = if (isReceived) {
-        Color(0xFF4CAF50) // Green for received
+        SignalGreen
     } else {
         MaterialTheme.colorScheme.error
     }
@@ -325,7 +423,7 @@ private fun TransactionRow(tx: TransactionInfo) {
 private fun StatusChip(status: String) {
     val chipColor = when (status) {
         "confirmed" -> MaterialTheme.colorScheme.primary
-        "pending" -> Color(0xFFFFA000) // Amber
+        "pending" -> AmberGold
         "failed" -> MaterialTheme.colorScheme.error
         else -> MaterialTheme.colorScheme.outline
     }
@@ -363,13 +461,17 @@ private fun EmptyTransactionState() {
 
 @Composable
 private fun SendDialog(
+    initialAddress: String? = null,
     onDismiss: () -> Unit,
     onSend: (address: String, amountLux: Long) -> Unit,
+    onScanClick: () -> Unit = {},
 ) {
-    var toAddress by remember { mutableStateOf("") }
+    var toAddress by remember(initialAddress) { mutableStateOf(initialAddress ?: "") }
     var amountText by remember { mutableStateOf("") }
     var addressError by remember { mutableStateOf<String?>(null) }
     var amountError by remember { mutableStateOf<String?>(null) }
+
+    val clipboardManager = LocalClipboardManager.current
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -388,6 +490,33 @@ private fun SendDialog(
                     supportingText = addressError?.let { { Text(it) } },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
+                    trailingIcon = {
+                        Row {
+                            // WHY: Scan button opens camera to read the recipient's
+                            // QR code. This is the primary UX for phone-to-phone
+                            // transfers — much faster than copy/paste.
+                            IconButton(onClick = onScanClick) {
+                                Icon(
+                                    Icons.Default.QrCodeScanner,
+                                    contentDescription = "Scan QR code",
+                                    modifier = Modifier.size(20.dp),
+                                )
+                            }
+                            // Paste from clipboard as fallback
+                            IconButton(onClick = {
+                                clipboardManager.getText()?.let { pasted ->
+                                    toAddress = pasted.text
+                                    addressError = null
+                                }
+                            }) {
+                                Icon(
+                                    Icons.Default.ContentCopy,
+                                    contentDescription = "Paste from clipboard",
+                                    modifier = Modifier.size(20.dp),
+                                )
+                            }
+                        }
+                    },
                 )
                 OutlinedTextField(
                     value = amountText,
@@ -407,8 +536,8 @@ private fun SendDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    // Validate address
-                    if (!toAddress.startsWith("grat:") || toAddress.length < 10) {
+                    // Validate address — must be "grat:" followed by exactly 64 hex chars
+                    if (!toAddress.matches(Regex("grat:[0-9a-fA-F]{64}"))) {
                         addressError = "Invalid address format"
                         return@Button
                     }
@@ -438,11 +567,40 @@ private fun SendDialog(
 // Receive Dialog
 // ============================================================================
 
+/**
+ * Generate a QR code bitmap from a string using ZXing.
+ *
+ * WHY: Wallet addresses are 69 characters (grat:<64 hex>), impractical to
+ * type manually. QR codes enable phone-to-phone transfers by scanning.
+ */
+private fun generateQrBitmap(content: String, size: Int = 512): Bitmap {
+    val writer = QRCodeWriter()
+    val bitMatrix = writer.encode(content, BarcodeFormat.QR_CODE, size, size)
+    val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+    for (x in 0 until size) {
+        for (y in 0 until size) {
+            bitmap.setPixel(x, y, if (bitMatrix[x, y]) {
+                android.graphics.Color.BLACK
+            } else {
+                android.graphics.Color.WHITE
+            })
+        }
+    }
+    return bitmap
+}
+
 @Composable
 private fun ReceiveDialog(
     address: String,
     onDismiss: () -> Unit,
 ) {
+    val clipboardManager = LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
+
+    // WHY: Generate QR bitmap once and cache via remember. Re-generates
+    // only if the address changes (which it won't during dialog lifetime).
+    val qrBitmap = remember(address) { generateQrBitmap(address) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Receive GRAT") },
@@ -452,31 +610,24 @@ private fun ReceiveDialog(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                // QR code placeholder
+                // QR code
                 Card(
-                    modifier = Modifier.size(200.dp),
+                    modifier = Modifier.size(220.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        containerColor = Color.White,
                     ),
                 ) {
                     Box(
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(12.dp),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(
-                                Icons.Default.QrCode,
-                                contentDescription = "QR Code",
-                                modifier = Modifier.size(64.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = "QR Code",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
+                        Image(
+                            bitmap = qrBitmap.asImageBitmap(),
+                            contentDescription = "Wallet QR Code",
+                            modifier = Modifier.fillMaxSize(),
+                        )
                     }
                 }
 
@@ -492,7 +643,10 @@ private fun ReceiveDialog(
 
                 // Copy button
                 OutlinedButton(
-                    onClick = { /* Copy to clipboard */ },
+                    onClick = {
+                        clipboardManager.setText(AnnotatedString(address))
+                        copied = true
+                    },
                 ) {
                     Icon(
                         Icons.Default.ContentCopy,
@@ -500,7 +654,7 @@ private fun ReceiveDialog(
                         modifier = Modifier.size(16.dp),
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Copy Address")
+                    Text(if (copied) "Copied!" else "Copy Address")
                 }
             }
         },

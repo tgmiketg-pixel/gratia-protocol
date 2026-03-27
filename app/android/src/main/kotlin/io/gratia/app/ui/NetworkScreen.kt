@@ -28,11 +28,11 @@ import androidx.compose.material3.Divider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import io.gratia.app.GratiaLogo
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -43,6 +43,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import io.gratia.app.ui.theme.*
 
 // ============================================================================
 // NetworkScreen
@@ -58,6 +59,7 @@ fun NetworkScreen(
     Scaffold(
         topBar = {
             TopAppBar(
+                navigationIcon = { GratiaLogo(modifier = Modifier.padding(start = 12.dp)) },
                 title = { Text("Network") },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
@@ -99,16 +101,11 @@ fun NetworkScreen(
                 }
             }
 
-            // Connect peer card (only show when network is running)
-            if (state.isNetworkRunning) {
-                item {
-                    ConnectPeerCard(
-                        address = state.connectPeerAddress,
-                        onAddressChange = { viewModel.updateConnectPeerAddress(it) },
-                        onConnect = { viewModel.connectPeer(state.connectPeerAddress) },
-                    )
-                }
-            }
+            // WHY: Manual peer connection card removed. mDNS handles peer
+            // discovery automatically on the same Wi-Fi. Manual multiaddr
+            // input will return when bootstrap peers are added for cross-
+            // network connectivity (Phase 3). The connectPeer() bridge
+            // method is preserved for future use.
 
             // Error message
             if (state.errorMessage != null) {
@@ -166,7 +163,7 @@ private fun NetworkControlCard(
     onStart: () -> Unit,
     onStop: () -> Unit,
 ) {
-    val statusColor = if (isRunning) Color(0xFF4CAF50) else MaterialTheme.colorScheme.outline
+    val statusColor = if (isRunning) SignalGreen else MaterialTheme.colorScheme.outline
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -269,9 +266,9 @@ private fun ConsensusCard(
 ) {
     val isActive = consensusState != "stopped"
     val stateColor = when (consensusState) {
-        "active" -> Color(0xFF4CAF50)
-        "producing" -> Color(0xFF2196F3)
-        "syncing" -> Color(0xFFFFC107)
+        "active" -> SignalGreen
+        "producing" -> AmberGold
+        "syncing" -> DarkAmber
         else -> MaterialTheme.colorScheme.outline
     }
 
@@ -325,7 +322,7 @@ private fun ConsensusCard(
                         text = if (isCommitteeMember) "Yes" else "No",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
-                        color = if (isCommitteeMember) Color(0xFF4CAF50) else MaterialTheme.colorScheme.outline,
+                        color = if (isCommitteeMember) SignalGreen else MaterialTheme.colorScheme.outline,
                     )
                 }
             }
@@ -375,55 +372,3 @@ private fun StatColumn(label: String, value: String) {
     }
 }
 
-// ============================================================================
-// Connect Peer Card
-// ============================================================================
-
-@Composable
-private fun ConnectPeerCard(
-    address: String,
-    onAddressChange: (String) -> Unit,
-    onConnect: () -> Unit,
-) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = "Connect to Peer",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Text(
-                text = "Enter a peer's multiaddr to connect directly",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            OutlinedTextField(
-                value = address,
-                onValueChange = onAddressChange,
-                label = { Text("Multiaddr") },
-                placeholder = { Text("/ip4/192.168.1.42/udp/9000/quic-v1") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodySmall.copy(
-                    fontFamily = FontFamily.Monospace,
-                ),
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Button(
-                onClick = onConnect,
-                enabled = address.isNotBlank(),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text("Connect")
-            }
-        }
-    }
-}

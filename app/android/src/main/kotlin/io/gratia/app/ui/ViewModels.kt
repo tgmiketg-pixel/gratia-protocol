@@ -2,6 +2,7 @@ package io.gratia.app.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import io.gratia.app.bridge.GratiaCoreManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -98,6 +99,43 @@ class WalletViewModel : ViewModel() {
 
     init {
         loadWalletData()
+        // WHY: Poll every 10 seconds so the wallet balance updates
+        // as mining rewards are credited (1 GRAT/minute).
+        startPolling()
+    }
+
+    private fun startPolling() {
+        viewModelScope.launch(Dispatchers.IO) {
+            while (true) {
+                delay(10_000)
+                refreshQuiet()
+            }
+        }
+    }
+
+    private fun refreshQuiet() {
+        try {
+            val bridge = io.gratia.app.bridge.GratiaCoreManager
+            val info = bridge.getWalletInfo()
+            val txs = bridge.getTransactionHistory()
+            _uiState.value = _uiState.value.copy(
+                walletInfo = WalletInfo(
+                    address = info.address,
+                    balanceLux = info.balanceLux,
+                    miningState = info.miningState,
+                ),
+                transactions = txs.map { tx ->
+                    TransactionInfo(
+                        hashHex = tx.hashHex,
+                        direction = tx.direction,
+                        counterparty = tx.counterparty,
+                        amountLux = tx.amountLux,
+                        timestampMillis = tx.timestampMillis,
+                        status = tx.status,
+                    )
+                },
+            )
+        } catch (_: Exception) {}
     }
 
     fun loadWalletData() {
@@ -184,8 +222,15 @@ class WalletViewModel : ViewModel() {
     fun sendTransfer(toAddress: String, amountLux: Long) {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = _uiState.value.copy(showSendDialog = false)
-            // In production: call GratiaNode.sendTransfer(toAddress, amountLux)
-            delay(200)
+            try {
+                val txHash = io.gratia.app.bridge.GratiaCoreManager.sendTransfer(toAddress, amountLux)
+                android.util.Log.i("WalletViewModel", "Transfer sent: $txHash")
+            } catch (e: Exception) {
+                android.util.Log.e("WalletViewModel", "Transfer failed: ${e.message}")
+                _uiState.value = _uiState.value.copy(
+                    errorMessage = e.message,
+                )
+            }
             loadWalletData()
         }
     }
@@ -244,10 +289,20 @@ class WalletViewModel : ViewModel() {
 data class MiningUiState(
     val miningStatus: MiningStatus? = null,
     val polStatus: ProofOfLifeStatus? = null,
+    val stakeInfo: StakeInfo = StakeInfo(
+        nodeStakeLux = 0L,
+        overflowAmountLux = 0L,
+        totalCommittedLux = 0L,
+        stakedAtMillis = 0L,
+        meetsMinimum = false,
+    ),
     val isLoading: Boolean = true,
     val earningsToday: Long = 0L,
     val earningsThisWeek: Long = 0L,
     val earningsTotal: Long = 0L,
+    val showStakeDialog: Boolean = false,
+    val showUnstakeDialog: Boolean = false,
+    val stakeError: String? = null,
 )
 
 class MiningViewModel : ViewModel() {
@@ -257,6 +312,49 @@ class MiningViewModel : ViewModel() {
 
     init {
         loadMiningData()
+        // WHY: Poll every 5 seconds so the PoL checklist updates in real-time
+        // as sensor events are collected throughout the day.
+        startPolling()
+    }
+
+    private fun startPolling() {
+        viewModelScope.launch(Dispatchers.IO) {
+            while (true) {
+                delay(5000)
+                loadMiningDataQuiet()
+            }
+        }
+    }
+
+    private fun loadMiningDataQuiet() {
+        try {
+            val bridge = io.gratia.app.bridge.GratiaCoreManager
+            val mining = bridge.getMiningStatus()
+            val pol = bridge.getProofOfLifeStatus()
+            val stake = bridge.getStakeInfo()
+            _uiState.value = _uiState.value.copy(
+                miningStatus = MiningStatus(
+                    state = mining.state,
+                    batteryPercent = mining.batteryPercent,
+                    isPluggedIn = mining.isPluggedIn,
+                    currentDayPolValid = mining.currentDayPolValid,
+                    presenceScore = mining.presenceScore,
+                ),
+                polStatus = ProofOfLifeStatus(
+                    isValidToday = pol.isValidToday,
+                    consecutiveDays = pol.consecutiveDays,
+                    isOnboarded = pol.isOnboarded,
+                    parametersMet = pol.parametersMet,
+                ),
+                stakeInfo = StakeInfo(
+                    nodeStakeLux = stake.nodeStakeLux,
+                    overflowAmountLux = stake.overflowAmountLux,
+                    totalCommittedLux = stake.totalCommittedLux,
+                    stakedAtMillis = stake.stakedAtMillis,
+                    meetsMinimum = stake.meetsMinimum,
+                ),
+            )
+        } catch (_: Exception) {}
     }
 
     fun loadMiningData() {
@@ -266,6 +364,7 @@ class MiningViewModel : ViewModel() {
                 val bridge = io.gratia.app.bridge.GratiaCoreManager
                 val mining = bridge.getMiningStatus()
                 val pol = bridge.getProofOfLifeStatus()
+                val stake = bridge.getStakeInfo()
                 _uiState.value = MiningUiState(
                     miningStatus = MiningStatus(
                         state = mining.state,
@@ -279,6 +378,13 @@ class MiningViewModel : ViewModel() {
                         consecutiveDays = pol.consecutiveDays,
                         isOnboarded = pol.isOnboarded,
                         parametersMet = pol.parametersMet,
+                    ),
+                    stakeInfo = StakeInfo(
+                        nodeStakeLux = stake.nodeStakeLux,
+                        overflowAmountLux = stake.overflowAmountLux,
+                        totalCommittedLux = stake.totalCommittedLux,
+                        stakedAtMillis = stake.stakedAtMillis,
+                        meetsMinimum = stake.meetsMinimum,
                     ),
                     isLoading = false,
                     earningsToday = 0L,
@@ -324,6 +430,55 @@ class MiningViewModel : ViewModel() {
             } catch (_: Exception) {}
         }
     }
+
+    // -- Staking ---------------------------------------------------------------
+
+    fun showStakeDialog() {
+        _uiState.value = _uiState.value.copy(showStakeDialog = true, stakeError = null)
+    }
+
+    fun hideStakeDialog() {
+        _uiState.value = _uiState.value.copy(showStakeDialog = false, stakeError = null)
+    }
+
+    fun showUnstakeDialog() {
+        _uiState.value = _uiState.value.copy(showUnstakeDialog = true, stakeError = null)
+    }
+
+    fun hideUnstakeDialog() {
+        _uiState.value = _uiState.value.copy(showUnstakeDialog = false, stakeError = null)
+    }
+
+    fun stake(amountLux: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val txHash = io.gratia.app.bridge.GratiaCoreManager.stake(amountLux)
+                android.util.Log.i("MiningViewModel", "Stake tx: $txHash")
+                _uiState.value = _uiState.value.copy(showStakeDialog = false, stakeError = null)
+                // WHY: Reload stake info immediately so the UI reflects the new stake
+                // without waiting for the next 5-second poll cycle.
+                loadMiningDataQuiet()
+            } catch (e: Exception) {
+                android.util.Log.e("MiningViewModel", "Stake failed: ${e.message}")
+                _uiState.value = _uiState.value.copy(stakeError = e.message)
+            }
+        }
+    }
+
+    fun unstake(amountLux: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val txHash = io.gratia.app.bridge.GratiaCoreManager.unstake(amountLux)
+                android.util.Log.i("MiningViewModel", "Unstake tx: $txHash")
+                _uiState.value = _uiState.value.copy(showUnstakeDialog = false, stakeError = null)
+                // WHY: Same as stake — immediate refresh for responsiveness.
+                loadMiningDataQuiet()
+            } catch (e: Exception) {
+                android.util.Log.e("MiningViewModel", "Unstake failed: ${e.message}")
+                _uiState.value = _uiState.value.copy(stakeError = e.message)
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -341,7 +496,6 @@ data class NetworkUiState(
     val blocksProduced: Long = 0,
     val recentEvents: List<String> = emptyList(),
     val isLoading: Boolean = false,
-    val connectPeerAddress: String = "",
     val errorMessage: String? = null,
 )
 
@@ -351,6 +505,28 @@ class NetworkViewModel : ViewModel() {
     val uiState: StateFlow<NetworkUiState> = _uiState.asStateFlow()
 
     private var pollingActive = false
+
+    init {
+        // WHY: The network is auto-started by GratiaApplication on launch.
+        // Always assume it's running so the Connect Peer card is visible.
+        // If getNetworkStatus confirms running, update peer count too.
+        _uiState.value = _uiState.value.copy(isNetworkRunning = true)
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val status = io.gratia.app.bridge.GratiaCoreManager.getNetworkStatus()
+                _uiState.value = _uiState.value.copy(
+                    isNetworkRunning = true, // Always true — auto-started by Application
+                    peerCount = status.peerCount,
+                    listenAddress = status.listenAddress,
+                )
+                startPolling()
+            } catch (e: Exception) {
+                android.util.Log.w("NetworkViewModel", "getNetworkStatus failed: ${e.message}")
+                // Still keep isNetworkRunning=true so Connect card is visible
+                startPolling()
+            }
+        }
+    }
 
     fun startNetwork() {
         viewModelScope.launch(Dispatchers.IO) {
@@ -419,21 +595,21 @@ class NetworkViewModel : ViewModel() {
     }
 
     fun connectPeer(address: String) {
+        android.util.Log.i("NetworkViewModel", "connectPeer called with: '$address'")
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = _uiState.value.copy(errorMessage = null)
             try {
+                android.util.Log.i("NetworkViewModel", "Calling FFI connectPeer...")
                 io.gratia.app.bridge.GratiaCoreManager.connectPeer(address)
+                android.util.Log.i("NetworkViewModel", "FFI connectPeer succeeded")
                 addEvent("Dialing $address")
             } catch (e: Exception) {
+                android.util.Log.e("NetworkViewModel", "FFI connectPeer failed: ${e.message}", e)
                 _uiState.value = _uiState.value.copy(
                     errorMessage = e.message,
                 )
             }
         }
-    }
-
-    fun updateConnectPeerAddress(address: String) {
-        _uiState.value = _uiState.value.copy(connectPeerAddress = address)
     }
 
     fun clearError() {
@@ -477,14 +653,23 @@ class NetworkViewModel : ViewModel() {
             val events = io.gratia.app.bridge.GratiaCoreManager.pollNetworkEvents()
             for (event in events) {
                 val msg = when (event) {
-                    is io.gratia.app.bridge.NetworkEvent.PeerConnected ->
+                    is io.gratia.app.bridge.NetworkEvent.PeerConnected -> {
+                        // WHY: Update peer count immediately on connect for responsive UI
+                        _uiState.value = _uiState.value.copy(
+                            peerCount = _uiState.value.peerCount + 1,
+                        )
                         "Peer connected: ${event.peerId.take(12)}..."
-                    is io.gratia.app.bridge.NetworkEvent.PeerDisconnected ->
+                    }
+                    is io.gratia.app.bridge.NetworkEvent.PeerDisconnected -> {
+                        _uiState.value = _uiState.value.copy(
+                            peerCount = (_uiState.value.peerCount - 1).coerceAtLeast(0),
+                        )
                         "Peer disconnected: ${event.peerId.take(12)}..."
+                    }
                     is io.gratia.app.bridge.NetworkEvent.BlockReceived ->
-                        "Block #${event.height} received"
+                        "Block #${event.height} from ${event.producer.take(8)}..."
                     is io.gratia.app.bridge.NetworkEvent.TransactionReceived ->
-                        "Transaction ${event.hashHex.take(8)}... received"
+                        "Tx ${event.hashHex.take(8)}... received"
                 }
                 addEvent(msg)
             }
@@ -519,6 +704,8 @@ data class SettingsUiState(
     val showStakeDialog: Boolean = false,
     val showUnstakeDialog: Boolean = false,
     val showBeneficiaryDialog: Boolean = false,
+    /** Exported seed phrase hex string, null when not yet exported. */
+    val exportedSeedPhrase: String? = null,
 )
 
 enum class LocationGranularity(val label: String) {
@@ -564,8 +751,24 @@ class SettingsViewModel : ViewModel() {
     }
 
     fun exportSeedPhrase() {
-        // In production: call secure enclave to retrieve seed phrase
-        _uiState.value = _uiState.value.copy(showExportSeedConfirmation = false)
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val hexPhrase = GratiaCoreManager.exportSeedPhrase()
+                _uiState.value = _uiState.value.copy(
+                    showExportSeedConfirmation = false,
+                    exportedSeedPhrase = hexPhrase,
+                )
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    showExportSeedConfirmation = false,
+                    exportedSeedPhrase = null,
+                )
+            }
+        }
+    }
+
+    fun clearExportedSeedPhrase() {
+        _uiState.value = _uiState.value.copy(exportedSeedPhrase = null)
     }
 
     fun showStakeDialog() {
@@ -667,12 +870,53 @@ class GovernanceViewModel : ViewModel() {
     fun loadGovernanceData() {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = _uiState.value.copy(isLoading = true)
-            delay(300)
+
+            // WHY: Check PoL consecutive days for proposal eligibility (90+ days required).
+            // In debug bypass mode, the Rust side allows it regardless.
+            val canCreate = try {
+                val pol = GratiaCoreManager.getProofOfLifeStatus()
+                pol.consecutiveDays >= 90
+            } catch (_: Exception) {
+                true // Default true during development
+            }
+
+            // Fetch real proposals and polls from the Rust governance engine
+            val proposals = try {
+                GratiaCoreManager.getProposals().map { p ->
+                    Proposal(
+                        id = p.idHex,
+                        title = p.title,
+                        description = p.description,
+                        status = p.status,
+                        votesFor = p.votesYes.toInt(),
+                        votesAgainst = p.votesNo.toInt(),
+                        votesAbstain = p.votesAbstain.toInt(),
+                        discussionEndMillis = p.discussionEndMillis,
+                        votingEndMillis = p.votingEndMillis,
+                        submittedByAddress = p.submittedBy,
+                    )
+                }
+            } catch (_: Exception) { emptyList() }
+
+            val polls = try {
+                GratiaCoreManager.getPolls().map { p ->
+                    Poll(
+                        id = p.idHex,
+                        question = p.question,
+                        options = p.options,
+                        votes = p.votes.map { it.toInt() },
+                        endMillis = p.endMillis,
+                        createdByAddress = p.createdBy,
+                        totalVoters = p.totalVoters.toInt(),
+                    )
+                }
+            } catch (_: Exception) { emptyList() }
+
             _uiState.value = GovernanceUiState(
-                proposals = mockProposals(),
-                polls = mockPolls(),
+                proposals = proposals,
+                polls = polls,
                 isLoading = false,
-                canCreateProposal = false, // Requires 90+ days PoL
+                canCreateProposal = canCreate,
             )
         }
     }
@@ -687,9 +931,14 @@ class GovernanceViewModel : ViewModel() {
 
     fun voteOnProposal(proposalId: String, vote: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            // In production: call governance contract
-            delay(200)
-            clearSelectedProposal()
+            try {
+                GratiaCoreManager.voteOnProposal(proposalId, vote)
+                android.util.Log.i("GovernanceViewModel", "Vote '$vote' on proposal $proposalId")
+            } catch (e: Exception) {
+                android.util.Log.e("GovernanceViewModel", "Vote failed: ${e.message}")
+            }
+            // Refresh from Rust to get updated vote counts
+            _uiState.value = _uiState.value.copy(selectedProposal = null)
             loadGovernanceData()
         }
     }
@@ -704,77 +953,39 @@ class GovernanceViewModel : ViewModel() {
 
     fun voteOnPoll(pollId: String, optionIndex: Int) {
         viewModelScope.launch(Dispatchers.IO) {
-            // In production: call polling contract
-            delay(200)
-            clearSelectedPoll()
+            try {
+                GratiaCoreManager.voteOnPoll(pollId, optionIndex)
+                android.util.Log.i("GovernanceViewModel", "Vote option $optionIndex on poll $pollId")
+            } catch (e: Exception) {
+                android.util.Log.e("GovernanceViewModel", "Poll vote failed: ${e.message}")
+            }
+            _uiState.value = _uiState.value.copy(selectedPoll = null)
             loadGovernanceData()
         }
     }
 
-    private fun mockProposals(): List<Proposal> {
-        val now = System.currentTimeMillis()
-        return listOf(
-            Proposal(
-                id = "prop-001",
-                title = "Increase minimum stake to 200 GRAT",
-                description = "This proposal suggests raising the minimum stake requirement from 100 GRAT to 200 GRAT to improve network security and reduce low-effort node participation.",
-                status = "voting",
-                votesFor = 1842,
-                votesAgainst = 756,
-                votesAbstain = 203,
-                discussionEndMillis = now - 86_400_000L * 2,
-                votingEndMillis = now + 86_400_000L * 5,
-                submittedByAddress = "grat:aabb...ccdd",
-            ),
-            Proposal(
-                id = "prop-002",
-                title = "Add barometer to core sensor requirements",
-                description = "Proposal to add barometer readings as a core requirement for Proof of Life, improving location verification fidelity.",
-                status = "discussion",
-                votesFor = 0,
-                votesAgainst = 0,
-                votesAbstain = 0,
-                discussionEndMillis = now + 86_400_000L * 10,
-                votingEndMillis = now + 86_400_000L * 17,
-                submittedByAddress = "grat:eeff...1122",
-            ),
-            Proposal(
-                id = "prop-003",
-                title = "Reduce block time to 2 seconds",
-                description = "Proposing a reduction of block time from 3-5 seconds to a fixed 2 seconds to improve transaction throughput.",
-                status = "passed",
-                votesFor = 3201,
-                votesAgainst = 1150,
-                votesAbstain = 412,
-                discussionEndMillis = now - 86_400_000L * 30,
-                votingEndMillis = now - 86_400_000L * 23,
-                submittedByAddress = "grat:3344...5566",
-            ),
-        )
+    fun createPoll(question: String, options: List<String>) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val pollId = GratiaCoreManager.createPoll(question, options)
+                android.util.Log.i("GovernanceViewModel", "Poll created: $question (id=$pollId)")
+            } catch (e: Exception) {
+                android.util.Log.e("GovernanceViewModel", "Create poll failed: ${e.message}")
+            }
+            loadGovernanceData()
+        }
     }
 
-    private fun mockPolls(): List<Poll> {
-        val now = System.currentTimeMillis()
-        return listOf(
-            Poll(
-                id = "poll-001",
-                question = "What should the GRAT token icon look like?",
-                options = listOf("Sun symbol", "Shield emblem", "Abstract G", "Fingerprint motif"),
-                votes = listOf(456, 312, 789, 234),
-                endMillis = now + 86_400_000L * 3,
-                createdByAddress = "grat:7788...99aa",
-                totalVoters = 1791,
-            ),
-            Poll(
-                id = "poll-002",
-                question = "Preferred geographic shard count for mainnet launch?",
-                options = listOf("5 shards", "10 shards", "20 shards"),
-                votes = listOf(892, 1456, 340),
-                endMillis = now + 86_400_000L * 7,
-                createdByAddress = "grat:bbcc...ddee",
-                totalVoters = 2688,
-            ),
-        )
+    fun createProposal(title: String, description: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val proposalId = GratiaCoreManager.submitProposal(title, description)
+                android.util.Log.i("GovernanceViewModel", "Proposal created: $title (id=$proposalId)")
+            } catch (e: Exception) {
+                android.util.Log.e("GovernanceViewModel", "Create proposal failed: ${e.message}")
+            }
+            loadGovernanceData()
+        }
     }
 }
 
