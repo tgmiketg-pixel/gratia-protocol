@@ -3129,7 +3129,7 @@ mod tests {
         let dir = format!("/tmp/gratia-ffi-test-{}-{}", std::process::id(), id);
         // WHY: Clean up any leftover key file from a previous test run.
         let _ = std::fs::remove_dir_all(&dir);
-        GratiaNode::new(dir)
+        GratiaNode::new(dir).expect("failed to create test node")
     }
 
     #[test]
