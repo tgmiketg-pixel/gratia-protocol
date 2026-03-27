@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gratia — The Blockchain That Proves You're Human</title>
+  <meta name="description" content="Gratia is a mobile-native Layer 1 blockchain where your phone is the miner, your life is the proof, and every person has an equal voice. No ASICs. No staking cartels. Just you and your phone.">
+  <meta name="theme-color" content="#0D1527">
+  <meta property="og:title" content="Gratia — The Blockchain That Proves You're Human">
+  <meta property="og:description" content="A mobile-native Layer 1 blockchain. Your phone mines. Your life proves you're real. One phone, one vote.">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="img/gratia-logo.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- ═══════════════ NAV ═══════════════ -->
+  <nav id="nav">
+    <div class="nav-inner">
+      <a href="#" class="nav-brand">
+        <img src="img/gratia-logo.svg" alt="Gratia" class="nav-logo">
+        <span class="nav-wordmark">Gratia</span>
+      </a>
+      <div class="nav-links">
+        <a href="#how-it-works">How It Works</a>
+        <a href="#difference">Why Gratia</a>
+        <a href="#specs">Specs</a>
+        <a href="#roadmap">Roadmap</a>
+        <a href="#testnet" class="btn btn-sm">Join Testnet</a>
+      </div>
+      <button class="nav-toggle" aria-label="Menu" onclick="document.querySelector('.nav-links').classList.toggle('open')">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </button>
+    </div>
+  </nav>
+
+  <!-- ═══════════════ HERO ═══════════════ -->
+  <section class="hero">
+    <div class="hero-bg-glow"></div>
+    <div class="hero-content">
+      <div class="hero-text">
+        <p class="hero-eyebrow">Mobile-Native Layer 1 Blockchain</p>
+        <h1>The blockchain that proves you're&nbsp;human.</h1>
+        <p class="hero-sub">Your phone is the miner. Your life is the proof. Every person has an equal voice. No ASICs. No staking cartels. No&nbsp;datacenter&nbsp;required.</p>
+        <div class="hero-ctas">
+          <a href="#testnet" class="btn btn-lg">Join the Testnet</a>
+          <a href="#how-it-works" class="btn btn-lg btn-outline">How It Works</a>
+        </div>
+        <div class="hero-stats">
+          <div class="hero-stat">
+            <span class="hero-stat-num">725</span>
+            <span class="hero-stat-label">Tests Passing</span>
+          </div>
+          <div class="hero-stat">
+            <span class="hero-stat-num">4s</span>
+            <span class="hero-stat-label">Block Time</span>
+          </div>
+          <div class="hero-stat">
+            <span class="hero-stat-num">14</span>
+            <span class="hero-stat-label">Rust Crates</span>
+          </div>
+          <div class="hero-stat">
+            <span class="hero-stat-num">$50</span>
+            <span class="hero-stat-label">Min Phone</span>
+          </div>
+        </div>
+      </div>
+      <div class="hero-phones">
+        <div class="phone-frame phone-left">
+          <img src="img/phone-mining.png" alt="Gratia mining screen — phone actively mining GRAT" loading="lazy">
+        </div>
+        <div class="phone-frame phone-right">
+          <img src="img/phone-wallet.png" alt="Gratia wallet screen — send and receive GRAT" loading="lazy">
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ PROBLEM ═══════════════ -->
+  <section class="section section-dark" id="problem">
+    <div class="container">
+      <h2 class="section-title">The promise of crypto was <span class="gold">"one&nbsp;CPU, one&nbsp;vote."</span></h2>
+      <p class="section-subtitle">Here's what actually happened.</p>
+      <div class="problem-grid">
+        <div class="problem-card">
+          <div class="problem-icon">&#9874;</div>
+          <h3>Bitcoin</h3>
+          <p>Requires industrial ASIC hardware in warehouses. Consumes more energy than entire countries. The average person is locked out.</p>
+        </div>
+        <div class="problem-card">
+          <div class="problem-icon">&#128176;</div>
+          <h3>Ethereum</h3>
+          <p>Requires 32 ETH (~$80,000+) to run a validator. Proof of Stake replaced energy barriers with capital barriers. Same exclusion, different currency.</p>
+        </div>
+        <div class="problem-card">
+          <div class="problem-icon">&#127959;</div>
+          <h3>Solana & Others</h3>
+          <p>Requires datacenter-grade hardware with high bandwidth. "Decentralized" networks running on AWS instances. The blockchain industry replicated the banks.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ HOW IT WORKS ═══════════════ -->
+  <section class="section" id="how-it-works">
+    <div class="container">
+      <h2 class="section-title">How Gratia Works</h2>
+      <p class="section-subtitle">Three steps. No special hardware. No upfront cost. Just your phone.</p>
+
+      <div class="steps-grid">
+        <div class="step-card">
+          <div class="step-num">01</div>
+          <h3>Live Your Life</h3>
+          <p><strong>Proof of Life</strong> runs silently in the background. Unlock your phone, carry it, connect to Wi-Fi, charge it at night — normal daily use generates the cryptographic attestation that proves you're a real person with a real phone. Zero battery impact. Zero user action required.</p>
+        </div>
+        <div class="step-card">
+          <div class="step-num">02</div>
+          <h3>Plug In to Mine</h3>
+          <p><strong>Proof of Presence</strong> activates when your phone is plugged in and above 80% battery. Mining earns GRAT at a flat rate — every minute of mining pays the same. No diminishing returns. No time-of-day restrictions. Your phone charges first, then mines.</p>
+        </div>
+        <div class="step-card">
+          <div class="step-num">03</div>
+          <h3>Spend &amp; Govern</h3>
+          <p>Send GRAT to anyone — tap phones with NFC, scan a QR code, or paste an address. Vote on protocol changes with <strong>one phone, one vote</strong> governance. No token-weighted voting. Your voice is equal regardless of your balance.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ THREE PILLARS ═══════════════ -->
+  <section class="section section-dark" id="difference">
+    <div class="container">
+      <h2 class="section-title">Three-Pillar Consensus Security</h2>
+      <p class="section-subtitle">All three must be satisfied simultaneously. No shortcut. No bypass.</p>
+
+      <div class="pillars-grid">
+        <div class="pillar-card">
+          <div class="pillar-icon">&#128272;</div>
+          <h3>Proof of Life</h3>
+          <p class="pillar-role">The lock on the door</p>
+          <p>Stops phone farms. Cannot be bought. Your daily phone usage — unlocks, movement, GPS, Bluetooth peers, charging — proves you're a real human. No server can fake it.</p>
+        </div>
+        <div class="pillar-card pillar-accent">
+          <div class="pillar-icon">&#9878;</div>
+          <h3>Staking</h3>
+          <p class="pillar-role">The alarm system</p>
+          <p>Makes getting caught expensive. Flat bond per phone — not an investment, a security deposit. Progressive slashing escalates: warning, 10%, 50%, 100% burned. Whales subsidize small miners through the overflow pool.</p>
+        </div>
+        <div class="pillar-card">
+          <div class="pillar-icon">&#9889;</div>
+          <h3>Energy</h3>
+          <p class="pillar-role">The security camera</p>
+          <p>Proves real work happened on real ARM silicon. Stops emulators and VMs cold. Uses idle capacity on devices already manufactured, already owned, already plugged in. Marginal energy cost: negligible.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ HARDWARE MOAT ═══════════════ -->
+  <section class="section">
+    <div class="container">
+      <h2 class="section-title">The Hardware Moat</h2>
+      <p class="section-subtitle">Gratia's consensus requires capabilities that servers don't have.</p>
+
+      <div class="moat-grid">
+        <div class="moat-item"><span class="moat-check">&#10003;</span> GPS location verification</div>
+        <div class="moat-item"><span class="moat-check">&#10003;</span> Accelerometer motion patterns</div>
+        <div class="moat-item"><span class="moat-check">&#10003;</span> Bluetooth peer diversity</div>
+        <div class="moat-item"><span class="moat-check">&#10003;</span> Wi-Fi network fingerprints</div>
+        <div class="moat-item"><span class="moat-check">&#10003;</span> Charge cycle detection</div>
+        <div class="moat-item"><span class="moat-check">&#10003;</span> Screen unlock patterns</div>
+        <div class="moat-item"><span class="moat-check">&#10003;</span> NFC tap-to-transact</div>
+        <div class="moat-item"><span class="moat-check">&#10003;</span> Secure enclave key storage</div>
+        <div class="moat-item"><span class="moat-check">&#10003;</span> Barometer altitude data</div>
+        <div class="moat-item"><span class="moat-check">&#10003;</span> ARM big.LITTLE exploitation</div>
+        <div class="moat-item"><span class="moat-check">&#10003;</span> Gyroscope orientation</div>
+        <div class="moat-item"><span class="moat-check">&#10003;</span> Ambient light sensing</div>
+      </div>
+      <p class="moat-note">No individual sensor is required. The composite Presence Score means any $50+ phone from 2018 or later can participate fully.</p>
+    </div>
+  </section>
+
+  <!-- ═══════════════ SPECS ═══════════════ -->
+  <section class="section section-dark" id="specs">
+    <div class="container">
+      <h2 class="section-title">Technical Specs</h2>
+      <div class="specs-grid">
+        <div class="spec-card">
+          <div class="spec-label">Block Time</div>
+          <div class="spec-value">4 seconds</div>
+        </div>
+        <div class="spec-card">
+          <div class="spec-label">Base Throughput</div>
+          <div class="spec-value">128 TPS</div>
+        </div>
+        <div class="spec-card">
+          <div class="spec-label">With Sharding</div>
+          <div class="spec-value">2,560 TPS</div>
+        </div>
+        <div class="spec-card">
+          <div class="spec-label">Consensus</div>
+          <div class="spec-value">VRF + 14/21</div>
+        </div>
+        <div class="spec-card">
+          <div class="spec-label">Core Language</div>
+          <div class="spec-value">Rust</div>
+        </div>
+        <div class="spec-card">
+          <div class="spec-label">Networking</div>
+          <div class="spec-value">libp2p</div>
+        </div>
+        <div class="spec-card">
+          <div class="spec-label">Zero-Knowledge</div>
+          <div class="spec-value">Bulletproofs</div>
+        </div>
+        <div class="spec-card">
+          <div class="spec-label">Smart Contracts</div>
+          <div class="spec-value">WASM (wasmer)</div>
+        </div>
+        <div class="spec-card">
+          <div class="spec-label">Ticker</div>
+          <div class="spec-value">GRAT</div>
+        </div>
+        <div class="spec-card">
+          <div class="spec-label">Smallest Unit</div>
+          <div class="spec-value">1 Lux</div>
+        </div>
+        <div class="spec-card">
+          <div class="spec-label">Emission</div>
+          <div class="spec-value">25%/yr reduction</div>
+        </div>
+        <div class="spec-card">
+          <div class="spec-label">Max Block Size</div>
+          <div class="spec-value">256 KB</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ COMPARISON ═══════════════ -->
+  <section class="section">
+    <div class="container">
+      <h2 class="section-title">Gratia vs. Everyone Else</h2>
+      <div class="table-wrap">
+        <table class="compare-table">
+          <thead>
+            <tr>
+              <th></th>
+              <th>Bitcoin</th>
+              <th>Ethereum</th>
+              <th>Solana</th>
+              <th>Pi Network</th>
+              <th class="col-highlight">Gratia</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="row-label">Minimum Hardware</td>
+              <td>ASIC ($5K+)</td>
+              <td>Server</td>
+              <td>Datacenter</td>
+              <td>Phone (wallet only)</td>
+              <td class="col-highlight">$50 phone</td>
+            </tr>
+            <tr>
+              <td class="row-label">Minimum Capital</td>
+              <td>$10,000+</td>
+              <td>$80,000+</td>
+              <td>$5,000+</td>
+              <td>$0 (no real mining)</td>
+              <td class="col-highlight">$0</td>
+            </tr>
+            <tr>
+              <td class="row-label">Phone Mines?</td>
+              <td>No</td>
+              <td>No</td>
+              <td>No</td>
+              <td>No (simulated)</td>
+              <td class="col-highlight">Yes (real blocks)</td>
+            </tr>
+            <tr>
+              <td class="row-label">Governance</td>
+              <td>Hashrate</td>
+              <td>Token-weighted</td>
+              <td>Token-weighted</td>
+              <td>Centralized</td>
+              <td class="col-highlight">1 phone, 1 vote</td>
+            </tr>
+            <tr>
+              <td class="row-label">Energy Impact</td>
+              <td>150+ TWh/yr</td>
+              <td>Moderate</td>
+              <td>Moderate</td>
+              <td>Negligible</td>
+              <td class="col-highlight">Negligible</td>
+            </tr>
+            <tr>
+              <td class="row-label">Anti-Sybil</td>
+              <td>Hardware cost</td>
+              <td>Capital cost</td>
+              <td>Capital cost</td>
+              <td>Phone numbers</td>
+              <td class="col-highlight">Proof of Life</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ ROADMAP ═══════════════ -->
+  <section class="section section-dark" id="roadmap">
+    <div class="container">
+      <h2 class="section-title">Roadmap</h2>
+      <div class="roadmap">
+        <div class="roadmap-phase roadmap-done">
+          <div class="roadmap-marker">&#10003;</div>
+          <h3>Phase 1 — Proof of Concept</h3>
+          <p>Rust core (14 crates, 725 tests), Android app with wallet/mining/staking/governance, phone-to-phone consensus over internet, NFC tap-to-transact, Bulletproofs ZK, block explorer. <strong>Two phones mining real blocks across the internet.</strong></p>
+        </div>
+        <div class="roadmap-phase roadmap-done">
+          <div class="roadmap-marker">&#10003;</div>
+          <h3>Phase 2 — Smart Contracts &amp; Sync</h3>
+          <p>GratiaScript compiler + WASM execution (interpreter + Wasmer), linear memory, contract storage, event emission, state sync protocol, block sync between peers, debug bypass hardened for release builds.</p>
+        </div>
+        <div class="roadmap-phase roadmap-active">
+          <div class="roadmap-marker roadmap-marker-active"></div>
+          <h3>Phase 3 — Public Testnet</h3>
+          <p>Public testnet launch, community onboarding, multi-user testing, app store submission preparation, bootstrap node infrastructure, landing page.</p>
+        </div>
+        <div class="roadmap-phase">
+          <div class="roadmap-marker"></div>
+          <h3>Phase 4 — Mainnet</h3>
+          <p>iOS app, geographic sharding, Bluetooth mesh transport, security audit, App Store submission, environmental oracle layer, Groth16 proofs for complex ZK contracts.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ TESTNET ═══════════════ -->
+  <section class="section" id="testnet">
+    <div class="container container-narrow">
+      <h2 class="section-title">Join the Testnet</h2>
+      <p class="section-subtitle">Gratia is live on testnet. Install the app on any Android phone (ARM64, Android 8.0+), plug in, and start mining. No account needed. No signup. Just install and go.</p>
+      <div class="wp-card">
+        <div class="wp-icon">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#F5A623" stroke-width="1.5"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+        </div>
+        <h3>Download Gratia for Android</h3>
+        <p>Testnet APK &mdash; sideload onto any ARM64 Android device</p>
+        <a href="gratia-testnet.apk" class="btn btn-lg" style="margin-top:1.5rem;">Download APK</a>
+        <p style="margin-top:1rem;font-size:0.85rem;opacity:0.7;">Requires: Android 8.0+, ARM64 processor. Enable "Install from unknown sources" in Settings.</p>
+      </div>
+      <div style="margin-top:2rem;text-align:center;">
+        <h3 style="margin-bottom:1rem;">Quick Start</h3>
+        <ol style="text-align:left;max-width:480px;margin:0 auto;line-height:1.8;">
+          <li>Install the APK and open Gratia</li>
+          <li>Your wallet is created automatically</li>
+          <li>Plug in your phone and let battery reach 80%</li>
+          <li>Mining starts automatically &mdash; you earn GRAT every minute</li>
+          <li>Use your phone normally &mdash; Proof of Life runs in the background</li>
+        </ol>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ WHITEPAPER ═══════════════ -->
+  <section class="section" id="whitepaper">
+    <div class="container container-narrow">
+      <h2 class="section-title">Read the Whitepaper</h2>
+      <p class="section-subtitle">The full technical specification — dual-proof system, three-pillar consensus, tokenomics, security model, smart contract platform, and implementation details.</p>
+      <div class="wp-card">
+        <div class="wp-icon">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#F5A623" stroke-width="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+        </div>
+        <h3>GRATIA: A Mobile-Native Blockchain Protocol</h3>
+        <p>Whitepaper v0.5 &mdash; "Freedom and Gratitude Through Universal Participation"</p>
+        <a href="gratia-whitepaper.pdf" class="btn btn-lg" style="margin-top:1.5rem;" target="_blank">Download PDF</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ BOTTOM LINE ═══════════════ -->
+  <section class="section section-dark section-bottom-line">
+    <div class="container container-narrow">
+      <blockquote class="bottom-quote">
+        "Most crypto projects raise millions on a PDF and never ship. Gratia has a protocol running on real hardware with real cryptography, real peer-to-peer networking, real block production, and real transactions flowing between phones — built before raising a&nbsp;dime."
+      </blockquote>
+    </div>
+  </section>
+
+  <!-- ═══════════════ FOOTER ═══════════════ -->
+  <footer>
+    <div class="container">
+      <div class="footer-inner">
+        <div class="footer-brand">
+          <img src="img/gratia-logo.svg" alt="Gratia" width="48" height="48">
+          <div>
+            <div class="footer-wordmark">Gratia</div>
+            <div class="footer-tagline">The blockchain that proves you're human.</div>
+          </div>
+        </div>
+        <div class="footer-links">
+          <a href="#whitepaper">Whitepaper</a>
+          <a href="#specs">Technical Specs</a>
+          <a href="#roadmap">Roadmap</a>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <p>&copy; 2026 Gratia Protocol. All rights reserved.</p>
+        <p class="footer-ticker">GRAT &middot; 1 GRAT = 1,000,000 Lux</p>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    // Sticky nav background on scroll
+    const nav = document.getElementById('nav');
+    window.addEventListener('scroll', () => {
+      nav.classList.toggle('scrolled', window.scrollY > 40);
+    });
+
+    // Smooth scroll for anchor links
+    document.querySelectorAll('a[href^="#"]').forEach(a => {
+      a.addEventListener('click', e => {
+        const target = document.querySelector(a.getAttribute('href'));
+        if (target) {
+          e.preventDefault();
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          document.querySelector('.nav-links')?.classList.remove('open');
+        }
+      });
+    });
+  </script>
+</body>
+</html>
