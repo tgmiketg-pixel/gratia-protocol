@@ -232,8 +232,8 @@ impl ContractRuntime for MockRuntime {
         function_name: &str,
         args: &[ContractValue],
         gas_meter: &mut GasMeter,
-        host_env: &mut HostEnvironment,
-        permissions: &ContractPermissions,
+        _host_env: &mut HostEnvironment,
+        _permissions: &ContractPermissions,
     ) -> Result<ExecutionOutcome, RuntimeError> {
         // Check that the contract is loaded.
         if !self.loaded_contracts.contains_key(contract_address) {

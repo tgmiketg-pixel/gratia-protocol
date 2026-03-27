@@ -1,0 +1,13 @@
+[package]
+name = "gratiascript"
+description = "GratiaScript compiler — TypeScript-derived language to WASM for the Gratia blockchain"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+
+[dev-dependencies]
+gratia-core = { path = "../gratia-core" }
+gratia-vm = { path = "../gratia-vm" }
+hex = { workspace = true }

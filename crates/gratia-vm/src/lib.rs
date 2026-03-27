@@ -21,6 +21,7 @@
 
 pub mod gas;
 pub mod host_functions;
+pub mod interpreter;
 pub mod runtime;
 pub mod sandbox;
 
@@ -32,8 +33,8 @@ use gratia_core::types::{Address, Lux};
 
 use crate::gas::GasMeter;
 use crate::host_functions::{ContractEvent, HostEnvironment};
-use crate::runtime::{ContractRuntime, ContractValue, ExecutionOutcome, RuntimeError};
-use crate::sandbox::{ContractPermissions, SandboxConfig, SandboxedExecution};
+use crate::runtime::{ContractRuntime, ContractValue, RuntimeError};
+use crate::sandbox::{ContractPermissions, SandboxConfig};
 
 // ============================================================================
 // Contract Call
@@ -83,6 +84,8 @@ pub struct ExecutionResult {
 #[derive(Debug, Clone)]
 struct DeployedContract {
     /// The contract's address (derived from deployer + nonce or bytecode hash).
+    /// Used for contract call routing (Phase 2 full VM).
+    #[allow(dead_code)]
     address: Address,
     /// SHA-256 hash of the WASM bytecode.
     bytecode_hash: [u8; 32],
