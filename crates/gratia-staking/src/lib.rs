@@ -56,6 +56,11 @@ pub struct StakingManager {
     slashing_histories: HashMap<NodeId, SlashingHistory>,
     /// Set of permanently banned nodes.
     banned_nodes: HashMap<NodeId, DateTime<Utc>>,
+    /// When the staking minimum was activated (None = still at genesis zero).
+    /// WHY: Once the network crosses staking_activation_threshold miners,
+    /// a 30-day grace period begins. After the grace period, the minimum
+    /// stake is enforced. This timestamp records when activation occurred.
+    staking_activated_at: Option<DateTime<Utc>>,
 }
 
 impl StakingManager {
@@ -67,6 +72,7 @@ impl StakingManager {
             pool: NetworkSecurityPool::new(),
             slashing_histories: HashMap::new(),
             banned_nodes: HashMap::new(),
+            staking_activated_at: None,
         }
     }
 
@@ -239,10 +245,82 @@ impl StakingManager {
     }
 
     /// Check whether a node meets the minimum stake requirement for mining.
+    /// Check the network size and activate the minimum stake if threshold is crossed.
+    /// Call this periodically (e.g., once per block) with the current active miner count.
+    ///
+    /// Returns true if staking was just activated (first time crossing threshold).
+    pub fn check_activation(&mut self, active_miners: u64, now: DateTime<Utc>) -> bool {
+        if self.staking_activated_at.is_some() {
+            return false; // Already activated.
+        }
+        if active_miners >= self.config.staking_activation_threshold {
+            self.staking_activated_at = Some(now);
+            tracing::info!(
+                active_miners,
+                threshold = self.config.staking_activation_threshold,
+                grace_days = self.config.staking_activation_grace_secs / 86400,
+                "Staking minimum activated — {}-day grace period begins",
+                self.config.staking_activation_grace_secs / 86400
+            );
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get the effective minimum stake right now, accounting for activation state.
+    ///
+    /// - Before activation: 0 (anyone can mine)
+    /// - During grace period: 0 (existing miners have time to accumulate)
+    /// - After grace period: activated_minimum_stake
+    pub fn effective_minimum_stake(&self, now: DateTime<Utc>) -> Lux {
+        match self.staking_activated_at {
+            None => 0, // Not activated yet — genesis rules.
+            Some(activated_at) => {
+                let elapsed = now.signed_duration_since(activated_at);
+                let grace = chrono::Duration::seconds(
+                    self.config.staking_activation_grace_secs as i64,
+                );
+                if elapsed < grace {
+                    0 // Still in grace period.
+                } else {
+                    self.config.activated_minimum_stake
+                }
+            }
+        }
+    }
+
+    /// Whether staking has been activated (threshold crossed).
+    pub fn is_staking_activated(&self) -> bool {
+        self.staking_activated_at.is_some()
+    }
+
+    /// When staking was activated, if at all.
+    pub fn staking_activated_at(&self) -> Option<DateTime<Utc>> {
+        self.staking_activated_at
+    }
+
+    /// Whether a node meets the minimum stake requirement.
+    /// Uses the static config.minimum_stake for backwards compatibility.
+    /// For time-aware checks that respect the grace period, use
+    /// `meets_minimum_stake_at(node_id, now)`.
     pub fn meets_minimum_stake(&self, node_id: &NodeId) -> bool {
         self.stakes
             .get(node_id)
             .map(|s| s.effective_stake >= self.config.minimum_stake)
+            .unwrap_or(false)
+    }
+
+    /// Whether a node meets the minimum stake, accounting for activation
+    /// threshold and grace period.
+    pub fn meets_minimum_stake_at(&self, node_id: &NodeId, now: DateTime<Utc>) -> bool {
+        let min = self.effective_minimum_stake(now);
+        if min == 0 {
+            return true; // No minimum enforced — anyone can mine.
+        }
+        self.stakes
+            .get(node_id)
+            .map(|s| s.effective_stake >= min)
             .unwrap_or(false)
     }
 
@@ -679,5 +757,90 @@ mod tests {
         assert!(eligible.contains(&node_a));
         assert!(!eligible.contains(&node_b));
         assert!(eligible.contains(&node_c));
+    }
+
+    // ========================================================================
+    // Staking activation threshold
+    // ========================================================================
+
+    #[test]
+    fn test_activation_not_triggered_below_threshold() {
+        let mut mgr = manager();
+        let ts = now();
+
+        // 999 miners — below 1,000 threshold.
+        assert!(!mgr.check_activation(999, ts));
+        assert!(!mgr.is_staking_activated());
+        assert_eq!(mgr.effective_minimum_stake(ts), 0);
+    }
+
+    #[test]
+    fn test_activation_triggers_at_threshold() {
+        let mut mgr = manager();
+        let ts = now();
+
+        assert!(mgr.check_activation(1_000, ts));
+        assert!(mgr.is_staking_activated());
+        assert_eq!(mgr.staking_activated_at(), Some(ts));
+    }
+
+    #[test]
+    fn test_activation_only_fires_once() {
+        let mut mgr = manager();
+        let ts = now();
+
+        assert!(mgr.check_activation(1_000, ts));
+        // Second call should return false (already activated).
+        assert!(!mgr.check_activation(2_000, ts));
+    }
+
+    #[test]
+    fn test_grace_period_minimum_is_zero() {
+        let mut mgr = manager();
+        let ts = now();
+
+        mgr.check_activation(1_000, ts);
+
+        // During grace period (30 days), effective minimum is still 0.
+        let during_grace = ts + chrono::Duration::days(15);
+        assert_eq!(mgr.effective_minimum_stake(during_grace), 0);
+
+        // Everyone can still mine during grace.
+        let node = test_node(1);
+        assert!(mgr.meets_minimum_stake_at(&node, during_grace));
+    }
+
+    #[test]
+    fn test_after_grace_period_minimum_enforced() {
+        let mut mgr = manager();
+        let ts = now();
+
+        mgr.check_activation(1_000, ts);
+
+        // After 30-day grace period, minimum kicks in.
+        let after_grace = ts + chrono::Duration::days(31);
+        assert_eq!(
+            mgr.effective_minimum_stake(after_grace),
+            mgr.config().activated_minimum_stake
+        );
+
+        // Node with no stake can no longer mine.
+        let node = test_node(1);
+        assert!(!mgr.meets_minimum_stake_at(&node, after_grace));
+
+        // Node with enough stake can mine.
+        mgr.stake(node, mgr.config().activated_minimum_stake, ts).unwrap();
+        assert!(mgr.meets_minimum_stake_at(&node, after_grace));
+    }
+
+    #[test]
+    fn test_genesis_everyone_can_mine() {
+        let mgr = manager();
+        let ts = now();
+
+        // Before activation, even nodes with 0 stake can mine.
+        let node = test_node(1);
+        assert!(mgr.meets_minimum_stake_at(&node, ts));
+        assert_eq!(mgr.effective_minimum_stake(ts), 0);
     }
 }

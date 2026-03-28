@@ -93,7 +93,24 @@ impl Default for ProofOfLifeConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StakingConfig {
     /// Minimum stake required to participate in mining (in Lux).
+    /// Starts at 0 (genesis) and activates automatically when the network
+    /// reaches `staking_activation_threshold` active miners.
     pub minimum_stake: Lux,
+    /// Minimum stake that activates once the network is large enough (in Lux).
+    /// WHY: At genesis, minimum_stake is 0 for zero-delay onboarding. Once
+    /// the network grows past staking_activation_threshold, this value becomes
+    /// the new minimum_stake. Governance-adjustable.
+    pub activated_minimum_stake: Lux,
+    /// Number of active miners required before minimum stake activates.
+    /// WHY: Below this threshold, multi-device gaming is not a meaningful
+    /// threat — even 10 phones is a tiny fraction of the network. Above it,
+    /// someone with 50 phones starts distorting reward distribution.
+    pub staking_activation_threshold: u64,
+    /// Grace period after staking activates (seconds). Existing zero-stake
+    /// miners have this long to accumulate enough GRAT to meet the minimum.
+    /// WHY: Prevents existing honest miners from being abruptly locked out
+    /// when the threshold is crossed.
+    pub staking_activation_grace_secs: u64,
     /// Maximum effective stake per node (in Lux). Excess overflows to pool.
     pub per_node_cap: Lux,
     /// Cooldown period for unstaking (seconds).
@@ -108,9 +125,12 @@ impl Default for StakingConfig {
             // WHY: Zero at genesis enables zero-delay onboarding — users install,
             // plug in, and mine immediately with no GRAT needed. PoL + energy
             // expenditure are sufficient Sybil defense for a young network.
-            // Governance can raise this later when the network is large enough
-            // that small-scale multi-device gaming becomes a real threat.
             minimum_stake: 0,
+            activated_minimum_stake: 50 * super::types::LUX_PER_GRAT, // 50 GRAT
+            staking_activation_threshold: 1_000, // 1,000 active miners
+            // WHY: 30 days gives miners ~43,200 minutes of mining time (at 8hr/day),
+            // which is more than enough to earn 50 GRAT even on a large network.
+            staking_activation_grace_secs: 30 * 24 * 3600, // 30 days
             per_node_cap: 1_000 * super::types::LUX_PER_GRAT, // 1,000 GRAT
             unstake_cooldown_secs: 7 * 24 * 3600,              // 7 days
             slash_rate_bps: 1000,                               // 10%
