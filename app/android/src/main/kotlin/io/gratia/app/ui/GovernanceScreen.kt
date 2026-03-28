@@ -54,6 +54,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -1214,10 +1215,14 @@ private fun CreateGovernanceDialog(
     if (selectedTab == 1) {
         // Create Poll
         var question by remember { mutableStateOf("") }
-        var optionsText by remember { mutableStateOf("") }
+        // WHY: Individual option fields instead of "one per line" textarea.
+        // Regular users don't expect to type multiple items separated by
+        // line breaks — they expect separate input fields like any form.
+        val options = remember { mutableStateListOf("", "") }
 
         val canAfford = walletBalanceLux >= POLL_CREATION_COST_LUX
-        val validOptions = optionsText.lines().count { it.trim().isNotEmpty() } >= 2
+        val validOptions = options.count { it.trim().isNotEmpty() } >= 2
+        val maxOptions = 10
 
         AlertDialog(
             onDismissRequest = onDismiss,
@@ -1281,25 +1286,66 @@ private fun CreateGovernanceDialog(
                             )
                         },
                     )
-                    OutlinedTextField(
-                        value = optionsText,
-                        onValueChange = { optionsText = it },
-                        label = { Text("Options (one per line)") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = false,
-                        minLines = 3,
-                        maxLines = 6,
+
+                    Text(
+                        text = "Options",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Medium,
                     )
+
+                    options.forEachIndexed { index, option ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            OutlinedTextField(
+                                value = option,
+                                onValueChange = { options[index] = it },
+                                label = { Text("Option ${index + 1}") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                            )
+                            // Show remove button only if more than 2 options
+                            if (options.size > 2) {
+                                IconButton(
+                                    onClick = { options.removeAt(index) },
+                                ) {
+                                    Text(
+                                        "✕",
+                                        color = MaterialTheme.colorScheme.error,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (options.size < maxOptions) {
+                        TextButton(
+                            onClick = { options.add("") },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("+ Add Option")
+                        }
+                    } else {
+                        Text(
+                            text = "Maximum $maxOptions options",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                            modifier = Modifier.fillMaxWidth(),
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        val options = optionsText.lines()
+                        val validOpts = options
                             .map { it.trim() }
                             .filter { it.isNotEmpty() }
-                        if (question.isNotBlank() && options.size >= 2) {
-                            onCreatePoll(question.trim(), options)
+                        if (question.isNotBlank() && validOpts.size >= 2) {
+                            onCreatePoll(question.trim(), validOpts)
                         }
                     },
                     enabled = question.isNotBlank() && validOptions && canAfford,
