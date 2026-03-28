@@ -243,13 +243,102 @@ private fun MiningStateCard(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             if (isMining) {
-                // Battery icon only — the spinning circle was invisible behind it
-                Icon(
-                    Icons.Default.BatteryChargingFull,
-                    contentDescription = null,
-                    tint = stateColor,
-                    modifier = Modifier.size(48.dp),
+                val infiniteTransition = rememberInfiniteTransition(label = "mining_anim")
+
+                // Pulsing outer ring
+                val pulseScale by infiniteTransition.animateFloat(
+                    initialValue = 1.0f,
+                    targetValue = 1.4f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(1200, easing = androidx.compose.animation.core.EaseOut),
+                        repeatMode = RepeatMode.Restart,
+                    ),
+                    label = "pulse_scale",
                 )
+                val pulseAlpha by infiniteTransition.animateFloat(
+                    initialValue = 0.5f,
+                    targetValue = 0.0f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(1200, easing = androidx.compose.animation.core.EaseOut),
+                        repeatMode = RepeatMode.Restart,
+                    ),
+                    label = "pulse_alpha",
+                )
+
+                // Spinning ring rotation
+                val rotation by infiniteTransition.animateFloat(
+                    initialValue = 0f,
+                    targetValue = 360f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(2000, easing = LinearEasing),
+                        repeatMode = RepeatMode.Restart,
+                    ),
+                    label = "ring_rotation",
+                )
+
+                // Glow brightness cycle
+                val glow by infiniteTransition.animateFloat(
+                    initialValue = 0.6f,
+                    targetValue = 1.0f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(800, easing = LinearEasing),
+                        repeatMode = RepeatMode.Reverse,
+                    ),
+                    label = "glow",
+                )
+
+                Box(
+                    modifier = Modifier.size(120.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    // Expanding pulse ring
+                    Canvas(
+                        modifier = Modifier
+                            .size(120.dp)
+                            .graphicsLayer {
+                                scaleX = pulseScale
+                                scaleY = pulseScale
+                                alpha = pulseAlpha
+                            },
+                    ) {
+                        drawCircle(
+                            color = stateColor,
+                            radius = size.minDimension / 2,
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3.dp.toPx()),
+                        )
+                    }
+
+                    // Spinning arc
+                    Canvas(
+                        modifier = Modifier
+                            .size(90.dp)
+                            .graphicsLayer { rotationZ = rotation },
+                    ) {
+                        drawArc(
+                            color = stateColor,
+                            startAngle = 0f,
+                            sweepAngle = 120f,
+                            useCenter = false,
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                width = 3.dp.toPx(),
+                                cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                            ),
+                        )
+                    }
+
+                    // Inner glowing circle
+                    Canvas(modifier = Modifier.size(60.dp)) {
+                        drawCircle(color = stateColor.copy(alpha = glow * 0.3f))
+                    }
+
+                    // Battery icon
+                    Icon(
+                        Icons.Default.BatteryChargingFull,
+                        contentDescription = null,
+                        tint = stateColor,
+                        modifier = Modifier.size(32.dp),
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
@@ -266,34 +355,13 @@ private fun MiningStateCard(
                     textAlign = TextAlign.Center,
                 )
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Animated dots to show activity: "Mining..." with cycling dots
-                val infiniteTransition = rememberInfiniteTransition(label = "dots")
-                val dotCount by infiniteTransition.animateFloat(
-                    initialValue = 0f,
-                    targetValue = 4f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(durationMillis = 1200, easing = LinearEasing),
-                        repeatMode = RepeatMode.Restart,
-                    ),
-                    label = "dot_count",
-                )
-                val dots = ".".repeat(dotCount.toInt().coerceIn(0, 3))
-                Text(
-                    text = "Mining$dots",
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    color = stateColor,
-                )
-
                 Spacer(modifier = Modifier.height(16.dp))
 
                 Text(
                     text = "${formatGrat(status.earnedThisSessionLux)} GRAT",
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold,
-                    color = stateColor,
+                    color = stateColor.copy(alpha = glow),
                 )
                 Text(
                     text = "earned so far",
