@@ -3205,6 +3205,7 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                                 guard.recent_blocks.pop_front();
                             }
 
+                            rust_log("REWARD: entering reward credit block");
                             // WHY: Credit mining reward to the block producer on
                             // finalization. The reward is earned by producing the
                             // block — if this node finalized it, this node gets paid.
@@ -3230,12 +3231,12 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                                     let _ = sm.db().put_account(&our_addr, &acct);
                                 }
 
-                                info!(
-                                    height = finalized_height,
-                                    reward_lux = reward,
-                                    new_balance_lux = current + reward,
-                                    "Block finalized — mining reward credited"
-                                );
+                                rust_log(&format!(
+                                    "REWARD: height={} reward={} Lux ({} GRAT) new_balance={} Lux ({} GRAT) active_miners={}",
+                                    finalized_height, reward, reward / 1_000_000,
+                                    current + reward, (current + reward) / 1_000_000,
+                                    active_miners
+                                ));
                             }
 
                             // WHY: Persist on-chain state to disk every 5 blocks.
