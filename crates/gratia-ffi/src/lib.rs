@@ -771,6 +771,55 @@ impl GratiaNode {
         Ok(())
     }
 
+    /// Reset chain state for a fresh genesis. Deletes chain_state.bin,
+    /// chain_state.db, and pol_state.bin. Wallet keys are preserved.
+    /// WHY: When transitioning from testnet to mainnet, the chain must
+    /// start fresh at block 0. The wallet (Ed25519 keypair) survives so
+    /// the user keeps their identity. All balances, blocks, and PoL
+    /// history are wiped — everyone starts equal at genesis.
+    pub fn reset_for_genesis(&self) -> Result<String, FfiError> {
+        let inner = self.lock_inner()?;
+        let data_dir = inner.chain_persistence
+            .as_ref()
+            .map(|p| p.data_dir().to_string())
+            .unwrap_or_default();
+
+        if data_dir.is_empty() {
+            return Err(FfiError::Other { message: "No data directory configured".into() });
+        }
+
+        let mut deleted = Vec::new();
+
+        // Delete chain metadata (height, tip hash)
+        let chain_bin = format!("{}/chain_state.bin", data_dir);
+        if std::fs::remove_file(&chain_bin).is_ok() {
+            deleted.push("chain_state.bin");
+        }
+
+        // Delete account state (balances, nonces, stakes)
+        let chain_db = format!("{}/chain_state.db", data_dir);
+        if std::fs::remove_file(&chain_db).is_ok() {
+            deleted.push("chain_state.db");
+        }
+
+        // Delete PoL history (consecutive days, trust tier)
+        let pol_state = format!("{}/pol_state.bin", data_dir);
+        if std::fs::remove_file(&pol_state).is_ok() {
+            deleted.push("pol_state.bin");
+        }
+
+        info!(
+            "FFI: Chain reset for genesis — deleted: [{}]. Wallet keys preserved.",
+            deleted.join(", ")
+        );
+
+        Ok(format!(
+            "Genesis reset complete. Deleted {} files: [{}]. Restart the app to begin at block 0.",
+            deleted.len(),
+            deleted.join(", ")
+        ))
+    }
+
     // ========================================================================
     // Wallet methods
     // ========================================================================
