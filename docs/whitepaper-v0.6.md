@@ -266,7 +266,7 @@ Gratia uses a capped staking model that turns wealth concentration into a benefi
 
 **Automatic staking activation.** At genesis, the minimum stake is zero. Anyone can install the app, plug in their phone, and begin mining immediately — consistent with Gratia's zero-delay onboarding principle. Staking activates automatically when the network reaches **1,000 active miners**. Below this threshold, multi-device gaming is not a meaningful threat: the network is small, the economic incentive to game it is negligible, and Proof of Life plus energy expenditure already provide two layers of defense. Above 1,000 miners, someone operating 50 phones would start distorting the reward pool — staking becomes necessary as a third pillar.
 
-When the 1,000-miner threshold is crossed, a **30-day grace period** begins. During this window, all existing miners continue mining normally while accumulating GRAT to meet the upcoming stake requirement. No honest miner gets locked out by a sudden activation. After the grace period, a **minimum stake of 50 GRAT** is enforced. This amount is governance-adjustable — as the token's value changes, the community can vote to raise or lower the minimum to keep it accessible.
+When the 1,000-miner threshold is crossed, a **7-day grace period** begins. During this window, all existing miners continue mining normally while accumulating GRAT to meet the upcoming stake requirement. No honest miner gets locked out by a sudden activation. After the grace period, a **minimum stake of 50 GRAT** is enforced. This amount is governance-adjustable — as the token's value changes, the community can vote to raise or lower the minimum to keep it accessible.
 
 **Per-node stake cap:** 1,000 GRAT (governance-adjustable). Staking up to this cap contributes directly to the node's economic commitment and is subject to slashing if the node acts dishonestly.
 
@@ -1049,7 +1049,7 @@ The protocol is backed by 872 automated tests across 15 crates in the full works
 | Sybil resistance | 13 | Stake caps block Sybil advantage, whale power capped, slash/ban enforcement |
 | Behavioral spoofing | 10 | Emulator TEE penalties, presence score boundaries, consistency bonuses |
 | Stake manipulation | 10 | Zero-stake rejection, exact-cap overflow, yield distribution, eligibility loss |
-| Staking activation | 8 | 1,000-miner threshold, 30-day grace period, 50 GRAT minimum enforcement |
+| Staking activation | 8 | 1,000-miner threshold, 7-day grace period, 50 GRAT minimum enforcement |
 | Bootstrap & connectivity | 6 | Internet-wide peer discovery, QUIC transport, health endpoints |
 | iOS integration | 12 | UniFFI Swift bindings, sensor manager interfaces, background services |
 | Security attack simulations | 56 | Phone farm, Sybil, network partition, behavioral spoofing, emulator detection, stake manipulation |
@@ -1115,7 +1115,7 @@ The three-pillar consensus security model (Proof of Life + Staking + Energy) has
 - ✅ Geographic sharding integration: per-shard committees (80/20 local/cross-shard), VRF selection, cross-shard Merkle receipts
 - ✅ iOS app: complete SwiftUI 5-tab app (Wallet, Mining, Network, Governance, Settings), 9 sensor managers, background services for PoL and mining, UniFFI Swift bridge
 - ✅ 56 security attack simulation tests (phone farm, Sybil, network partition, behavioral spoofing, emulator detection, stake manipulation)
-- ✅ Automatic staking activation at 1,000 miners with 30-day grace period and 50 GRAT minimum
+- ✅ Automatic staking activation at 1,000 miners with 7-day grace period and 50 GRAT minimum
 - ✅ 872 tests passing across 15 crates, zero failures
 
 ### Phase 4 — Public Mainnet (Next)

@@ -58,7 +58,7 @@ pub struct StakingManager {
     banned_nodes: HashMap<NodeId, DateTime<Utc>>,
     /// When the staking minimum was activated (None = still at genesis zero).
     /// WHY: Once the network crosses staking_activation_threshold miners,
-    /// a 30-day grace period begins. After the grace period, the minimum
+    /// a 7-day grace period begins. After the grace period, the minimum
     /// stake is enforced. This timestamp records when activation occurred.
     staking_activated_at: Option<DateTime<Utc>>,
 }
@@ -801,8 +801,8 @@ mod tests {
 
         mgr.check_activation(1_000, ts);
 
-        // During grace period (30 days), effective minimum is still 0.
-        let during_grace = ts + chrono::Duration::days(15);
+        // During grace period (7 days), effective minimum is still 0.
+        let during_grace = ts + chrono::Duration::days(3);
         assert_eq!(mgr.effective_minimum_stake(during_grace), 0);
 
         // Everyone can still mine during grace.
@@ -817,8 +817,8 @@ mod tests {
 
         mgr.check_activation(1_000, ts);
 
-        // After 30-day grace period, minimum kicks in.
-        let after_grace = ts + chrono::Duration::days(31);
+        // After 7-day grace period, minimum kicks in.
+        let after_grace = ts + chrono::Duration::days(8);
         assert_eq!(
             mgr.effective_minimum_stake(after_grace),
             mgr.config().activated_minimum_stake

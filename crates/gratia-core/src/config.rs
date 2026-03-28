@@ -128,9 +128,10 @@ impl Default for StakingConfig {
             minimum_stake: 0,
             activated_minimum_stake: 50 * super::types::LUX_PER_GRAT, // 50 GRAT
             staking_activation_threshold: 1_000, // 1,000 active miners
-            // WHY: 30 days gives miners ~43,200 minutes of mining time (at 8hr/day),
-            // which is more than enough to earn 50 GRAT even on a large network.
-            staking_activation_grace_secs: 30 * 24 * 3600, // 30 days
+            // WHY: 7 days is more than enough to earn 50 GRAT (at 1,000 miners,
+            // each miner earns ~360 GRAT/day — the minimum is hit in ~3 hours).
+            // Longer grace feels safer to users; shorter risks "locked out" perception.
+            staking_activation_grace_secs: 7 * 24 * 3600, // 7 days
             per_node_cap: 1_000 * super::types::LUX_PER_GRAT, // 1,000 GRAT
             unstake_cooldown_secs: 7 * 24 * 3600,              // 7 days
             slash_rate_bps: 1000,                               // 10%
