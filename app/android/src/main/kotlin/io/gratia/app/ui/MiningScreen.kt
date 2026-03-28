@@ -240,75 +240,58 @@ private fun MiningStateCard(
             modifier = Modifier.padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            // Animated indicator when mining
-            Box(
-                modifier = Modifier.size(100.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (isMining) {
-                    MiningPulseAnimation(stateColor)
-                    // Second pulse offset for double-ring effect
-                    val infiniteTransition = rememberInfiniteTransition(label = "mining_pulse2")
-                    val alpha2 by infiniteTransition.animateFloat(
-                        initialValue = 0.3f,
-                        targetValue = 0.0f,
-                        animationSpec = infiniteRepeatable(
-                            animation = tween(1500, delayMillis = 500, easing = androidx.compose.animation.core.EaseOut),
-                            repeatMode = RepeatMode.Restart,
-                        ),
-                        label = "pulse_alpha2",
+            if (isMining) {
+                // WHY: CircularProgressIndicator is guaranteed to animate
+                // on every Android device — Canvas-based custom animations
+                // failed silently on Samsung One UI.
+                Box(
+                    modifier = Modifier.size(100.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(100.dp),
+                        color = stateColor,
+                        strokeWidth = 4.dp,
                     )
-                    val scale2 by infiniteTransition.animateFloat(
-                        initialValue = 1.0f,
-                        targetValue = 1.6f,
-                        animationSpec = infiniteRepeatable(
-                            animation = tween(1500, delayMillis = 500, easing = androidx.compose.animation.core.EaseOut),
-                            repeatMode = RepeatMode.Restart,
-                        ),
-                        label = "pulse_scale2",
-                    )
-                    Canvas(
-                        modifier = Modifier.size(100.dp).graphicsLayer {
-                            this.alpha = alpha2; scaleX = scale2; scaleY = scale2
-                        },
-                    ) {
-                        drawCircle(color = stateColor, radius = size.minDimension / 2)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            Icons.Default.BatteryChargingFull,
+                            contentDescription = null,
+                            tint = stateColor,
+                            modifier = Modifier.size(32.dp),
+                        )
                     }
                 }
-                Canvas(modifier = Modifier.size(56.dp)) {
-                    drawCircle(color = stateColor)
-                }
-                // Icon overlay on the circle
-                if (isMining) {
-                    Icon(
-                        Icons.Default.BatteryChargingFull,
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.size(28.dp),
-                    )
-                }
-            }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Text(
-                text = if (isMining) "Mining" else miningStateLabel(status.state),
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                color = stateColor,
-            )
-
-            Text(
-                text = if (isMining) "Blocks producing — earning GRAT every few seconds" else miningStateDescription(status),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                textAlign = TextAlign.Center,
-            )
-
-            if (isMining) {
                 Spacer(modifier = Modifier.height(12.dp))
-                MiningActivityBar(stateColor)
+
+                Text(
+                    text = "Mining",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = stateColor,
+                )
+                Text(
+                    text = "Producing blocks and earning GRAT",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    textAlign = TextAlign.Center,
+                )
+
                 Spacer(modifier = Modifier.height(12.dp))
+
+                // Indeterminate progress bar as activity indicator
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .padding(horizontal = 24.dp),
+                    color = stateColor,
+                    trackColor = stateColor.copy(alpha = 0.15f),
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
                 Text(
                     text = "${formatGrat(status.earnedThisSessionLux)} GRAT",
                     style = MaterialTheme.typography.headlineMedium,
@@ -319,6 +302,31 @@ private fun MiningStateCard(
                     text = "earned so far",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                )
+            } else {
+                // Not mining — show static state
+                Box(
+                    modifier = Modifier.size(80.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Canvas(modifier = Modifier.size(56.dp)) {
+                        drawCircle(color = stateColor)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = miningStateLabel(status.state),
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = stateColor,
+                )
+                Text(
+                    text = miningStateDescription(status),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    textAlign = TextAlign.Center,
                 )
             }
 
