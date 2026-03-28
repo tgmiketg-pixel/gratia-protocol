@@ -112,7 +112,8 @@ fn test_rapid_stake_unstake_cooldown_prevents_gaming() {
 /// WHY: Whale overflow subsidizes small miners by design.
 #[test]
 fn test_pool_yield_distribution_proportional() {
-    let config = default_config();
+    let mut config = default_config();
+    config.minimum_stake = 100_000_000; // 100 GRAT — non-zero to test enforcement
     let cap = config.per_node_cap;
     let mut mgr = StakingManager::new(config);
     let ts = now();
@@ -165,10 +166,11 @@ fn test_pool_yield_distribution_proportional() {
     );
 }
 
-/// Zero stake: cannot mine (minimum not met).
+/// Zero stake: cannot mine when minimum is set.
 #[test]
 fn test_zero_stake_cannot_mine() {
-    let config = default_config();
+    let mut config = default_config();
+    config.minimum_stake = 100_000_000; // 100 GRAT — non-zero to test enforcement
     let mgr = StakingManager::new(config);
     let node = test_node(1);
 
@@ -184,7 +186,8 @@ fn test_zero_stake_cannot_mine() {
 /// VERIFY: Consensus power is capped, but yield benefits entire network.
 #[test]
 fn test_whale_stakes_1m_grat_excess_subsidizes_network() {
-    let config = default_config();
+    let mut config = default_config();
+    config.minimum_stake = 100_000_000; // 100 GRAT — non-zero to test enforcement
     let cap = config.per_node_cap;
     let mut mgr = StakingManager::new(config.clone());
     let ts = now();
@@ -240,7 +243,8 @@ fn test_whale_stakes_1m_grat_excess_subsidizes_network() {
 /// Staking below minimum: can deposit but not mine.
 #[test]
 fn test_below_minimum_stake_deposits_but_cannot_mine() {
-    let config = default_config();
+    let mut config = default_config();
+    config.minimum_stake = 100_000_000; // 100 GRAT — non-zero to test enforcement
     let minimum = config.minimum_stake;
     let mut mgr = StakingManager::new(config);
     let node = test_node(1);

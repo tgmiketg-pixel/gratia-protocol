@@ -451,7 +451,12 @@ mod tests {
 
     #[test]
     fn test_meets_minimum_stake() {
-        let mut mgr = manager();
+        // WHY: Use a non-zero minimum to test enforcement logic.
+        // Genesis default is 0 (zero-delay onboarding), but governance
+        // can raise it later, so the check must still work.
+        let mut config = default_config();
+        config.minimum_stake = 100_000_000; // 100 GRAT
+        let mut mgr = StakingManager::new(config);
         let node = test_node(1);
         let min = mgr.config().minimum_stake;
 
@@ -463,7 +468,9 @@ mod tests {
 
     #[test]
     fn test_below_minimum_stake() {
-        let mut mgr = manager();
+        let mut config = default_config();
+        config.minimum_stake = 100_000_000; // 100 GRAT
+        let mut mgr = StakingManager::new(config);
         let node = test_node(1);
         let min = mgr.config().minimum_stake;
 
@@ -654,7 +661,9 @@ mod tests {
 
     #[test]
     fn test_eligible_miners() {
-        let mut mgr = manager();
+        let mut config = default_config();
+        config.minimum_stake = 100_000_000; // 100 GRAT
+        let mut mgr = StakingManager::new(config);
         let min = mgr.config().minimum_stake;
 
         let node_a = test_node(1);

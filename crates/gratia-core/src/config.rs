@@ -105,7 +105,12 @@ pub struct StakingConfig {
 impl Default for StakingConfig {
     fn default() -> Self {
         StakingConfig {
-            minimum_stake: 100 * super::types::LUX_PER_GRAT,  // 100 GRAT
+            // WHY: Zero at genesis enables zero-delay onboarding — users install,
+            // plug in, and mine immediately with no GRAT needed. PoL + energy
+            // expenditure are sufficient Sybil defense for a young network.
+            // Governance can raise this later when the network is large enough
+            // that small-scale multi-device gaming becomes a real threat.
+            minimum_stake: 0,
             per_node_cap: 1_000 * super::types::LUX_PER_GRAT, // 1,000 GRAT
             unstake_cooldown_secs: 7 * 24 * 3600,              // 7 days
             slash_rate_bps: 1000,                               // 10%

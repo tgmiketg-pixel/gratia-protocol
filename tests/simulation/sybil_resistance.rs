@@ -161,7 +161,8 @@ fn test_stake_splitting_no_consensus_advantage() {
 /// DEFENSE: Nodes below minimum stake cannot mine.
 #[test]
 fn test_low_stake_nodes_cannot_mine() {
-    let config = StakingConfig::default();
+    let mut config = StakingConfig::default();
+    config.minimum_stake = 100_000_000; // 100 GRAT — non-zero to test enforcement
     let minimum = config.minimum_stake;
     let mut mgr = StakingManager::new(config);
 
