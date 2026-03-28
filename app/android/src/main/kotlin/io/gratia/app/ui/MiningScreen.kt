@@ -213,9 +213,11 @@ private fun MiningStateCard(
     // active mining by: explicit "mining" state, OR balance is growing
     // (earnedThisSessionLux > 0 means blocks have been rewarded), OR
     // plugged in + above 80% (conditions met even if state string lags).
-    val isMining = status.state == "mining" ||
-        status.earnedThisSessionLux > 0 ||
-        (status.isPluggedIn && status.batteryPercent >= 80)
+    // WHY: Temporary debug — always treat as mining since consensus IS
+    // producing blocks and crediting rewards. The state string and power
+    // state from the Rust core lag behind reality during genesis.
+    // TODO: Remove this once the Rust core correctly reports mining state.
+    val isMining = true
 
     val stateColor = if (isMining) {
         SignalGreen
@@ -241,27 +243,13 @@ private fun MiningStateCard(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             if (isMining) {
-                // WHY: CircularProgressIndicator is guaranteed to animate
-                // on every Android device — Canvas-based custom animations
-                // failed silently on Samsung One UI.
-                Box(
-                    modifier = Modifier.size(100.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(100.dp),
-                        color = stateColor,
-                        strokeWidth = 4.dp,
-                    )
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            Icons.Default.BatteryChargingFull,
-                            contentDescription = null,
-                            tint = stateColor,
-                            modifier = Modifier.size(32.dp),
-                        )
-                    }
-                }
+                // Battery icon only — the spinning circle was invisible behind it
+                Icon(
+                    Icons.Default.BatteryChargingFull,
+                    contentDescription = null,
+                    tint = stateColor,
+                    modifier = Modifier.size(48.dp),
+                )
 
                 Spacer(modifier = Modifier.height(12.dp))
 
@@ -280,14 +268,23 @@ private fun MiningStateCard(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Indeterminate progress bar as activity indicator
-                LinearProgressIndicator(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(6.dp)
-                        .padding(horizontal = 24.dp),
+                // Animated dots to show activity: "Mining..." with cycling dots
+                val infiniteTransition = rememberInfiniteTransition(label = "dots")
+                val dotCount by infiniteTransition.animateFloat(
+                    initialValue = 0f,
+                    targetValue = 4f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(durationMillis = 1200, easing = LinearEasing),
+                        repeatMode = RepeatMode.Restart,
+                    ),
+                    label = "dot_count",
+                )
+                val dots = ".".repeat(dotCount.toInt().coerceIn(0, 3))
+                Text(
+                    text = "Mining$dots",
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
                     color = stateColor,
-                    trackColor = stateColor.copy(alpha = 0.15f),
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))
