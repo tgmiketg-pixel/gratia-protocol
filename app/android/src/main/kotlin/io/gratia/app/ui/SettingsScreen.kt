@@ -46,11 +46,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.PowerManager
+import android.provider.Settings as AndroidSettings
 
 // ============================================================================
 // SettingsScreen
@@ -160,11 +167,50 @@ private fun SettingsContent(
     onShowBeneficiaryDialog: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
+    // WHY: Check on every recomposition so the card disappears immediately
+    // after the user grants the exemption and returns to the app.
+    val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+    val isBatteryRestricted = !powerManager.isIgnoringBatteryOptimizations(context.packageName)
+
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
         modifier = modifier.fillMaxSize(),
     ) {
+        // Battery optimization warning (shows only when restricted)
+        if (isBatteryRestricted) {
+            item {
+                BatteryOptimizationCard(
+                    onFixNow = {
+                        // WHY: Opens the system dialog asking to exempt this app.
+                        // This is the standard Android mechanism — not Samsung-specific.
+                        try {
+                            val intent = Intent(
+                                AndroidSettings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+                            ).apply {
+                                data = Uri.parse("package:${context.packageName}")
+                            }
+                            context.startActivity(intent)
+                        } catch (_: Exception) {
+                            // Fallback: open general battery settings
+                            val intent = Intent(AndroidSettings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                            context.startActivity(intent)
+                        }
+                    },
+                    onOpenSettings = {
+                        // WHY: Some Samsung/Xiaomi/Huawei phones need the user to
+                        // manually find the app in battery settings. This opens the
+                        // app-specific settings page as a fallback.
+                        val intent = Intent(AndroidSettings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.parse("package:${context.packageName}")
+                        }
+                        context.startActivity(intent)
+                    },
+                )
+            }
+        }
+
         // Wallet section
         item {
             WalletSettingsSection(onShowExportSeed)
@@ -575,6 +621,80 @@ private fun AboutRow(label: String, value: String) {
             style = MaterialTheme.typography.bodyMedium,
             fontFamily = FontFamily.Monospace,
         )
+    }
+}
+
+// ============================================================================
+// Battery Optimization Warning
+// ============================================================================
+
+@Composable
+private fun BatteryOptimizationCard(
+    onFixNow: () -> Unit,
+    onOpenSettings: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFFFFF3E0), // Light amber background
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.Warning,
+                    contentDescription = null,
+                    tint = Color(0xFFE65100), // Deep orange
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Background Activity Restricted",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFE65100),
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "Your phone may stop Gratia from running in the background. " +
+                    "This means Proof of Life data won't be collected and mining " +
+                    "may stop when the app isn't open.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color(0xFF4E342E),
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Button(
+                onClick = onFixNow,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFFE65100),
+                ),
+            ) {
+                Text("Allow Background Activity")
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "If the button above doesn't work, tap below to open app settings " +
+                    "and set Battery to \"Unrestricted\".",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF6D4C41),
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            TextButton(onClick = onOpenSettings) {
+                Text(
+                    "Open App Settings",
+                    color = Color(0xFFE65100),
+                )
+            }
+        }
     }
 }
 
