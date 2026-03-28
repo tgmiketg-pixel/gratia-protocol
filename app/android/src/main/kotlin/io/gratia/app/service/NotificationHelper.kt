@@ -65,13 +65,25 @@ object NotificationHelper {
             enableVibration(false)
         }
 
+        // WHY: Same channel ID issue as PoL — delete old channel that had
+        // sound/vibration enabled, recreate as silent.
+        manager.getNotificationChannel(CHANNEL_MINING)?.let {
+            if (it.shouldVibrate() || it.sound != null) {
+                manager.deleteNotificationChannel(CHANNEL_MINING)
+            }
+        }
+
         val miningChannel = NotificationChannel(
             CHANNEL_MINING,
             "Mining",
-            NotificationManager.IMPORTANCE_DEFAULT
+            NotificationManager.IMPORTANCE_LOW
         ).apply {
             description = "Active GRAT mining status"
-            setShowBadge(true)
+            setShowBadge(false)
+            // WHY: Mining runs for hours. Sound/vibration on every notification
+            // update would drive users insane. Silent + visible icon only.
+            setSound(null, null)
+            enableVibration(false)
         }
 
         // WHY: HIGH importance for transactions — the user wants to know immediately
@@ -150,7 +162,8 @@ object NotificationHelper {
             .setContentText("Mining GRAT \u2014 $earningsPerHour")
             .setSmallIcon(io.gratia.app.R.drawable.ic_notification)
             .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
             .apply { pendingIntent?.let { setContentIntent(it) } }
             .build()
