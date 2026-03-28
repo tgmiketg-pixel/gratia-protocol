@@ -785,7 +785,7 @@ impl GratiaNode {
             .unwrap_or_default();
 
         if data_dir.is_empty() {
-            return Err(FfiError::Other { message: "No data directory configured".into() });
+            return Err(FfiError::InternalError { reason: "No data directory configured".into() });
         }
 
         let mut deleted = Vec::new();
@@ -3205,16 +3205,18 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                                 guard.recent_blocks.pop_front();
                             }
 
-                            // WHY: Credit mining reward to wallet on block finalization.
-                            // In production, rewards are distributed via the emission
-                            // schedule to all active miners. For Phase 1 demo, the
-                            // block producer gets the full reward (50 GRAT per block).
-                            if guard.mining_state == MiningState::Mining {
-                                // WHY: Use the real emission schedule to compute block
-                                // rewards based on chain height. The reward decreases
-                                // 25% annually per the tokenomics spec.
-                                // For the demo, we assume 3 active miners (2 real + 1 synthetic).
-                                let active_miners = 3u64;
+                            // WHY: Credit mining reward to the block producer on
+                            // finalization. The reward is earned by producing the
+                            // block — if this node finalized it, this node gets paid.
+                            // Mining state gates block production eligibility in
+                            // production, but the reward always follows the block.
+                            {
+                                // WHY: active_miners count determines per-miner share.
+                                // With 1 miner, they get the full block reward. As more
+                                // join, the reward splits proportionally.
+                                let active_miners = 1u64.max(
+                                    guard.staking.staker_count() as u64
+                                ).max(1);
                                 let reward: Lux = gratia_core::emission::EmissionSchedule
                                     ::per_miner_block_reward_lux(finalized_height, active_miners);
                                 let current = guard.wallet.balance();
@@ -3233,11 +3235,6 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                                     reward_lux = reward,
                                     new_balance_lux = current + reward,
                                     "Block finalized — mining reward credited"
-                                );
-                            } else {
-                                info!(
-                                    height = finalized_height,
-                                    "Block finalized (demo mode)"
                                 );
                             }
 
