@@ -216,7 +216,11 @@ private fun MiningStateCard(
         else -> MaterialTheme.colorScheme.outline
     }
 
-    val isMining = status.state == "mining"
+    // WHY: During genesis, mining state may be "proof_of_life" even though
+    // blocks are being produced and rewards are accumulating. If plugged in
+    // + above 80%, mining IS active regardless of the state string.
+    val isMining = status.state == "mining" ||
+        (status.state == "proof_of_life" && status.isPluggedIn && status.batteryPercent >= 80)
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -251,10 +255,22 @@ private fun MiningStateCard(
             )
 
             Text(
-                text = miningStateDescription(status),
+                text = if (isMining) "Mining active — earning GRAT" else miningStateDescription(status),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
             )
+
+            if (isMining) {
+                Spacer(modifier = Modifier.height(8.dp))
+                MiningActivityBar(stateColor)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "${formatGrat(status.earnedThisSessionLux)} GRAT earned this session",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = stateColor,
+                )
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
 
@@ -338,6 +354,47 @@ private fun MiningPulseAnimation(color: Color) {
         drawCircle(
             color = color,
             radius = size.minDimension / 2,
+        )
+    }
+}
+
+/**
+ * Animated horizontal activity bar showing mining is active.
+ * A bright segment sweeps back and forth continuously.
+ */
+@Composable
+private fun MiningActivityBar(color: Color) {
+    val infiniteTransition = rememberInfiniteTransition(label = "mining_bar")
+    val progress by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 2000, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "bar_sweep",
+    )
+
+    Canvas(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(4.dp)
+            .padding(horizontal = 24.dp),
+    ) {
+        // Background track
+        drawRoundRect(
+            color = color.copy(alpha = 0.15f),
+            size = size,
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx()),
+        )
+        // Sweeping active segment (20% width)
+        val segmentWidth = size.width * 0.2f
+        val xOffset = progress * (size.width - segmentWidth)
+        drawRoundRect(
+            color = color,
+            topLeft = androidx.compose.ui.geometry.Offset(xOffset, 0f),
+            size = androidx.compose.ui.geometry.Size(segmentWidth, size.height),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx()),
         )
     }
 }

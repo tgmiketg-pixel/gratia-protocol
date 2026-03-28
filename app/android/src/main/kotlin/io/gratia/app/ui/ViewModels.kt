@@ -38,6 +38,7 @@ data class MiningStatus(
     val isPluggedIn: Boolean,
     val currentDayPolValid: Boolean,
     val presenceScore: Int,
+    val earnedThisSessionLux: Long = 0,
 )
 
 data class ProofOfLifeStatus(
@@ -380,6 +381,7 @@ class MiningViewModel : ViewModel() {
             val mining = bridge.getMiningStatus()
             val pol = bridge.getProofOfLifeStatus()
             val stake = bridge.getStakeInfo()
+            val walletBalance = try { bridge.getWalletInfo().balanceLux } catch (_: Exception) { 0L }
             _uiState.value = _uiState.value.copy(
                 miningStatus = MiningStatus(
                     state = mining.state,
@@ -387,6 +389,7 @@ class MiningViewModel : ViewModel() {
                     isPluggedIn = mining.isPluggedIn,
                     currentDayPolValid = mining.currentDayPolValid,
                     presenceScore = mining.presenceScore,
+                    earnedThisSessionLux = walletBalance,
                 ),
                 polStatus = ProofOfLifeStatus(
                     isValidToday = pol.isValidToday,
@@ -413,6 +416,7 @@ class MiningViewModel : ViewModel() {
                 val mining = bridge.getMiningStatus()
                 val pol = bridge.getProofOfLifeStatus()
                 val stake = bridge.getStakeInfo()
+                val walletBalance = try { bridge.getWalletInfo().balanceLux } catch (_: Exception) { 0L }
                 _uiState.value = MiningUiState(
                     miningStatus = MiningStatus(
                         state = mining.state,
@@ -420,6 +424,7 @@ class MiningViewModel : ViewModel() {
                         isPluggedIn = mining.isPluggedIn,
                         currentDayPolValid = mining.currentDayPolValid,
                         presenceScore = mining.presenceScore,
+                        earnedThisSessionLux = walletBalance,
                     ),
                     polStatus = ProofOfLifeStatus(
                         isValidToday = pol.isValidToday,
