@@ -755,13 +755,19 @@ impl GratiaNode {
     /// Enable debug bypass for PoL and staking checks.
     /// WHY: During development and device testing, a full 24-hour PoL window
     /// is impractical. This lets us test the mining and transaction flow
-    /// immediately. Only compiles in debug builds — release builds exclude
-    /// this method entirely so it cannot be called.
-    #[cfg(debug_assertions)]
+    /// immediately. In release builds this is a no-op — the bypass flag is
+    /// silently ignored so it cannot weaken production security.
     pub fn enable_debug_bypass(&self) -> Result<(), FfiError> {
-        let mut inner = self.lock_inner()?;
-        inner.debug_bypass_checks = true;
-        info!("FFI: debug bypass enabled — PoL and staking checks will be skipped");
+        #[cfg(debug_assertions)]
+        {
+            let mut inner = self.lock_inner()?;
+            inner.debug_bypass_checks = true;
+            info!("FFI: debug bypass enabled — PoL and staking checks will be skipped");
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            info!("FFI: enable_debug_bypass called in release build — ignored");
+        }
         Ok(())
     }
 
