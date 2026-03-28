@@ -129,13 +129,11 @@ class GratiaApplication : Application() {
             }
             Log.i(TAG, "P2P network status — listening on: ${status?.listenAddress ?: "unknown"}, peers: ${status?.peerCount ?: 0}")
 
-            // WHY: Start everything quickly. The bootstrap node is a known
-            // address so peer discovery is near-instant (no mDNS needed).
-            // A 2-second delay gives the network listener time to bind
-            // before consensus tries to use it.
+            // WHY: Start everything immediately on a background thread.
+            // No artificial delays — the bootstrap node is a known address
+            // so peer discovery is near-instant. The thread avoids blocking
+            // the main thread (which would freeze the UI).
             Thread {
-                Thread.sleep(2_000)
-
                 // Explorer API + GratiaVM — no peer dependency
                 try {
                     val url = GratiaCoreManager.startExplorerApi(8080)

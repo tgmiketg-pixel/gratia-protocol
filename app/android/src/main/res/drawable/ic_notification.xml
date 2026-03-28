@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Gratia notification icon — monochrome (white on transparent) as required
+     by Android status bar. Simplified version showing the phone silhouette
+     with ECG heartbeat line inside a circle. The system tints this white
+     in the status bar and uses the accent color in the notification shade. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- Outer circle (compass ring simplified) -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.5"
+        android:pathData="M12,12 m-11,0 a11,11 0 1,1 22,0 a11,11 0 1,1 -22,0"/>
+
+    <!-- Phone body -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M8.5,4 h7 c0.8,0 1.5,0.7 1.5,1.5 v13 c0,0.8 -0.7,1.5 -1.5,1.5 h-7 c-0.8,0 -1.5,-0.7 -1.5,-1.5 v-13 c0,-0.8 0.7,-1.5 1.5,-1.5 z"/>
+
+    <!-- Phone screen (cut out) -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M9,6 h6 c0.3,0 0.5,0.2 0.5,0.5 v9 c0,0.3 -0.2,0.5 -0.5,0.5 h-6 c-0.3,0 -0.5,-0.2 -0.5,-0.5 v-9 c0,-0.3 0.2,-0.5 0.5,-0.5 z"/>
+
+    <!-- ECG heartbeat line -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M9,11 l1.5,0 l0.8,-2.5 l1.7,5 l1.7,-4.5 l0.8,2 l1.5,0"/>
+
+</vector>
