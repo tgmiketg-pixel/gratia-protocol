@@ -58,6 +58,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -241,41 +242,83 @@ private fun MiningStateCard(
         ) {
             // Animated indicator when mining
             Box(
-                modifier = Modifier.size(80.dp),
+                modifier = Modifier.size(100.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 if (isMining) {
                     MiningPulseAnimation(stateColor)
+                    // Second pulse offset for double-ring effect
+                    val infiniteTransition = rememberInfiniteTransition(label = "mining_pulse2")
+                    val alpha2 by infiniteTransition.animateFloat(
+                        initialValue = 0.3f,
+                        targetValue = 0.0f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(1500, delayMillis = 500, easing = androidx.compose.animation.core.EaseOut),
+                            repeatMode = RepeatMode.Restart,
+                        ),
+                        label = "pulse_alpha2",
+                    )
+                    val scale2 by infiniteTransition.animateFloat(
+                        initialValue = 1.0f,
+                        targetValue = 1.6f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(1500, delayMillis = 500, easing = androidx.compose.animation.core.EaseOut),
+                            repeatMode = RepeatMode.Restart,
+                        ),
+                        label = "pulse_scale2",
+                    )
+                    Canvas(
+                        modifier = Modifier.size(100.dp).graphicsLayer {
+                            this.alpha = alpha2; scaleX = scale2; scaleY = scale2
+                        },
+                    ) {
+                        drawCircle(color = stateColor, radius = size.minDimension / 2)
+                    }
                 }
-                Canvas(modifier = Modifier.size(48.dp)) {
+                Canvas(modifier = Modifier.size(56.dp)) {
                     drawCircle(color = stateColor)
+                }
+                // Icon overlay on the circle
+                if (isMining) {
+                    Icon(
+                        Icons.Default.BatteryChargingFull,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(28.dp),
+                    )
                 }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
 
             Text(
-                text = miningStateLabel(status.state),
+                text = if (isMining) "Mining" else miningStateLabel(status.state),
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 color = stateColor,
             )
 
             Text(
-                text = if (isMining) "Mining active — earning GRAT" else miningStateDescription(status),
+                text = if (isMining) "Blocks producing — earning GRAT every few seconds" else miningStateDescription(status),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                textAlign = TextAlign.Center,
             )
 
             if (isMining) {
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(12.dp))
                 MiningActivityBar(stateColor)
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    text = "${formatGrat(status.earnedThisSessionLux)} GRAT earned this session",
-                    style = MaterialTheme.typography.titleMedium,
+                    text = "${formatGrat(status.earnedThisSessionLux)} GRAT",
+                    style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold,
                     color = stateColor,
+                )
+                Text(
+                    text = "earned so far",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                 )
             }
 
