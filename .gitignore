@@ -4,3 +4,14 @@ Cargo.lock
 *.swp
 *.swo
 .DS_Store
+
+# Build artifacts
+*.so
+*.dylib
+*.dll
+*.apk
+app/android/.gradle/
+app/android/build/
+app/android/local.properties
+web/site/node_modules/
+web/site/package-lock.json
