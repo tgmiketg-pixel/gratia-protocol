@@ -1637,18 +1637,46 @@ impl GratiaNode {
                                 // against correct nonces. This closes the gap where only
                                 // locally-produced blocks updated state.
                                 if let Some(ref sm) = inner.state_manager {
+                                    let our_addr = inner.wallet.address().ok();
                                     let mut applied = 0u32;
+                                    let mut incoming_lux: Lux = 0;
                                     for tx in &block_clone.transactions {
+                                        let sender_addr = gratia_core::types::Address::from_pubkey(&tx.sender_pubkey);
                                         match &tx.payload {
                                             gratia_core::types::TransactionPayload::Transfer { to, amount } => {
-                                                // Credit the recipient
-                                                let mut acct = sm.get_account(to).unwrap_or_default();
-                                                acct.balance += amount;
-                                                let _ = sm.db().put_account(to, &acct);
+                                                // Debit sender
+                                                let mut sender_acct = sm.get_account(&sender_addr).unwrap_or_default();
+                                                let total = amount + tx.fee;
+                                                if sender_acct.balance >= total {
+                                                    sender_acct.balance -= total;
+                                                    sender_acct.nonce += 1;
+                                                    let _ = sm.db().put_account(&sender_addr, &sender_acct);
+                                                }
+                                                // Credit recipient
+                                                let mut recv_acct = sm.get_account(to).unwrap_or_default();
+                                                recv_acct.balance += amount;
+                                                let _ = sm.db().put_account(to, &recv_acct);
+                                                // WHY: Track incoming transfers to our wallet so
+                                                // the wallet UI balance updates immediately.
+                                                if let Some(ref our) = our_addr {
+                                                    if to == our {
+                                                        incoming_lux += amount;
+                                                    }
+                                                }
                                                 applied += 1;
                                             }
                                             _ => { applied += 1; }
                                         }
+                                    }
+                                    // Update local wallet balance for incoming transfers
+                                    if incoming_lux > 0 {
+                                        let current = inner.wallet.balance();
+                                        inner.wallet.sync_balance(current + incoming_lux);
+                                        rust_log(&format!(
+                                            "Received {} Lux ({} GRAT) — new wallet balance: {} Lux",
+                                            incoming_lux, incoming_lux / 1_000_000,
+                                            current + incoming_lux
+                                        ));
                                     }
                                     if applied > 0 {
                                         rust_log(&format!(
