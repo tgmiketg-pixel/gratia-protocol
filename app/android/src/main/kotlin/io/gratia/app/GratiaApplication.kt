@@ -262,6 +262,25 @@ class GratiaApplication : Application() {
                     Log.e(TAG, "Failed to create wallet: ${e2.message}")
                 }
             }
+            // WHY: Auto-start networking and consensus on launch so the user
+            // never has to manually navigate to the Network tab. This matches
+            // the "install, plug in, mine" zero-delay onboarding design.
+            // Network connects to the bootstrap node, consensus starts
+            // producing/validating blocks immediately.
+            try {
+                GratiaCoreManager.startNetwork(9000)
+                Log.i(TAG, "Network auto-started on port 9000")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to auto-start network: ${e.message}")
+            }
+
+            try {
+                GratiaCoreManager.startConsensus()
+                Log.i(TAG, "Consensus auto-started")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to auto-start consensus: ${e.message}")
+            }
+
         } catch (e: Exception) {
             // WHY: We log but don't crash here. The app can still display the UI
             // and will show appropriate error states. This handles the case where
