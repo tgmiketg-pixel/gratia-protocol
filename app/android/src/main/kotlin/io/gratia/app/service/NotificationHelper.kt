@@ -26,7 +26,9 @@ object NotificationHelper {
     // existing channel, and deleting a channel while a foreground service uses
     // it crashes (enforceDeletingChannelHasNoFgService). A new ID sidesteps both.
     const val CHANNEL_PROOF_OF_LIFE = "proof_of_life_v2"
-    const val CHANNEL_MINING = "mining"
+    // WHY: "mining_v2" replaces old "mining" channel that had sound/vibration.
+    // Can't delete old channel while foreground service uses it (crashes on Samsung).
+    const val CHANNEL_MINING = "mining_v2"
     const val CHANNEL_TRANSACTIONS = "transactions"
 
     // -- Notification IDs --------------------------------------------------
@@ -63,14 +65,6 @@ object NotificationHelper {
             // WHY: No sound, no vibration — this is a silent persistent notification.
             setSound(null, null)
             enableVibration(false)
-        }
-
-        // WHY: Same channel ID issue as PoL — delete old channel that had
-        // sound/vibration enabled, recreate as silent.
-        manager.getNotificationChannel(CHANNEL_MINING)?.let {
-            if (it.shouldVibrate() || it.sound != null) {
-                manager.deleteNotificationChannel(CHANNEL_MINING)
-            }
         }
 
         val miningChannel = NotificationChannel(
