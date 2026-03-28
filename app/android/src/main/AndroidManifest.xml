@@ -22,6 +22,9 @@
     <!-- NFC: required for tap-to-transact feature -->
     <uses-permission android:name="android.permission.NFC" />
 
+    <!-- Notifications: Android 13+ requires explicit permission for foreground service notifications -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- Foreground service: required for PoL background collection and mining -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <!-- Android 14+ requires declaring foreground service types -->

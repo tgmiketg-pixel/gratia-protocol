@@ -265,6 +265,17 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
             }
         }
 
+        // Android 13+ notification permission
+        // WHY: Without this, foreground service notifications are silently
+        // blocked on Android 13+. The user never sees mining/PoL status.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                needed.add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+
         if (needed.isEmpty()) {
             // All permissions already granted
             startPolService()
@@ -478,7 +489,17 @@ fun GratiaApp() {
             composable(GratiaRoutes.WALLET) {
                 io.gratia.app.ui.WalletScreen(
                     onNavigateToSettings = {
-                        navController.navigate(GratiaRoutes.SETTINGS)
+                        // WHY: Use the same navigation pattern as the bottom bar
+                        // so Settings replaces the current tab instead of stacking.
+                        // This lets the bottom bar highlight Settings and back
+                        // navigation works normally via the tabs.
+                        navController.navigate(GratiaRoutes.SETTINGS) {
+                            popUpTo(navController.graph.findStartDestination().id) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
                     },
                 )
             }
