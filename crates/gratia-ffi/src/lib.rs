@@ -1023,21 +1023,25 @@ impl GratiaNode {
                 ),
             });
         }
-        if !inner.is_debug_bypass() {
-            if !inner.pol.is_mining_eligible() {
-                return Err(FfiError::MiningNotAvailable {
-                    reason: "Proof of Life not yet valid for today".into(),
-                });
-            }
+        // WHY: PoL and staking checks are logged but not blocking during
+        // early network growth. At genesis, no one has 24 hours of PoL data
+        // yet. The three-pillar defense (PoL + staking + energy) builds up
+        // as the network matures. Blocking mining on day one contradicts
+        // zero-delay onboarding.
+        //
+        // Once the network has enough participants and PoL data has accumulated,
+        // these checks should be re-enabled via governance to enforce the full
+        // three-pillar model.
+        if !inner.pol.is_mining_eligible() {
+            info!("Mining started with incomplete PoL (expected during early network)");
+        }
 
-            let node_id = self.get_node_id_or_default(&inner);
-            let has_min_stake = inner.staking.meets_minimum_stake(&node_id);
-            if !has_min_stake {
-                return Err(FfiError::MiningNotAvailable {
-                    reason: "minimum stake not met".into(),
-                });
-            }
-        } else {
+        let node_id = self.get_node_id_or_default(&inner);
+        if !inner.staking.meets_minimum_stake(&node_id) {
+            info!("Mining started without minimum stake (genesis: minimum_stake=0)");
+        }
+
+        if inner.is_debug_bypass() {
             info!("FFI: debug bypass active — skipping PoL and staking checks");
         }
 

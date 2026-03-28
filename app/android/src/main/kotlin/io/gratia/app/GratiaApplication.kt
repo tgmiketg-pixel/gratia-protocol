@@ -3,6 +3,7 @@ package io.gratia.app
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.util.Log
@@ -172,6 +173,33 @@ class GratiaApplication : Application() {
                     Log.i(TAG, "Consensus started — slot: ${consensusStatus.currentSlot}, committee: ${consensusStatus.isCommitteeMember}")
                 } catch (e: Exception) {
                     Log.w(TAG, "Consensus start failed (may already be running): ${e.message}")
+                }
+
+                // WHY: Auto-start mining so users earn GRAT immediately without
+                // needing to open the Mining tab. Also starts the MiningService
+                // foreground notification so the user sees mining is active.
+                try {
+                    // Update power state so the Rust core knows we're plugged in
+                    val batteryManager = getSystemService(Context.BATTERY_SERVICE) as? android.os.BatteryManager
+                    val isCharging = batteryManager?.isCharging ?: false
+                    val batteryPct = batteryManager?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 0
+                    GratiaCoreManager.updatePowerState(isCharging, batteryPct)
+                    Log.i(TAG, "Power state updated: charging=$isCharging, battery=$batteryPct%")
+
+                    // Start mining in the Rust core
+                    GratiaCoreManager.startMining()
+                    Log.i(TAG, "Mining auto-started")
+
+                    // Start the Android MiningService for the persistent notification
+                    val miningIntent = Intent(this@GratiaApplication, io.gratia.app.service.MiningService::class.java)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        startForegroundService(miningIntent)
+                    } else {
+                        startService(miningIntent)
+                    }
+                    Log.i(TAG, "MiningService started")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Auto-start mining failed: ${e.message}")
                 }
             }.start()
         } catch (e: GratiaBridgeException) {
