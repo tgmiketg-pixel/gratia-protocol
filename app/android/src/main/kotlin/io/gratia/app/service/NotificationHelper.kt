@@ -45,12 +45,24 @@ object NotificationHelper {
 
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
 
-        // WHY: LOW importance for PoL — the service runs 24/7 in the background.
-        // A noisy notification would be unacceptable for always-on passive collection.
+        // WHY: Delete old LOW-importance PoL channel if it exists. Android
+        // won't upgrade a channel's importance after creation, so we must
+        // delete and recreate it at DEFAULT importance for the status bar
+        // icon to appear on Samsung/One UI.
+        manager.getNotificationChannel(CHANNEL_PROOF_OF_LIFE)?.let {
+            if (it.importance < NotificationManager.IMPORTANCE_DEFAULT) {
+                manager.deleteNotificationChannel(CHANNEL_PROOF_OF_LIFE)
+            }
+        }
+
+        // WHY: DEFAULT importance (not LOW) for PoL so the status bar icon is
+        // visible on Samsung/One UI. LOW importance hides the icon entirely,
+        // making users think the app isn't running. We keep it silent (no sound,
+        // no vibration) so it doesn't annoy — but the icon must be visible.
         val polChannel = NotificationChannel(
             CHANNEL_PROOF_OF_LIFE,
             "Proof of Life",
-            NotificationManager.IMPORTANCE_LOW
+            NotificationManager.IMPORTANCE_DEFAULT
         ).apply {
             description = "Background activity verification for Gratia"
             setShowBadge(false)
@@ -112,7 +124,7 @@ object NotificationHelper {
             .setSmallIcon(android.R.drawable.ic_lock_idle_lock)
             .setOngoing(true)
             .setSilent(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .apply { pendingIntent?.let { setContentIntent(it) } }
             .build()
