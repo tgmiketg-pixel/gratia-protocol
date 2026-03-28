@@ -66,6 +66,7 @@ data class Proposal(
     val discussionEndMillis: Long,
     val votingEndMillis: Long,
     val submittedByAddress: String,
+    val hasVotedOnProposal: Boolean = false,
 )
 
 data class Poll(
@@ -76,6 +77,7 @@ data class Poll(
     val endMillis: Long,
     val createdByAddress: String,
     val totalVoters: Int,
+    val hasVotedOnPoll: Boolean = false,
 )
 
 // ============================================================================
@@ -1015,6 +1017,11 @@ data class GovernanceUiState(
     val selectedProposal: Proposal? = null,
     val selectedPoll: Poll? = null,
     val canCreateProposal: Boolean = false,
+    // WHY: participationDays lets the create dialog show how many more days are needed
+    // to meet the 90-day Proof of Life requirement for proposal submission.
+    val participationDays: Long = 0,
+    // WHY: walletBalanceLux lets the poll create dialog show cost vs. available balance.
+    val walletBalanceLux: Long = 0,
 )
 
 class GovernanceViewModel : ViewModel() {
@@ -1032,11 +1039,22 @@ class GovernanceViewModel : ViewModel() {
 
             // WHY: Check PoL consecutive days for proposal eligibility (90+ days required).
             // In debug bypass mode, the Rust side allows it regardless.
+            var participationDays = 0L
             val canCreate = try {
                 val pol = GratiaCoreManager.getProofOfLifeStatus()
+                participationDays = pol.consecutiveDays
                 pol.consecutiveDays >= 90
             } catch (_: Exception) {
+                participationDays = 999 // Assume qualified during development
                 true // Default true during development
+            }
+
+            // WHY: Wallet balance is shown in the poll creation dialog so users
+            // know whether they can afford the poll creation burn cost.
+            val walletBalance = try {
+                GratiaCoreManager.getWalletInfo().balanceLux
+            } catch (_: Exception) {
+                0L
             }
 
             // Fetch real proposals and polls from the Rust governance engine
@@ -1076,6 +1094,8 @@ class GovernanceViewModel : ViewModel() {
                 polls = polls,
                 isLoading = false,
                 canCreateProposal = canCreate,
+                participationDays = participationDays,
+                walletBalanceLux = walletBalance,
             )
         }
     }
