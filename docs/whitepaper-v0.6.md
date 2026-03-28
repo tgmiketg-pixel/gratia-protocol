@@ -959,6 +959,12 @@ Gratia's utility increases non-linearly with adoption:
 
 Each milestone unlocks new utility that attracts the next wave of participants, creating a self-reinforcing adoption cycle.
 
+### 16.7 Zero-Barrier Genesis
+
+At genesis, the minimum stake is zero — anyone who installs the app and plugs in their phone can begin mining immediately with no economic barrier. This removes the single largest friction point that kills early blockchain adoption: the need to acquire tokens before you can participate. Staking activates automatically when the network reaches 1,000 active miners, with no manual intervention or governance vote required. The transition is seamless — a 7-day grace period gives existing miners time to accumulate the 50 GRAT minimum stake from their own mining rewards.
+
+Initial distribution channels are designed for maximum accessibility: the GitHub repository is public and open source, and a signed release APK (14MB, R8-minified) is available for direct sideloading on any Android device. No app store approval is required to join the network from day one.
+
 ---
 
 ## 17. Regulatory Positioning
@@ -1117,6 +1123,13 @@ The three-pillar consensus security model (Proof of Life + Staking + Energy) has
 - ✅ 56 security attack simulation tests (phone farm, Sybil, network partition, behavioral spoofing, emulator detection, stake manipulation)
 - ✅ Automatic staking activation at 1,000 miners with 7-day grace period and 50 GRAT minimum
 - ✅ 872 tests passing across 15 crates, zero failures
+- ✅ GitHub repository published (open source)
+- ✅ Signed release APK (14MB, R8-minified) for sideloading distribution
+- ✅ Bootstrap node updated with latest protocol
+- ✅ Battery optimization warning on Android Settings screen
+- ✅ MAX button for stake/unstake dialogs
+- ✅ Genesis reset capability (reset_for_genesis FFI method)
+- ✅ Mainnet genesis block preparation — both test phones wiped, fresh start at block 0
 
 ### Phase 4 — Public Mainnet (Next)
 - External security audit by a third-party firm (Rust core, ZK proofs, consensus mechanism)
@@ -1162,7 +1175,7 @@ The word "gratia" means grace, gratitude, and freedom. The network embodies all 
 
 ---
 
-*This document describes a working protocol (v0.6) that has been implemented and tested on real hardware. All parameters, thresholds, and mechanisms described herein have been validated through 872 automated tests and real-device deployment. Specifications remain subject to revision based on ongoing research, security analysis, and community input.*
+*This document describes a working protocol (v0.6) that has been implemented, tested on real hardware, and prepared for mainnet genesis. Both test devices have been wiped to block 0, the bootstrap node is running the latest protocol, and a signed release APK is available for public distribution. The protocol is ready for public launch. All parameters, thresholds, and mechanisms described herein have been validated through 872 automated tests and real-device deployment. Specifications remain subject to revision based on ongoing research, security analysis, and community input.*
 
 ---
 
