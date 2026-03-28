@@ -574,14 +574,30 @@ class ProofOfLifeService : Service(), SensorEventListener {
 
                 when (status.state) {
                     "mining" -> startMiningService()
-                    "battery_low", "proof_of_life" -> stopMiningService()
+                    "battery_low" -> stopMiningService()
+                    "proof_of_life" -> {
+                        // WHY: During genesis / early network, PoL may not be
+                        // complete yet but mining is allowed (zero-delay onboarding).
+                        // If plugged in + above 80%, keep MiningService running.
+                        // The Rust consensus engine is producing blocks regardless;
+                        // the Android service just shows the notification.
+                        if (isPluggedIn && batteryPercent >= 80) {
+                            Log.d(TAG, "PoL incomplete but plugged in + charged — keeping MiningService")
+                            startMiningService()
+                        } else {
+                            stopMiningService()
+                        }
+                    }
                     "throttled" -> {
                         // WHY: Keep MiningService running but in throttled state.
                         // The MiningService handles throttle internally.
                         Log.d(TAG, "Mining throttled due to thermal conditions")
                     }
                     "pending_activation" -> {
-                        Log.d(TAG, "Mining pending — waiting for PoL or stake")
+                        // WHY: Same as proof_of_life — keep mining if conditions met.
+                        if (isPluggedIn && batteryPercent >= 80) {
+                            startMiningService()
+                        }
                     }
                 }
             } catch (e: Exception) {

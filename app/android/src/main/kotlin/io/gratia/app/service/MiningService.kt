@@ -354,16 +354,16 @@ class MiningService : Service() {
                             sessionEarningsLux = sessionEarningsLux
                         )
                     }
-                    status.state == "mining" -> {
-                        // WHY: Accumulate session earnings based on flat reward rate.
-                        // In production, the actual earnings come from block rewards
-                        // distributed by the consensus layer. For now, we estimate
-                        // based on elapsed mining time.
+                    status.state == "mining" || (status.state == "proof_of_life" && isPluggedIn && batteryPercent >= 80) -> {
+                        // WHY: Keep mining when plugged in + above 80% even if
+                        // PoL state says "proof_of_life". During genesis / early
+                        // network, PoL isn't complete yet but mining is allowed
+                        // (zero-delay onboarding). The Rust consensus engine
+                        // produces blocks regardless — we just show the notification.
                         updateUiState(status)
                     }
                     else -> {
-                        // Mining conditions no longer met (e.g., PoL invalidated,
-                        // stake removed). Stop the service.
+                        // Mining conditions truly not met (unplugged, battery low).
                         Log.i(TAG, "Mining state changed to ${status.state} — stopping")
                         stopSelf()
                         return

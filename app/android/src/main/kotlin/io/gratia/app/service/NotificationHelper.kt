@@ -21,7 +21,11 @@ object NotificationHelper {
 
     // -- Channel IDs -------------------------------------------------------
 
-    const val CHANNEL_PROOF_OF_LIFE = "proof_of_life"
+    // WHY: Channel ID "proof_of_life_v2" replaces the old "proof_of_life" which
+    // was created at IMPORTANCE_LOW. Android won't upgrade importance on an
+    // existing channel, and deleting a channel while a foreground service uses
+    // it crashes (enforceDeletingChannelHasNoFgService). A new ID sidesteps both.
+    const val CHANNEL_PROOF_OF_LIFE = "proof_of_life_v2"
     const val CHANNEL_MINING = "mining"
     const val CHANNEL_TRANSACTIONS = "transactions"
 
@@ -44,16 +48,6 @@ object NotificationHelper {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
 
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
-
-        // WHY: Delete old LOW-importance PoL channel if it exists. Android
-        // won't upgrade a channel's importance after creation, so we must
-        // delete and recreate it at DEFAULT importance for the status bar
-        // icon to appear on Samsung/One UI.
-        manager.getNotificationChannel(CHANNEL_PROOF_OF_LIFE)?.let {
-            if (it.importance < NotificationManager.IMPORTANCE_DEFAULT) {
-                manager.deleteNotificationChannel(CHANNEL_PROOF_OF_LIFE)
-            }
-        }
 
         // WHY: DEFAULT importance (not LOW) for PoL so the status bar icon is
         // visible on Samsung/One UI. LOW importance hides the icon entirely,
