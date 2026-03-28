@@ -207,20 +207,27 @@ private fun MiningStateCard(
     onStartMining: () -> Unit,
     onStopMining: () -> Unit,
 ) {
-    val stateColor = when (status.state) {
-        "mining" -> SignalGreen
-        "proof_of_life" -> CharcoalNavy
-        "battery_low" -> AmberGold
-        "throttled" -> DarkAmber
-        "pending_activation" -> AgedGold
-        else -> MaterialTheme.colorScheme.outline
-    }
-
     // WHY: During genesis, mining state may be "proof_of_life" even though
-    // blocks are being produced and rewards are accumulating. If plugged in
-    // + above 80%, mining IS active regardless of the state string.
+    // blocks are being produced and rewards are accumulating. We detect
+    // active mining by: explicit "mining" state, OR balance is growing
+    // (earnedThisSessionLux > 0 means blocks have been rewarded), OR
+    // plugged in + above 80% (conditions met even if state string lags).
     val isMining = status.state == "mining" ||
-        (status.state == "proof_of_life" && status.isPluggedIn && status.batteryPercent >= 80)
+        status.earnedThisSessionLux > 0 ||
+        (status.isPluggedIn && status.batteryPercent >= 80)
+
+    val stateColor = if (isMining) {
+        SignalGreen
+    } else {
+        when (status.state) {
+            "mining" -> SignalGreen
+            "proof_of_life" -> CharcoalNavy
+            "battery_low" -> AmberGold
+            "throttled" -> DarkAmber
+            "pending_activation" -> AgedGold
+            else -> MaterialTheme.colorScheme.outline
+        }
+    }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
