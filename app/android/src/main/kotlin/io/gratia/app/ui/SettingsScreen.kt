@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
@@ -27,6 +28,7 @@ import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Divider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -94,6 +96,7 @@ fun SettingsScreen(
             SettingsContent(
                 state = state,
                 onShowExportSeed = { viewModel.showExportSeedConfirmation() },
+                onShowRestoreWallet = { viewModel.showRestoreDialog() },
                 onShowStakeDialog = { viewModel.showStakeDialog() },
                 onShowUnstakeDialog = { viewModel.showUnstakeDialog() },
                 onLocationGranularity = { viewModel.setLocationGranularity(it) },
@@ -115,9 +118,18 @@ fun SettingsScreen(
 
         // Seed phrase display dialog
         state.exportedSeedPhrase?.let { phrase ->
+            val context = LocalContext.current
             SeedPhraseDisplayDialog(
                 seedPhrase = phrase,
-                onDismiss = { viewModel.clearExportedSeedPhrase() },
+                onDismiss = {
+                    // WHY: Mark seed as exported so the backup reminder banner
+                    // in WalletScreen disappears permanently.
+                    context.getSharedPreferences("gratia_wallet", Context.MODE_PRIVATE)
+                        .edit()
+                        .putBoolean("seed_exported", true)
+                        .apply()
+                    viewModel.clearExportedSeedPhrase()
+                },
             )
         }
 
@@ -153,6 +165,39 @@ fun SettingsScreen(
                 onDismiss = { viewModel.hideBeneficiaryDialog() },
             )
         }
+
+        // Restore wallet dialog
+        if (state.showRestoreDialog) {
+            RestoreWalletDialog(
+                error = state.restoreError,
+                onConfirm = { seedHex -> viewModel.importSeedPhrase(seedHex) },
+                onDismiss = { viewModel.hideRestoreDialog() },
+            )
+        }
+
+        // Restore success dialog
+        state.restoredAddress?.let { address ->
+            AlertDialog(
+                onDismissRequest = { viewModel.clearRestoredAddress() },
+                title = { Text("Wallet Restored") },
+                text = {
+                    Column {
+                        Text("Your wallet has been successfully restored.")
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = address,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(onClick = { viewModel.clearRestoredAddress() }) {
+                        Text("Done")
+                    }
+                },
+            )
+        }
     }
 }
 
@@ -160,6 +205,7 @@ fun SettingsScreen(
 private fun SettingsContent(
     state: SettingsUiState,
     onShowExportSeed: () -> Unit,
+    onShowRestoreWallet: () -> Unit,
     onShowStakeDialog: () -> Unit,
     onShowUnstakeDialog: () -> Unit,
     onLocationGranularity: (LocationGranularity) -> Unit,
@@ -215,7 +261,7 @@ private fun SettingsContent(
 
         // Wallet section
         item {
-            WalletSettingsSection(onShowExportSeed)
+            WalletSettingsSection(onShowExportSeed, onShowRestoreWallet)
         }
 
         // Staking section
@@ -275,7 +321,10 @@ private fun SettingsContent(
 // ============================================================================
 
 @Composable
-private fun WalletSettingsSection(onShowExportSeed: () -> Unit) {
+private fun WalletSettingsSection(
+    onShowExportSeed: () -> Unit,
+    onShowRestoreWallet: () -> Unit,
+) {
     SettingsSection(title = "Wallet") {
         Text(
             text = "Recovery Options",
@@ -291,18 +340,30 @@ private fun WalletSettingsSection(onShowExportSeed: () -> Unit) {
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        OutlinedButton(
-            onClick = onShowExportSeed,
-            colors = ButtonDefaults.outlinedButtonColors(
-                contentColor = MaterialTheme.colorScheme.error,
-            ),
-        ) {
-            Icon(
-                Icons.Default.Key,
-                contentDescription = null,
-                modifier = Modifier.padding(end = 8.dp),
-            )
-            Text("Export Seed Phrase")
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            OutlinedButton(
+                onClick = onShowExportSeed,
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error,
+                ),
+            ) {
+                Icon(
+                    Icons.Default.Key,
+                    contentDescription = null,
+                    modifier = Modifier.padding(end = 8.dp),
+                )
+                Text("Export Seed Phrase")
+            }
+            OutlinedButton(
+                onClick = onShowRestoreWallet,
+            ) {
+                Icon(
+                    Icons.Default.Key,
+                    contentDescription = null,
+                    modifier = Modifier.padding(end = 8.dp),
+                )
+                Text("Restore Wallet")
+            }
         }
 
         Text(
@@ -954,6 +1015,90 @@ private fun AmountDialog(
                 },
             ) {
                 Text(actionLabel)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+    )
+}
+
+/**
+ * Dialog for restoring a wallet from a hex-encoded seed phrase.
+ *
+ * WHY: Users who have previously exported their seed phrase need a way to
+ * restore their wallet on a new device or after reinstalling. The hex string
+ * is pasted in and decoded by the Rust core into an Ed25519 private key.
+ */
+@Composable
+private fun RestoreWalletDialog(
+    error: String?,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var seedHex by remember { mutableStateOf("") }
+    val clipboardManager = LocalClipboardManager.current
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                Icons.Default.Key,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        },
+        title = { Text("Restore Wallet") },
+        text = {
+            Column {
+                Text(
+                    text = "Paste your hex-encoded seed phrase below. This will replace your current wallet.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Warning: Your current wallet will be overwritten. Make sure you have backed it up first.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = seedHex,
+                    onValueChange = { seedHex = it.trim() },
+                    label = { Text("Seed phrase (hex)") },
+                    placeholder = { Text("64 hex characters...") },
+                    isError = error != null,
+                    supportingText = error?.let { { Text(it) } },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    trailingIcon = {
+                        IconButton(onClick = {
+                            clipboardManager.getText()?.let { pasted ->
+                                seedHex = pasted.text.trim()
+                            }
+                        }) {
+                            Icon(
+                                Icons.Default.ContentCopy,
+                                contentDescription = "Paste from clipboard",
+                            )
+                        }
+                    },
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (seedHex.length == 64 && seedHex.matches(Regex("[0-9a-fA-F]+"))) {
+                        onConfirm(seedHex.lowercase())
+                    }
+                },
+                enabled = seedHex.length == 64 && seedHex.matches(Regex("[0-9a-fA-F]+")),
+            ) {
+                Text("Restore")
             }
         },
         dismissButton = {

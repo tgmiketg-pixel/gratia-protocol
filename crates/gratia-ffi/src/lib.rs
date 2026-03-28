@@ -52,6 +52,7 @@ use gratia_vm::host_functions::HostEnvironment;
 use gratia_vm::sandbox::ContractPermissions;
 use gratia_vm::{GratiaVm, ContractCall};
 use gratia_wallet::keystore::FileKeystore;
+use gratia_wallet::recovery::SeedPhrase;
 use gratia_wallet::WalletManager;
 
 use crate::convert::{address_from_hex, address_to_hex, mining_state_to_string};
@@ -925,6 +926,29 @@ impl GratiaNode {
         let hex_str = phrase.to_hex();
         rust_log("Seed phrase exported (user requested)");
         Ok(hex_str)
+    }
+
+    /// Import a wallet from a seed phrase (hex-encoded private key).
+    ///
+    /// Replaces the current wallet if one exists. Returns the wallet address
+    /// string. This is the counterpart to `export_seed_phrase` — used when the
+    /// user wants to restore a wallet on a new device using their backed-up
+    /// hex seed.
+    pub fn import_seed_phrase(&self, seed_hex: String) -> Result<String, FfiError> {
+        let mut inner = self.lock_inner()?;
+        let phrase = SeedPhrase::from_hex(&seed_hex).map_err(|_| FfiError::InvalidAddress {
+            reason: "seed phrase must be valid hex (64 characters)".into(),
+        })?;
+        let address = inner.wallet.import_seed_phrase(&phrase).map_err(|e| {
+            FfiError::InternalError {
+                reason: format!("seed import failed: {}", e),
+            }
+        })?;
+        rust_log(&format!(
+            "Wallet restored from seed phrase: {}",
+            address_to_hex(&address)
+        ));
+        Ok(address_to_hex(&address))
     }
 
     /// Get the transaction history for this wallet.

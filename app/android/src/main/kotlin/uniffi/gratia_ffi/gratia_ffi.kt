@@ -812,6 +812,8 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -882,6 +884,8 @@ internal interface UniffiLib : Library {
     fun uniffi_gratia_ffi_fn_method_gratianode_get_vm_info(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_wallet_info(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_import_seed_phrase(`ptr`: Pointer,`seedHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_init_vm(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1091,6 +1095,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_wallet_info(
     ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_import_seed_phrase(
+    ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_init_vm(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_list_contracts(
@@ -1227,6 +1233,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_wallet_info() != 25150.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_import_seed_phrase() != 44030.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_init_vm() != 54906.toShort()) {
@@ -1959,6 +1968,16 @@ public interface GratiaNodeInterface {
      * Get current wallet information (address, balance, mining state).
      */
     fun `getWalletInfo`(): FfiWalletInfo
+    
+    /**
+     * Import a wallet from a seed phrase (hex-encoded private key).
+     *
+     * Replaces the current wallet if one exists. Returns the wallet address
+     * string. This is the counterpart to `export_seed_phrase` — used when the
+     * user wants to restore a wallet on a new device using their backed-up
+     * hex seed.
+     */
+    fun `importSeedPhrase`(`seedHex`: kotlin.String): kotlin.String
     
     /**
      * Initialize the GratiaVM with built-in demo contracts.
@@ -2732,6 +2751,27 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
     uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_get_wallet_info(
         it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Import a wallet from a seed phrase (hex-encoded private key).
+     *
+     * Replaces the current wallet if one exists. Returns the wallet address
+     * string. This is the counterpart to `export_seed_phrase` — used when the
+     * user wants to restore a wallet on a new device using their backed-up
+     * hex seed.
+     */
+    @Throws(FfiException::class)override fun `importSeedPhrase`(`seedHex`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_import_seed_phrase(
+        it, FfiConverterString.lower(`seedHex`),_status)
 }
     }
     )

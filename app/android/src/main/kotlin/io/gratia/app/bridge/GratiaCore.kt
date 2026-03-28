@@ -152,6 +152,20 @@ object GratiaCoreManager {
         return callNode { it.exportSeedPhrase() }
     }
 
+    /**
+     * Import a wallet from a hex-encoded seed phrase.
+     *
+     * Replaces the current wallet with the one derived from the seed phrase.
+     * Used for wallet restoration from a backed-up seed.
+     *
+     * @param seedHex Hex-encoded 32-byte Ed25519 private key (64 hex chars).
+     * @return New wallet address as "grat:<hex>" string.
+     * @throws GratiaBridgeException if the hex is invalid or import fails.
+     */
+    fun importSeedPhrase(seedHex: String): String {
+        return callNode { it.importSeedPhrase(seedHex) }
+    }
+
     // ========================================================================
     // Mining methods
     // ========================================================================

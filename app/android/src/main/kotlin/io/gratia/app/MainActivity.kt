@@ -476,7 +476,11 @@ fun GratiaApp() {
             modifier = Modifier.padding(innerPadding),
         ) {
             composable(GratiaRoutes.WALLET) {
-                io.gratia.app.ui.WalletScreen()
+                io.gratia.app.ui.WalletScreen(
+                    onNavigateToSettings = {
+                        navController.navigate(GratiaRoutes.SETTINGS)
+                    },
+                )
             }
             composable(GratiaRoutes.MINING) {
                 io.gratia.app.ui.MiningScreen()

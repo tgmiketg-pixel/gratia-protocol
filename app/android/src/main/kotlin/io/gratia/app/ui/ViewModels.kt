@@ -92,6 +92,12 @@ data class WalletUiState(
     val showSendDialog: Boolean = false,
     val showReceiveDialog: Boolean = false,
     val errorMessage: String? = null,
+    /** Whether the restore wallet dialog is visible. */
+    val showRestoreDialog: Boolean = false,
+    /** Error from a failed restore attempt. */
+    val restoreError: String? = null,
+    /** Address after successful restore, null otherwise. */
+    val restoredAddress: String? = null,
 )
 
 class WalletViewModel : ViewModel() {
@@ -235,6 +241,46 @@ class WalletViewModel : ViewModel() {
             }
             loadWalletData()
         }
+    }
+
+    // -- Restore wallet -------------------------------------------------------
+
+    fun showRestoreDialog() {
+        _uiState.value = _uiState.value.copy(
+            showRestoreDialog = true,
+            restoreError = null,
+            restoredAddress = null,
+        )
+    }
+
+    fun hideRestoreDialog() {
+        _uiState.value = _uiState.value.copy(
+            showRestoreDialog = false,
+            restoreError = null,
+        )
+    }
+
+    fun importSeedPhrase(seedHex: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val address = io.gratia.app.bridge.GratiaCoreManager.importSeedPhrase(seedHex)
+                _uiState.value = _uiState.value.copy(
+                    showRestoreDialog = false,
+                    restoredAddress = address,
+                    restoreError = null,
+                )
+                // WHY: Reload wallet data so balance and address update immediately.
+                loadWalletData()
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    restoreError = e.message ?: "Import failed",
+                )
+            }
+        }
+    }
+
+    fun clearRestoredAddress() {
+        _uiState.value = _uiState.value.copy(restoredAddress = null)
     }
 
     // -- Mock data generators ------------------------------------------------
@@ -819,6 +865,12 @@ data class SettingsUiState(
     val exportedSeedPhrase: String? = null,
     val shardInfo: ShardInfoUi = ShardInfoUi(),
     val vmInfo: VmInfoUi = VmInfoUi(),
+    /** Whether the restore wallet dialog is visible. */
+    val showRestoreDialog: Boolean = false,
+    /** Result address after a successful import, null otherwise. */
+    val restoredAddress: String? = null,
+    /** Error message from a failed import attempt. */
+    val restoreError: String? = null,
 )
 
 enum class LocationGranularity(val label: String) {
@@ -930,6 +982,43 @@ class SettingsViewModel : ViewModel() {
 
     fun clearExportedSeedPhrase() {
         _uiState.value = _uiState.value.copy(exportedSeedPhrase = null)
+    }
+
+    fun showRestoreDialog() {
+        _uiState.value = _uiState.value.copy(
+            showRestoreDialog = true,
+            restoredAddress = null,
+            restoreError = null,
+        )
+    }
+
+    fun hideRestoreDialog() {
+        _uiState.value = _uiState.value.copy(
+            showRestoreDialog = false,
+            restoredAddress = null,
+            restoreError = null,
+        )
+    }
+
+    fun importSeedPhrase(seedHex: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val address = GratiaCoreManager.importSeedPhrase(seedHex)
+                _uiState.value = _uiState.value.copy(
+                    showRestoreDialog = false,
+                    restoredAddress = address,
+                    restoreError = null,
+                )
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    restoreError = e.message ?: "Import failed",
+                )
+            }
+        }
+    }
+
+    fun clearRestoredAddress() {
+        _uiState.value = _uiState.value.copy(restoredAddress = null)
     }
 
     fun showStakeDialog() {

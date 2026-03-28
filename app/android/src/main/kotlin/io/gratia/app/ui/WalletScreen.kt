@@ -1,5 +1,6 @@
 package io.gratia.app.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +19,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.CallMade
 import androidx.compose.material.icons.automirrored.filled.CallReceived
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Warning
 import io.gratia.app.GratiaLogo
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.QrCodeScanner
@@ -87,9 +90,16 @@ import java.util.Locale
 @Composable
 fun WalletScreen(
     viewModel: WalletViewModel = viewModel(),
+    onNavigateToSettings: (() -> Unit)? = null,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+
+    // WHY: Track whether the user has exported their seed phrase. Persisted
+    // via SharedPreferences so the backup banner disappears permanently after
+    // the first successful export.
+    val prefs = remember { context.getSharedPreferences("gratia_wallet", Context.MODE_PRIVATE) }
+    var seedExported by remember { mutableStateOf(prefs.getBoolean("seed_exported", false)) }
 
     // WHY: Track scanner visibility and scanned address separately from
     // the ViewModel to keep scanner state local to this composable.
@@ -174,10 +184,46 @@ fun WalletScreen(
             ) {
                 WalletContent(
                     state = state,
+                    seedExported = seedExported,
                     onSendClick = { viewModel.showSendDialog() },
                     onReceiveClick = { viewModel.showReceiveDialog() },
+                    onBackupClick = onNavigateToSettings ?: {},
+                    onRestoreClick = { viewModel.showRestoreDialog() },
                 )
             }
+        }
+
+        // Restore wallet dialog (from WalletScreen empty state link)
+        if (state.showRestoreDialog) {
+            RestoreWalletInlineDialog(
+                error = state.restoreError,
+                onConfirm = { seedHex -> viewModel.importSeedPhrase(seedHex) },
+                onDismiss = { viewModel.hideRestoreDialog() },
+            )
+        }
+
+        // Restore success dialog
+        state.restoredAddress?.let { address ->
+            AlertDialog(
+                onDismissRequest = { viewModel.clearRestoredAddress() },
+                title = { Text("Wallet Restored") },
+                text = {
+                    Column {
+                        Text("Your wallet has been successfully restored.")
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = address,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(onClick = { viewModel.clearRestoredAddress() }) {
+                        Text("Done")
+                    }
+                },
+            )
         }
 
         // Send dialog
@@ -215,8 +261,11 @@ fun WalletScreen(
 @Composable
 private fun WalletContent(
     state: WalletUiState,
+    seedExported: Boolean,
     onSendClick: () -> Unit,
     onReceiveClick: () -> Unit,
+    onBackupClick: () -> Unit,
+    onRestoreClick: () -> Unit,
 ) {
     val wallet = state.walletInfo ?: run {
         // WHY: On fresh install the wallet info may be null briefly while the
@@ -251,6 +300,13 @@ private fun WalletContent(
             )
         }
 
+        // Backup reminder banner — shown only if seed phrase has NOT been exported
+        if (!seedExported) {
+            item {
+                BackupReminderBanner(onClick = onBackupClick)
+            }
+        }
+
         // Transaction history header
         item {
             Text(
@@ -264,6 +320,27 @@ private fun WalletContent(
         if (state.transactions.isEmpty()) {
             item {
                 EmptyTransactionState()
+            }
+
+            // WHY: If the wallet is empty (0 balance, 0 transactions), offer a
+            // "Restore existing wallet?" link. This helps users who reinstalled
+            // the app and want to restore from a backup without digging through
+            // Settings first.
+            if (wallet.balanceLux == 0L) {
+                item {
+                    TextButton(
+                        onClick = onRestoreClick,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(
+                            Icons.Default.Key,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Restore existing wallet?")
+                    }
+                }
             }
         } else {
             items(state.transactions, key = { it.hashHex }) { tx ->
@@ -471,6 +548,143 @@ private fun EmptyTransactionState() {
             textAlign = TextAlign.Center,
         )
     }
+}
+
+// ============================================================================
+// Backup Reminder Banner
+// ============================================================================
+
+/**
+ * Amber-colored banner prompting the user to back up their seed phrase.
+ *
+ * WHY: If the user uninstalls the app without exporting their seed phrase,
+ * their GRAT is permanently lost (unless they use PoL behavioral recovery
+ * on a new device, which takes 7-14 days). This banner provides a clear,
+ * visible nudge to export. Styled similarly to the battery optimization
+ * warning card in SettingsScreen for visual consistency.
+ */
+@Composable
+private fun BackupReminderBanner(onClick: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFFFFF3E0), // Light amber background
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Default.Warning,
+                contentDescription = null,
+                tint = Color(0xFFE65100), // Deep orange
+                modifier = Modifier.size(24.dp),
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Back up your wallet!",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFE65100),
+                )
+                Text(
+                    text = "If you uninstall the app, your GRAT will be lost. Tap to export seed phrase.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF4E342E),
+                )
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Restore Wallet Dialog (inline from WalletScreen)
+// ============================================================================
+
+/**
+ * Dialog for restoring a wallet from a hex seed phrase.
+ * Used from the WalletScreen's "Restore existing wallet?" link.
+ */
+@Composable
+private fun RestoreWalletInlineDialog(
+    error: String?,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var seedHex by remember { mutableStateOf("") }
+    val clipboardManager = LocalClipboardManager.current
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                Icons.Default.Key,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        },
+        title = { Text("Restore Wallet") },
+        text = {
+            Column {
+                Text(
+                    text = "Paste your hex-encoded seed phrase below. This will replace your current wallet.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Warning: Your current wallet will be overwritten.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = seedHex,
+                    onValueChange = { seedHex = it.trim() },
+                    label = { Text("Seed phrase (hex)") },
+                    placeholder = { Text("64 hex characters...") },
+                    isError = error != null,
+                    supportingText = error?.let { { Text(it) } },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    trailingIcon = {
+                        IconButton(onClick = {
+                            clipboardManager.getText()?.let { pasted ->
+                                seedHex = pasted.text.trim()
+                            }
+                        }) {
+                            Icon(
+                                Icons.Default.ContentCopy,
+                                contentDescription = "Paste from clipboard",
+                            )
+                        }
+                    },
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (seedHex.length == 64 && seedHex.matches(Regex("[0-9a-fA-F]+"))) {
+                        onConfirm(seedHex.lowercase())
+                    }
+                },
+                enabled = seedHex.length == 64 && seedHex.matches(Regex("[0-9a-fA-F]+")),
+            ) {
+                Text("Restore")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+    )
 }
 
 // ============================================================================
