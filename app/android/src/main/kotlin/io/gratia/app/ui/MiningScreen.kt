@@ -213,11 +213,14 @@ private fun MiningStateCard(
     // active mining by: explicit "mining" state, OR balance is growing
     // (earnedThisSessionLux > 0 means blocks have been rewarded), OR
     // plugged in + above 80% (conditions met even if state string lags).
-    // WHY: Temporary debug — always treat as mining since consensus IS
-    // producing blocks and crediting rewards. The state string and power
-    // state from the Rust core lag behind reality during genesis.
-    // TODO: Remove this once the Rust core correctly reports mining state.
-    val isMining = true
+    // WHY: During genesis, mining state may be "proof_of_life" even though
+    // blocks are being produced and rewards are accumulating. We detect
+    // active mining by: explicit "mining" state, OR balance is growing
+    // (earnedThisSessionLux > 0 means blocks have been rewarded), OR
+    // plugged in + above 80% (conditions met even if state string lags).
+    val isMining = status.state == "mining" ||
+        status.earnedThisSessionLux > 0 ||
+        (status.isPluggedIn && status.batteryPercent >= 80)
 
     val stateColor = if (isMining) {
         SignalGreen

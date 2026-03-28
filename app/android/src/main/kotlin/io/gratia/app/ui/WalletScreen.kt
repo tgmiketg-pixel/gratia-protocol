@@ -230,6 +230,7 @@ fun WalletScreen(
         if (state.showSendDialog) {
             SendDialog(
                 initialAddress = scannedAddress,
+                balanceLux = state.walletInfo?.balanceLux ?: 0L,
                 onDismiss = {
                     viewModel.hideSendDialog()
                     scannedAddress = null
@@ -694,6 +695,7 @@ private fun RestoreWalletInlineDialog(
 @Composable
 private fun SendDialog(
     initialAddress: String? = null,
+    balanceLux: Long = 0,
     onDismiss: () -> Unit,
     onSend: (address: String, amountLux: Long) -> Unit,
     onScanClick: () -> Unit = {},
@@ -761,8 +763,39 @@ private fun SendDialog(
                     isError = amountError != null,
                     supportingText = amountError?.let { { Text(it) } },
                     singleLine = true,
+                    trailingIcon = {
+                        if (balanceLux > 0) {
+                            TextButton(
+                                onClick = {
+                                    // WHY: Subtract 1000 Lux (0.001 GRAT) for the tx fee
+                                    // so the transaction doesn't fail on insufficient balance.
+                                    val maxLux = (balanceLux - 1000).coerceAtLeast(0)
+                                    val maxGrat = maxLux.toDouble() / 1_000_000.0
+                                    amountText = if (maxGrat == maxGrat.toLong().toDouble()) {
+                                        maxGrat.toLong().toString()
+                                    } else {
+                                        String.format("%.6f", maxGrat).trimEnd('0').trimEnd('.')
+                                    }
+                                    amountError = null
+                                },
+                            ) {
+                                Text(
+                                    "MAX",
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (balanceLux > 0) {
+                    Text(
+                        text = "Available: ${formatGrat(balanceLux)} GRAT",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    )
+                }
             }
         },
         confirmButton = {
