@@ -543,10 +543,14 @@ data class MeshStatus(
 )
 
 data class NetworkUiState(
-    val isNetworkRunning: Boolean = false,
+    // WHY: Default to true/active since GratiaApplication auto-starts
+    // network and consensus. The UI should show "active" immediately
+    // instead of flashing "stopped" for 1-2 seconds while the async
+    // fetch completes.
+    val isNetworkRunning: Boolean = true,
     val peerCount: Int = 0,
     val listenAddress: String? = null,
-    val consensusState: String = "stopped",
+    val consensusState: String = "active",
     val currentSlot: Long = 0,
     val currentHeight: Long = 0,
     val isCommitteeMember: Boolean = false,
