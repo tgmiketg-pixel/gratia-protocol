@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { width: 360px; height: 780px; background: #0D1527; font-family: 'Segoe UI', system-ui, sans-serif; color: #FAF5EB; overflow: hidden; }
+
+.topbar { display: flex; align-items: center; padding: 12px 16px; gap: 10px; background: #0D1527; }
+.logo { width: 32px; height: 32px; }
+.logo svg { width: 100%; height: 100%; }
+.topbar-title { font-size: 18px; font-weight: 600; color: #FAF5EB; }
+
+.divider { height: 1px; background: rgba(245,166,35,0.12); margin: 0 16px; }
+
+.content { padding: 16px; }
+
+.wallet-card {
+  background: #2A3A5C;
+  border-radius: 16px;
+  padding: 24px 20px;
+  margin-bottom: 24px;
+}
+.address { font-family: monospace; font-size: 13px; color: rgba(250,245,235,0.6); margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }
+.copy-icon { width: 18px; height: 18px; opacity: 0.5; }
+.balance { font-size: 32px; font-weight: 800; color: #F5A623; margin-bottom: 4px; }
+.balance-lux { font-size: 12px; color: rgba(250,245,235,0.4); margin-bottom: 20px; }
+.btn-row { display: flex; gap: 12px; }
+.btn-send {
+  flex: 1; padding: 14px; border-radius: 50px; border: none;
+  background: #F5A623; color: #0D1527; font-weight: 700; font-size: 15px;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+}
+.btn-receive {
+  flex: 1; padding: 14px; border-radius: 50px;
+  border: 2px solid #F5A623; background: transparent; color: #F5A623;
+  font-weight: 700; font-size: 15px;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+}
+
+.section-title { font-size: 16px; font-weight: 700; color: #FAF5EB; margin-bottom: 16px; }
+
+.tx-item { display: flex; align-items: center; padding: 14px 0; border-bottom: 1px solid rgba(245,166,35,0.06); }
+.tx-icon { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-right: 12px; font-size: 18px; }
+.tx-icon-recv { background: rgba(46,204,113,0.12); color: #2ECC71; }
+.tx-icon-sent { background: rgba(245,166,35,0.12); color: #F5A623; }
+.tx-info { flex: 1; }
+.tx-addr { font-family: monospace; font-size: 13px; color: rgba(250,245,235,0.7); }
+.tx-time { font-size: 11px; color: rgba(250,245,235,0.4); margin-top: 2px; }
+.tx-amount { text-align: right; }
+.tx-amount-val { font-size: 14px; font-weight: 700; }
+.tx-amount-recv { color: #2ECC71; }
+.tx-amount-sent { color: #F5A623; }
+.tx-status { font-size: 10px; color: #2ECC71; background: rgba(46,204,113,0.12); padding: 2px 8px; border-radius: 10px; margin-top: 4px; display: inline-block; }
+
+.bottombar {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: #1A2744; display: flex; justify-content: space-around; padding: 10px 0 14px;
+  border-top: 1px solid rgba(245,166,35,0.08);
+}
+.tab { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 10px; color: rgba(250,245,235,0.5); }
+.tab-active { color: #F5A623; }
+.tab-icon { font-size: 20px; }
+.tab-indicator { width: 48px; height: 28px; background: rgba(245,166,35,0.12); border-radius: 14px; display: flex; align-items: center; justify-content: center; }
+</style>
+</head><body>
+
+<div class="topbar">
+  <div class="logo">
+    <svg viewBox="0 0 500 500">
+      <circle cx="250" cy="250" r="248" fill="none" stroke="#B8860B" stroke-width="5"/>
+      <circle cx="250" cy="250" r="230" fill="#F5A623"/>
+      <rect x="169.5" y="105.5" width="162" height="289" rx="25" fill="#1A2744"/>
+      <rect x="188.3" y="141.9" width="124.3" height="196" rx="7.5" fill="#F5A623"/>
+      <circle cx="249.9" cy="367.9" r="15.1" fill="#F5A623"/>
+      <line x1="222.2" y1="123" x2="278.8" y2="123" stroke="#F5A623" stroke-width="4.5" stroke-linecap="round"/>
+      <path d="M204.7,239.8h17.6l7.5-45.2l20.1,86.7l20.1-79.1l7.5,37.7h17.6" fill="none" stroke="#1A2744" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </div>
+  <span class="topbar-title">Wallet</span>
+</div>
+<div class="divider"></div>
+
+<div class="content">
+  <div class="wallet-card">
+    <div class="address">
+      <span>grat:e830638f...2dde22a1</span>
+      <span class="copy-icon">&#128203;</span>
+    </div>
+    <div class="balance">1,506 GRAT</div>
+    <div class="balance-lux">1,506,000,000 Lux</div>
+    <div class="btn-row">
+      <div class="btn-send">&#9654; Send</div>
+      <div class="btn-receive">&#9638; Receive</div>
+    </div>
+  </div>
+
+  <div class="section-title">Recent Transactions</div>
+
+  <div class="tx-item">
+    <div class="tx-icon tx-icon-recv">&#8595;</div>
+    <div class="tx-info">
+      <div class="tx-addr">grat:0960e2fd...cf73943</div>
+      <div class="tx-time">Mar 26, 22:38</div>
+    </div>
+    <div class="tx-amount">
+      <div class="tx-amount-val tx-amount-recv">+269 GRAT</div>
+      <div class="tx-status">confirmed</div>
+    </div>
+  </div>
+
+  <div class="tx-item">
+    <div class="tx-icon tx-icon-sent">&#8593;</div>
+    <div class="tx-info">
+      <div class="tx-addr">grat:0960e2fd...cf73943</div>
+      <div class="tx-time">Mar 26, 22:35</div>
+    </div>
+    <div class="tx-amount">
+      <div class="tx-amount-val tx-amount-sent">-100 GRAT</div>
+      <div class="tx-status">confirmed</div>
+    </div>
+  </div>
+
+  <div class="tx-item">
+    <div class="tx-icon tx-icon-recv">&#8595;</div>
+    <div class="tx-info">
+      <div class="tx-addr">grat:0960e2fd...cf73943</div>
+      <div class="tx-time">Mar 26, 22:31</div>
+    </div>
+    <div class="tx-amount">
+      <div class="tx-amount-val tx-amount-recv">+269 GRAT</div>
+      <div class="tx-status">confirmed</div>
+    </div>
+  </div>
+</div>
+
+<div class="bottombar">
+  <div class="tab tab-active">
+    <div class="tab-indicator"><span class="tab-icon">&#127975;</span></div>
+    <span>Wallet</span>
+  </div>
+  <div class="tab"><span class="tab-icon">&#9889;</span><span>Mining</span></div>
+  <div class="tab"><span class="tab-icon">&#128225;</span><span>Network</span></div>
+  <div class="tab"><span class="tab-icon">&#9997;</span><span>Governance</span></div>
+  <div class="tab"><span class="tab-icon">&#9881;</span><span>Settings</span></div>
+</div>
+
+</body></html>

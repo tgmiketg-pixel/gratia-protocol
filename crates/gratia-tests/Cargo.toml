@@ -1,0 +1,19 @@
+[package]
+name = "gratia-tests"
+description = "Security attack simulation and integration tests for the Gratia protocol"
+version.workspace = true
+edition.workspace = true
+
+# WHY: This crate contains only tests — it has no library code. The `lib.rs`
+# exists solely so that `cargo test -p gratia-tests` runs all test modules.
+# Each module exercises a different attack vector against the real crate APIs.
+
+[dependencies]
+gratia-core = { path = "../gratia-core" }
+gratia-pol = { path = "../gratia-pol" }
+gratia-staking = { path = "../gratia-staking" }
+gratia-consensus = { path = "../gratia-consensus" }
+gratia-network = { path = "../gratia-network" }
+chrono = { workspace = true }
+serde = { workspace = true }
+rand = { workspace = true }

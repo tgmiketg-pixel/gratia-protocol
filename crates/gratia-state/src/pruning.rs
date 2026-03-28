@@ -7,7 +7,7 @@
 //! preserving block headers (needed for chain verification) and current account
 //! state (needed for transaction validation).
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use tracing;
 
 use gratia_core::error::GratiaError;
@@ -180,60 +180,52 @@ pub fn prune_old_transactions(
         return Ok(0);
     }
 
-    // WHY: We use a time-based approach for transaction pruning. We find the
-    // block at the cutoff height to determine the cutoff timestamp, then remove
-    // transactions older than that timestamp. This avoids needing a separate
-    // block-height-to-transaction index.
-    let cutoff_height = current_height - policy.transaction_retention_count;
-
-    // Get all transaction keys and values, then prune old ones.
-    let all_txs = db.store().iter_cf(CF_TRANSACTIONS)?;
-    let mut pruned = 0u64;
-    let mut delete_ops = Vec::new();
-
-    for (key, value) in &all_txs {
-        // Try to deserialize to check the timestamp.
-        if let Ok(tx) = bincode::deserialize::<gratia_core::types::Transaction>(value) {
-            // Use a simple heuristic: if the transaction's nonce suggests it's old
-            // enough, or we can check the block association. For simplicity, we use
-            // a count-based approach — prune the oldest transactions if we have more
-            // than the retention limit allows.
-            //
-            // WHY: Without a block-height index on transactions, we collect all and
-            // sort by timestamp, then prune the oldest. This is acceptable because
-            // pruning runs infrequently (when size threshold is hit) and the
-            // transactions CF is bounded by the retention policy.
-            delete_ops.push(key.clone());
-        }
-    }
+    // WHY: count_keys is O(1) in RocksDB (metadata lookup), avoiding the O(n)
+    // full scan when pruning isn't needed.
+    let count = db.store().count_keys(CF_TRANSACTIONS)?;
 
     // Only prune if we have more transactions than expected for the retention window.
     // A rough estimate: max ~1000 TPS * 4 sec/block * retention_blocks.
     let max_expected_txs = policy.transaction_retention_count * 1000;
-    if all_txs.len() as u64 > max_expected_txs {
-        // Sort by value (which contains timestamp) and remove the oldest.
-        let excess = all_txs.len() as u64 - max_expected_txs;
-        // The keys in a BTreeMap are already sorted; oldest entries come first
-        // if we used chronological keys. For hash-keyed transactions, we need
-        // to deserialize and sort.
-        let mut timestamped: Vec<(Vec<u8>, DateTime<Utc>)> = Vec::new();
-        for (key, value) in &all_txs {
-            if let Ok(tx) = bincode::deserialize::<gratia_core::types::Transaction>(value) {
-                timestamped.push((key.clone(), tx.timestamp));
-            }
-        }
-        timestamped.sort_by_key(|(_, ts)| *ts);
+    if count <= max_expected_txs {
+        return Ok(0);
+    }
 
-        let to_remove = excess.min(timestamped.len() as u64) as usize;
-        let batch: Vec<(String, Vec<u8>, Option<Vec<u8>>)> = timestamped[..to_remove]
-            .iter()
-            .map(|(key, _)| (CF_TRANSACTIONS.to_string(), key.clone(), None))
-            .collect();
+    // WHY: We use a time-based approach for transaction pruning. We find the
+    // block at the cutoff height to determine the cutoff timestamp, then remove
+    // transactions older than that timestamp. This avoids needing a separate
+    // block-height-to-transaction index.
+    let _cutoff_height = current_height - policy.transaction_retention_count;
 
-        if !batch.is_empty() {
-            pruned = batch.len() as u64;
-            db.batch_write(batch)?;
+    // Over the limit — load all transactions to sort by timestamp and prune oldest.
+    // WHY: Without a block-height index on transactions, we collect all and
+    // sort by timestamp, then prune the oldest. This is acceptable because
+    // pruning runs infrequently (when size threshold is hit) and the
+    // transactions CF is bounded by the retention policy.
+    let all_txs = db.store().iter_cf(CF_TRANSACTIONS)?;
+    let mut pruned = 0u64;
+
+    let excess = count - max_expected_txs;
+    // The keys in a BTreeMap are already sorted; oldest entries come first
+    // if we used chronological keys. For hash-keyed transactions, we need
+    // to deserialize and sort.
+    let mut timestamped: Vec<(Vec<u8>, DateTime<Utc>)> = Vec::new();
+    for (key, value) in &all_txs {
+        if let Ok(tx) = bincode::deserialize::<gratia_core::types::Transaction>(value) {
+            timestamped.push((key.clone(), tx.timestamp));
         }
+    }
+    timestamped.sort_by_key(|(_, ts)| *ts);
+
+    let to_remove = (excess as usize).min(timestamped.len());
+    let batch: Vec<(String, Vec<u8>, Option<Vec<u8>>)> = timestamped[..to_remove]
+        .iter()
+        .map(|(key, _)| (CF_TRANSACTIONS.to_string(), key.clone(), None))
+        .collect();
+
+    if !batch.is_empty() {
+        pruned = batch.len() as u64;
+        db.batch_write(batch)?;
     }
 
     if pruned > 0 {
@@ -246,33 +238,49 @@ pub fn prune_old_transactions(
     Ok(pruned)
 }
 
-/// Prune old Proof of Life attestations beyond the retention period.
+/// Prune old Proof of Life attestations beyond the retention limit.
 ///
-/// Attestations older than `attestation_retention_days` are removed.
-/// The PoL validity is already reflected in account state (consecutive
-/// day counters), so raw attestations are only needed for recent verification.
+/// WHY: On-chain attestations are unlinkable and have no date field.
+/// We retain only the most recent `max_retained` attestations (based on
+/// insertion order / key order) and prune everything else. The PoL validity
+/// is already reflected in account state (consecutive day counters), so
+/// raw attestations are only needed for recent double-submission detection.
+///
+/// The `attestation_retention_days` policy field determines the max count:
+/// one attestation per epoch per node, at roughly one per day, with headroom.
 pub fn prune_old_attestations(
     db: &StateDb,
     policy: &PruningPolicy,
 ) -> Result<u64, GratiaError> {
-    let cutoff_date = Utc::now().date_naive()
-        - Duration::days(policy.attestation_retention_days as i64);
+    // WHY: Retain a generous number of attestations based on the retention
+    // period. Most nodes submit one attestation per epoch (~1 per day).
+    // A network of 10,000 nodes for 30 days = 300,000 attestations max.
+    // We use the configured retention_days as the multiplier, pruning
+    // only when the total count exceeds a reasonable cap.
+    let max_retained = (policy.attestation_retention_days as u64) * 10_000;
 
-    let all_attestations = db.store().iter_cf(CF_ATTESTATIONS)?;
-    let mut pruned = 0u64;
-    let mut batch: Vec<(String, Vec<u8>, Option<Vec<u8>>)> = Vec::new();
+    // WHY: count_keys is O(1) in RocksDB (metadata lookup), avoiding the O(n)
+    // full scan when pruning isn't needed.
+    let count = db.store().count_keys(CF_ATTESTATIONS)?;
 
-    for (key, value) in &all_attestations {
-        if let Ok(att) =
-            bincode::deserialize::<gratia_core::types::ProofOfLifeAttestation>(value)
-        {
-            if att.date < cutoff_date {
-                batch.push((CF_ATTESTATIONS.to_string(), key.clone(), None));
-                pruned += 1;
-            }
-        }
+    if count <= max_retained {
+        return Ok(0);
     }
 
+    // Over the limit — only load the excess entries we need to prune.
+    // WHY: iter_cf_limit reads only the oldest `prune_count` entries by key
+    // order, avoiding loading the entire CF into memory. In Phase 2 this
+    // should use a streaming iterator with a prefix scan for even lower
+    // memory usage on very large attestation sets.
+    let prune_count = (count - max_retained) as usize;
+    let to_prune = db.store().iter_cf_limit(CF_ATTESTATIONS, prune_count)?;
+
+    let batch: Vec<(String, Vec<u8>, Option<Vec<u8>>)> = to_prune
+        .iter()
+        .map(|(key, _)| (CF_ATTESTATIONS.to_string(), key.clone(), None))
+        .collect();
+
+    let pruned = batch.len() as u64;
     if !batch.is_empty() {
         db.batch_write(batch)?;
     }
@@ -280,7 +288,8 @@ pub fn prune_old_attestations(
     if pruned > 0 {
         tracing::info!(
             pruned_attestations = pruned,
-            cutoff_date = %cutoff_date,
+            total_before = count,
+            max_retained = max_retained,
             "Pruned old attestations"
         );
     }
@@ -439,59 +448,100 @@ mod tests {
     #[test]
     fn test_prune_old_attestations() {
         let db = make_test_db();
+        // WHY: Set retention to 0 days so the max_retained = 0, forcing all
+        // attestations to be pruned. This tests the pruning logic itself.
+        let policy = PruningPolicy {
+            attestation_retention_days: 0,
+            ..Default::default()
+        };
+
+        fn make_test_att(nullifier_byte: u8) -> gratia_core::types::ProofOfLifeAttestation {
+            gratia_core::types::ProofOfLifeAttestation {
+                blinded_id: [0xAA; 32],
+                nullifier: [nullifier_byte; 32],
+                zk_proof: vec![0u8; 32],
+                presence_score: 50,
+                sensor_flags: gratia_core::types::SensorFlags {
+                    gps: true,
+                    accelerometer: true,
+                    wifi: true,
+                    bluetooth: false,
+                    gyroscope: false,
+                    ambient_light: false,
+                    cellular: false,
+                    barometer: false,
+                    magnetometer: false,
+                    nfc: false,
+                    secure_enclave: false,
+                    biometric: false,
+                    camera_hash: false,
+                    microphone_hash: false,
+                },
+                signature: vec![0u8; 64],
+            }
+        }
+
+        let att1 = make_test_att(0x01);
+        let att2 = make_test_att(0x02);
+
+        db.put_attestation(&att1).unwrap();
+        db.put_attestation(&att2).unwrap();
+
+        // With retention_days=0, max_retained=0, so all should be pruned
+        let pruned = prune_old_attestations(&db, &policy).unwrap();
+        assert_eq!(pruned, 2);
+
+        // Both attestations should be gone
+        assert!(db.get_attestation_by_nullifier(&[0x01; 32]).unwrap().is_none());
+        assert!(db.get_attestation_by_nullifier(&[0x02; 32]).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_prune_attestations_under_limit() {
+        let db = make_test_db();
+        // WHY: With retention_days=7, max_retained = 70,000 — way more than
+        // the 2 attestations we store, so nothing should be pruned.
         let policy = PruningPolicy {
             attestation_retention_days: 7,
             ..Default::default()
         };
 
-        let node_id = gratia_core::types::NodeId([1u8; 32]);
+        fn make_test_att(nullifier_byte: u8) -> gratia_core::types::ProofOfLifeAttestation {
+            gratia_core::types::ProofOfLifeAttestation {
+                blinded_id: [0xAA; 32],
+                nullifier: [nullifier_byte; 32],
+                zk_proof: vec![0u8; 32],
+                presence_score: 50,
+                sensor_flags: gratia_core::types::SensorFlags {
+                    gps: true,
+                    accelerometer: true,
+                    wifi: true,
+                    bluetooth: false,
+                    gyroscope: false,
+                    ambient_light: false,
+                    cellular: false,
+                    barometer: false,
+                    magnetometer: false,
+                    nfc: false,
+                    secure_enclave: false,
+                    biometric: false,
+                    camera_hash: false,
+                    microphone_hash: false,
+                },
+                signature: vec![0u8; 64],
+            }
+        }
 
-        // Create attestations: one recent, one old.
-        let recent_date = Utc::now().date_naive();
-        let old_date = Utc::now().date_naive() - Duration::days(30);
+        db.put_attestation(&make_test_att(0x01)).unwrap();
+        db.put_attestation(&make_test_att(0x02)).unwrap();
 
-        let recent_att = gratia_core::types::ProofOfLifeAttestation {
-            node_id,
-            date: recent_date,
-            zk_proof: vec![0u8; 32],
-            presence_score: 50,
-            sensor_flags: gratia_core::types::SensorFlags {
-                gps: true,
-                accelerometer: true,
-                wifi: true,
-                bluetooth: false,
-                gyroscope: false,
-                ambient_light: false,
-                cellular: false,
-                barometer: false,
-                magnetometer: false,
-                nfc: false,
-                secure_enclave: false,
-                biometric: false,
-                camera_hash: false,
-                microphone_hash: false,
-            },
-            signature: vec![0u8; 64],
-        };
-
-        let old_att = gratia_core::types::ProofOfLifeAttestation {
-            date: old_date,
-            ..recent_att.clone()
-        };
-
-        db.put_attestation(&recent_att).unwrap();
-        db.put_attestation(&old_att).unwrap();
-
+        // Under the limit — nothing should be pruned
         let pruned = prune_old_attestations(&db, &policy).unwrap();
-        assert_eq!(pruned, 1);
+        assert_eq!(pruned, 0);
 
-        // Recent attestation should still exist.
-        let still_there = db.get_attestation(&node_id, &recent_date).unwrap();
-        assert!(still_there.is_some());
-
-        // Old attestation should be gone.
-        let gone = db.get_attestation(&node_id, &old_date).unwrap();
-        assert!(gone.is_none());
+        // Both should still exist
+        assert!(db.get_attestation_by_nullifier(&[0x01; 32]).unwrap().is_some());
+        assert!(db.get_attestation_by_nullifier(&[0x02; 32]).unwrap().is_some());
     }
 
     #[test]

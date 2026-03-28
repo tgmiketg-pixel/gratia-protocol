@@ -8,9 +8,8 @@
 //! Keys never leave the secure enclave in production. The software keystore
 //! is provided only for environments where hardware security is unavailable.
 
-use ed25519_dalek::{SigningKey, VerifyingKey, Signature, Signer, Verifier};
+use ed25519_dalek::{SigningKey, Signer, VerifyingKey};
 use rand::rngs::OsRng;
-use sha2::{Sha256, Digest};
 use serde::{Deserialize, Serialize};
 
 use gratia_core::error::GratiaError;
@@ -160,6 +159,115 @@ impl Keystore for SoftwareKeystore {
 }
 
 // ============================================================================
+// File-backed Keystore (development / testnet persistence)
+// ============================================================================
+
+/// File-backed keystore that persists the Ed25519 signing key to disk.
+///
+/// WHY: The SoftwareKeystore loses the key when the app restarts, generating
+/// a new wallet address each time. FileKeystore writes the key to a file in
+/// the app's private data directory. On Android, this is accessible only to
+/// the app process (sandboxed by the OS).
+///
+/// For production, the secure enclave keystore should be used instead.
+/// FileKeystore is suitable for testnet and development.
+pub struct FileKeystore {
+    signing_key: Option<SigningKey>,
+    /// Path to the 32-byte key file on disk.
+    key_path: String,
+}
+
+impl FileKeystore {
+    /// Create a new FileKeystore. If the key file already exists at
+    /// `{data_dir}/wallet_key.bin`, the key is loaded immediately.
+    pub fn new(data_dir: &str) -> Self {
+        let key_path = format!("{}/wallet_key.bin", data_dir);
+        let signing_key = Self::load_key(&key_path);
+        if signing_key.is_some() {
+            tracing::info!("FileKeystore: loaded existing key from {}", key_path);
+        }
+        Self { signing_key, key_path }
+    }
+
+    /// Read 32 bytes from the key file and construct a SigningKey.
+    /// Returns None if the file doesn't exist or contains invalid data.
+    fn load_key(path: &str) -> Option<SigningKey> {
+        let bytes = std::fs::read(path).ok()?;
+        // WHY: Ed25519 secret keys are exactly 32 bytes. Reject anything else
+        // to avoid silently loading a corrupted or truncated file.
+        let arr: [u8; 32] = bytes.try_into().ok()?;
+        Some(SigningKey::from_bytes(&arr))
+    }
+
+    /// Write the 32-byte secret key to the key file.
+    fn save_key(path: &str, key: &SigningKey) -> Result<(), GratiaError> {
+        // WHY: Create parent directories if they don't exist. On first launch
+        // the data directory may not have been fully created yet.
+        if let Some(parent) = std::path::Path::new(path).parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                GratiaError::Other(format!("failed to create key directory: {}", e))
+            })?;
+        }
+        std::fs::write(path, key.to_bytes()).map_err(|e| {
+            GratiaError::Other(format!("failed to write key file: {}", e))
+        })
+    }
+
+    /// Convenience: get the `Address` for the stored keypair.
+    pub fn address(&self) -> Result<Address, GratiaError> {
+        let pubkey = self.public_key_bytes()?;
+        address_from_pubkey_bytes(&pubkey)
+    }
+
+    /// Convenience: get the `NodeId` for the stored keypair.
+    pub fn node_id(&self) -> Result<NodeId, GratiaError> {
+        let pubkey = self.public_key_bytes()?;
+        node_id_from_pubkey_bytes(&pubkey)
+    }
+}
+
+impl Keystore for FileKeystore {
+    fn generate_keypair(&mut self) -> Result<Vec<u8>, GratiaError> {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let pubkey = signing_key.verifying_key().as_bytes().to_vec();
+        Self::save_key(&self.key_path, &signing_key)?;
+        self.signing_key = Some(signing_key);
+        Ok(pubkey)
+    }
+
+    fn sign(&self, message: &[u8]) -> Result<Vec<u8>, GratiaError> {
+        let key = self.signing_key.as_ref().ok_or(GratiaError::WalletLocked)?;
+        let signature = key.sign(message);
+        Ok(signature.to_bytes().to_vec())
+    }
+
+    fn public_key_bytes(&self) -> Result<Vec<u8>, GratiaError> {
+        let key = self.signing_key.as_ref().ok_or(GratiaError::WalletLocked)?;
+        Ok(key.verifying_key().as_bytes().to_vec())
+    }
+
+    fn has_keypair(&self) -> bool {
+        self.signing_key.is_some()
+    }
+
+    fn export_secret_key(&self) -> Result<Vec<u8>, GratiaError> {
+        let key = self.signing_key.as_ref().ok_or(GratiaError::WalletLocked)?;
+        Ok(key.to_bytes().to_vec())
+    }
+
+    fn import_secret_key(&mut self, secret: &[u8]) -> Result<Vec<u8>, GratiaError> {
+        let bytes: [u8; 32] = secret
+            .try_into()
+            .map_err(|_| GratiaError::Other("secret key must be exactly 32 bytes".into()))?;
+        let signing_key = SigningKey::from_bytes(&bytes);
+        let pubkey = signing_key.verifying_key().as_bytes().to_vec();
+        Self::save_key(&self.key_path, &signing_key)?;
+        self.signing_key = Some(signing_key);
+        Ok(pubkey)
+    }
+}
+
+// ============================================================================
 // Serializable key material (for encrypted-at-rest persistence)
 // ============================================================================
 
@@ -273,5 +381,91 @@ mod tests {
     fn test_address_from_pubkey_bytes_invalid() {
         let result = address_from_pubkey_bytes(&[0u8; 16]);
         assert!(result.is_err());
+    }
+
+    // ========================================================================
+    // FileKeystore tests
+    // ========================================================================
+
+    /// Generate a unique temp directory for each test to avoid collisions.
+    fn temp_keystore_dir() -> String {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos();
+        let tid = std::thread::current().id();
+        let dir = format!("/tmp/gratia_test_keystore_{:?}_{}", tid, nanos);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn cleanup_dir(dir: &str) {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_file_keystore_save_and_load() {
+        let dir = temp_keystore_dir();
+
+        // Generate a key and save it
+        let pubkey1 = {
+            let mut ks = FileKeystore::new(&dir);
+            assert!(!ks.has_keypair());
+            let pk = ks.generate_keypair().unwrap();
+            assert!(ks.has_keypair());
+            pk
+        };
+
+        // Create a new FileKeystore at the same path — should load the saved key
+        let ks2 = FileKeystore::new(&dir);
+        assert!(ks2.has_keypair());
+        let pubkey2 = ks2.public_key_bytes().unwrap();
+
+        assert_eq!(pubkey1, pubkey2);
+
+        cleanup_dir(&dir);
+    }
+
+    #[test]
+    fn test_file_keystore_no_file() {
+        // Non-existent directory — has_keypair should return false
+        let ks = FileKeystore::new("/tmp/gratia_test_keystore_nonexistent_dir_xyz");
+        assert!(!ks.has_keypair());
+
+        // Clean up in case the directory was somehow created
+        let _ = std::fs::remove_dir_all("/tmp/gratia_test_keystore_nonexistent_dir_xyz");
+    }
+
+    #[test]
+    fn test_file_keystore_roundtrip() {
+        let dir = temp_keystore_dir();
+
+        let message = b"roundtrip verification message";
+
+        // Generate, sign
+        let (pubkey, sig) = {
+            let mut ks = FileKeystore::new(&dir);
+            let pk = ks.generate_keypair().unwrap();
+            let s = ks.sign(message).unwrap();
+            (pk, s)
+        };
+
+        // Load from file, sign again — signatures must match (Ed25519 is deterministic)
+        {
+            let ks2 = FileKeystore::new(&dir);
+            assert!(ks2.has_keypair());
+
+            let pubkey2 = ks2.public_key_bytes().unwrap();
+            assert_eq!(pubkey, pubkey2);
+
+            let sig2 = ks2.sign(message).unwrap();
+            assert_eq!(sig, sig2);
+
+            // Verify with the helper
+            verify_signature(&pubkey, message, &sig2).unwrap();
+        }
+
+        cleanup_dir(&dir);
     }
 }

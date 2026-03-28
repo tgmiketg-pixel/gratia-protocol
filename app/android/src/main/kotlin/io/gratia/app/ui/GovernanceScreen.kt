@@ -36,9 +36,14 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -52,8 +57,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import java.text.SimpleDateFormat
 import java.util.Date
+import io.gratia.app.GratiaLogo
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import io.gratia.app.ui.theme.*
 
 // ============================================================================
 // GovernanceScreen
@@ -97,11 +104,29 @@ private fun GovernanceListScreen(
     viewModel: GovernanceViewModel,
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
+    var showCreateDialog by remember { mutableStateOf(false) }
     val tabs = listOf("Proposals", "Polls")
+
+    // Create dialog
+    if (showCreateDialog) {
+        CreateGovernanceDialog(
+            selectedTab = selectedTab,
+            onDismiss = { showCreateDialog = false },
+            onCreatePoll = { question, options ->
+                viewModel.createPoll(question, options)
+                showCreateDialog = false
+            },
+            onCreateProposal = { title, description ->
+                viewModel.createProposal(title, description)
+                showCreateDialog = false
+            },
+        )
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
+                navigationIcon = { GratiaLogo(modifier = Modifier.padding(start = 12.dp)) },
                 title = { Text("Governance") },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
@@ -109,9 +134,8 @@ private fun GovernanceListScreen(
             )
         },
         floatingActionButton = {
-            // FAB: create proposal requires 90+ days PoL; create poll is always available
             FloatingActionButton(
-                onClick = { /* Open create dialog */ },
+                onClick = { showCreateDialog = true },
             ) {
                 Icon(Icons.Default.Add, contentDescription = "Create")
             }
@@ -259,7 +283,7 @@ private fun VoteBar(
             modifier = Modifier
                 .weight(1f)
                 .height(8.dp),
-            color = Color(0xFF4CAF50),
+            color = SignalGreen,
             trackColor = MaterialTheme.colorScheme.error.copy(alpha = 0.4f),
         )
         Spacer(modifier = Modifier.width(8.dp))
@@ -272,12 +296,12 @@ private fun VoteBar(
 }
 
 private fun proposalStatusColor(status: String): Color = when (status) {
-    "discussion" -> Color(0xFF2196F3)     // Blue
-    "voting" -> Color(0xFFFFA000)          // Amber
-    "passed" -> Color(0xFF4CAF50)          // Green
-    "rejected" -> Color(0xFFF44336)        // Red
-    "implemented" -> Color(0xFF9C27B0)     // Purple
-    else -> Color(0xFF9E9E9E)              // Gray
+    "discussion" -> CharcoalNavy
+    "voting" -> AmberGold
+    "passed" -> SignalGreen
+    "rejected" -> AlertRed
+    "implemented" -> DarkGoldenrod
+    else -> AgedGold
 }
 
 // ============================================================================
@@ -454,9 +478,9 @@ private fun ProposalDetailScreen(
                                 fontWeight = FontWeight.SemiBold,
                             )
                             Spacer(modifier = Modifier.height(12.dp))
-                            VoteResultRow("For", proposal.votesFor, totalVotes, Color(0xFF4CAF50))
+                            VoteResultRow("For", proposal.votesFor, totalVotes, SignalGreen)
                             VoteResultRow("Against", proposal.votesAgainst, totalVotes, MaterialTheme.colorScheme.error)
-                            VoteResultRow("Abstain", proposal.votesAbstain, totalVotes, Color(0xFF9E9E9E))
+                            VoteResultRow("Abstain", proposal.votesAbstain, totalVotes, AgedGold)
                             Divider(modifier = Modifier.padding(vertical = 8.dp))
                             Text(
                                 text = "$totalVotes total votes",
@@ -744,6 +768,123 @@ private fun PollOptionResult(
             modifier = Modifier.fillMaxWidth(),
             color = barColor,
             trackColor = MaterialTheme.colorScheme.surfaceVariant,
+        )
+    }
+}
+
+// ============================================================================
+// Create Dialog
+// ============================================================================
+
+@Composable
+private fun CreateGovernanceDialog(
+    selectedTab: Int,
+    onDismiss: () -> Unit,
+    onCreatePoll: (question: String, options: List<String>) -> Unit,
+    onCreateProposal: (title: String, description: String) -> Unit,
+) {
+    if (selectedTab == 1) {
+        // Create Poll
+        var question by remember { mutableStateOf("") }
+        var optionsText by remember { mutableStateOf("") }
+
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("Create Poll") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "One phone, one vote per poll",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    )
+                    OutlinedTextField(
+                        value = question,
+                        onValueChange = { question = it },
+                        label = { Text("Question") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = false,
+                        maxLines = 3,
+                    )
+                    OutlinedTextField(
+                        value = optionsText,
+                        onValueChange = { optionsText = it },
+                        label = { Text("Options (one per line)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = false,
+                        minLines = 3,
+                        maxLines = 6,
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val options = optionsText.lines()
+                            .map { it.trim() }
+                            .filter { it.isNotEmpty() }
+                        if (question.isNotBlank() && options.size >= 2) {
+                            onCreatePoll(question.trim(), options)
+                        }
+                    },
+                    enabled = question.isNotBlank() &&
+                        optionsText.lines().count { it.trim().isNotEmpty() } >= 2,
+                ) {
+                    Text("Create Poll")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            },
+        )
+    } else {
+        // Create Proposal (requires 90+ days PoL — enforcement is in the ViewModel)
+        var title by remember { mutableStateOf("") }
+        var description by remember { mutableStateOf("") }
+
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("Create Proposal") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Requires 90+ days Proof of Life history",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    )
+                    OutlinedTextField(
+                        value = title,
+                        onValueChange = { title = it },
+                        label = { Text("Title") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = description,
+                        onValueChange = { description = it },
+                        label = { Text("Description") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = false,
+                        minLines = 4,
+                        maxLines = 8,
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (title.isNotBlank() && description.isNotBlank()) {
+                            onCreateProposal(title.trim(), description.trim())
+                        }
+                    },
+                    enabled = title.isNotBlank() && description.isNotBlank(),
+                ) {
+                    Text("Submit Proposal")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            },
         )
     }
 }

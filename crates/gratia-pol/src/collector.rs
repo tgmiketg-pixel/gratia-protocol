@@ -301,6 +301,11 @@ impl Default for SensorEventBuffer {
 mod tests {
     use super::*;
     use chrono::{Duration, Utc};
+    use gratia_core::config::ProofOfLifeConfig;
+
+    fn default_pol_config() -> ProofOfLifeConfig {
+        ProofOfLifeConfig::default()
+    }
 
     fn ts(hours_ago: i64) -> DateTime<Utc> {
         Utc::now() - Duration::hours(hours_ago)
@@ -310,7 +315,7 @@ mod tests {
     fn test_empty_buffer_produces_invalid_data() {
         let buffer = SensorEventBuffer::new();
         let data = buffer.to_daily_data();
-        assert!(!data.is_valid());
+        assert!(!data.is_valid(&default_pol_config()));
         assert_eq!(data.unlock_count, 0);
     }
 
@@ -516,6 +521,6 @@ mod tests {
         });
 
         let data = buffer.to_daily_data();
-        assert!(data.is_valid());
+        assert!(data.is_valid(&default_pol_config()));
     }
 }

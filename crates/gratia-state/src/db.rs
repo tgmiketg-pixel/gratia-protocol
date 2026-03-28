@@ -120,6 +120,11 @@ pub trait StateStore: Send + Sync {
     /// Returns pairs in key order.
     fn iter_cf(&self, cf: &str) -> Result<Vec<(Vec<u8>, Vec<u8>)>, GratiaError>;
 
+    /// Iterate up to `limit` key-value pairs from a column family.
+    /// WHY: For pruning operations, we often only need to read a subset
+    /// of entries. This avoids loading the entire CF into memory.
+    fn iter_cf_limit(&self, cf: &str, limit: usize) -> Result<Vec<(Vec<u8>, Vec<u8>)>, GratiaError>;
+
     /// Count the number of keys in a column family.
     fn count_keys(&self, cf: &str) -> Result<u64, GratiaError>;
 
@@ -149,6 +154,66 @@ impl InMemoryStore {
         InMemoryStore {
             data: RwLock::new(data),
         }
+    }
+
+    /// Save the entire store to a file using bincode serialization.
+    ///
+    /// WHY: On mobile, RocksDB cross-compilation requires LLVM/libclang which
+    /// may not be available. This file-based persistence is a pragmatic
+    /// alternative that gives state durability (survives app restarts) without
+    /// the C++ compilation dependency. The entire BTreeMap is serialized
+    /// atomically — write to a temp file, then rename for crash safety.
+    pub fn save_to_file(&self, path: &str) -> Result<(), GratiaError> {
+        let data = self.data.read().map_err(|e| {
+            GratiaError::StorageError(format!("lock poisoned: {}", e))
+        })?;
+        let bytes = bincode::serialize(&*data)
+            .map_err(|e| GratiaError::SerializationError(e.to_string()))?;
+        let tmp_path = format!("{}.tmp", path);
+        std::fs::write(&tmp_path, &bytes)
+            .map_err(|e| GratiaError::StorageError(format!("write failed: {}", e)))?;
+        std::fs::rename(&tmp_path, path)
+            .map_err(|e| GratiaError::StorageError(format!("rename failed: {}", e)))?;
+        Ok(())
+    }
+
+    /// Load the store from a previously saved file.
+    ///
+    /// Returns a new InMemoryStore populated with the saved data.
+    /// If the file doesn't exist or is corrupted, returns a fresh empty store.
+    pub fn load_from_file(path: &str) -> Self {
+        match std::fs::read(path) {
+            Ok(bytes) => {
+                match bincode::deserialize::<BTreeMap<String, BTreeMap<Vec<u8>, Vec<u8>>>>(&bytes) {
+                    Ok(mut data) => {
+                        // WHY: Ensure all column families exist even if the saved
+                        // file predates a schema change that added new CFs.
+                        for cf in ALL_COLUMN_FAMILIES {
+                            data.entry(cf.to_string()).or_insert_with(BTreeMap::new);
+                        }
+                        tracing::info!("Loaded state from {}", path);
+                        InMemoryStore {
+                            data: RwLock::new(data),
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to deserialize state file: {} — starting fresh", e);
+                        Self::new()
+                    }
+                }
+            }
+            Err(_) => {
+                tracing::info!("No state file at {} — starting fresh", path);
+                Self::new()
+            }
+        }
+    }
+
+    /// Get the approximate serialized size (for logging).
+    pub fn data_size_estimate(&self) -> usize {
+        self.data.read().map(|d| {
+            d.values().map(|cf| cf.len()).sum::<usize>()
+        }).unwrap_or(0)
     }
 }
 
@@ -222,6 +287,16 @@ impl StateStore for InMemoryStore {
             .get(cf)
             .ok_or_else(|| GratiaError::StorageError(format!("unknown column family: {}", cf)))?;
         Ok(cf_map.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+    }
+
+    fn iter_cf_limit(&self, cf: &str, limit: usize) -> Result<Vec<(Vec<u8>, Vec<u8>)>, GratiaError> {
+        let data = self.data.read().map_err(|e| {
+            GratiaError::StorageError(format!("lock poisoned: {}", e))
+        })?;
+        let cf_map = data
+            .get(cf)
+            .ok_or_else(|| GratiaError::StorageError(format!("unknown column family: {}", cf)))?;
+        Ok(cf_map.iter().take(limit).map(|(k, v)| (k.clone(), v.clone())).collect())
     }
 
     fn count_keys(&self, cf: &str) -> Result<u64, GratiaError> {
@@ -363,6 +438,21 @@ impl StateStore for RocksDbStore {
         Ok(result)
     }
 
+    fn iter_cf_limit(&self, cf: &str, limit: usize) -> Result<Vec<(Vec<u8>, Vec<u8>)>, GratiaError> {
+        let handle = self.db.cf_handle(cf).ok_or_else(|| {
+            GratiaError::StorageError(format!("unknown column family: {}", cf))
+        })?;
+        let iter = self.db.iterator_cf(&handle, rocksdb::IteratorMode::Start);
+        let mut result = Vec::new();
+        for item in iter.take(limit) {
+            let (k, v) = item.map_err(|e| {
+                GratiaError::StorageError(format!("iterator error: {}", e))
+            })?;
+            result.push((k.to_vec(), v.to_vec()));
+        }
+        Ok(result)
+    }
+
     fn count_keys(&self, cf: &str) -> Result<u64, GratiaError> {
         // WHY: RocksDB does not have an efficient count operation, so we iterate.
         // For production use, consider maintaining a counter in the STATE cf.
@@ -418,7 +508,7 @@ impl StateDb {
 
     /// Store a block, keyed by its header hash.
     pub fn put_block(&self, block: &Block) -> Result<(), GratiaError> {
-        let hash = block.header.hash();
+        let hash = block.header.hash()?;
         let encoded = bincode::serialize(block)
             .map_err(|e| GratiaError::SerializationError(e.to_string()))?;
         self.store.put(CF_BLOCKS, &hash.0, &encoded)?;
@@ -530,22 +620,24 @@ impl StateDb {
 
     // --- Attestation operations ---
 
-    /// Store a Proof of Life attestation.
-    /// Keyed by (node_id || date) for unique daily attestations per node.
+    /// Store a Proof of Life attestation (on-chain, unlinkable form).
+    /// WHY: Keyed by nullifier — unique per node per epoch, prevents
+    /// double-submission detection without revealing node identity.
     pub fn put_attestation(&self, attestation: &ProofOfLifeAttestation) -> Result<(), GratiaError> {
-        let key = attestation_key(&attestation.node_id, &attestation.date);
+        let key = attestation.nullifier.to_vec();
         let encoded = bincode::serialize(attestation)
             .map_err(|e| GratiaError::SerializationError(e.to_string()))?;
         self.store.put(CF_ATTESTATIONS, &key, &encoded)
     }
 
-    /// Retrieve a Proof of Life attestation for a specific node and date.
-    pub fn get_attestation(
+    /// Retrieve a Proof of Life attestation by its nullifier.
+    /// WHY: On-chain attestations are unlinkable — the only way to look
+    /// one up is by nullifier, not by node_id or date.
+    pub fn get_attestation_by_nullifier(
         &self,
-        node_id: &NodeId,
-        date: &chrono::NaiveDate,
+        nullifier: &[u8; 32],
     ) -> Result<Option<ProofOfLifeAttestation>, GratiaError> {
-        let key = attestation_key(node_id, date);
+        let key = nullifier.to_vec();
         match self.store.get(CF_ATTESTATIONS, &key)? {
             Some(data) => {
                 let att: ProofOfLifeAttestation = bincode::deserialize(&data)
@@ -554,6 +646,12 @@ impl StateDb {
             }
             None => Ok(None),
         }
+    }
+
+    /// Check if a nullifier has already been submitted (double-submission guard).
+    pub fn has_nullifier(&self, nullifier: &[u8; 32]) -> Result<bool, GratiaError> {
+        let key = nullifier.to_vec();
+        Ok(self.store.get(CF_ATTESTATIONS, &key)?.is_some())
     }
 
     // --- General state operations ---
@@ -636,14 +734,10 @@ impl StateDb {
     }
 }
 
-/// Build the attestation storage key: node_id bytes || date string bytes.
-/// This ensures one attestation per node per day.
-fn attestation_key(node_id: &NodeId, date: &chrono::NaiveDate) -> Vec<u8> {
-    let mut key = Vec::with_capacity(32 + 10);
-    key.extend_from_slice(&node_id.0);
-    key.extend_from_slice(date.format("%Y-%m-%d").to_string().as_bytes());
-    key
-}
+// NOTE: The old attestation_key(node_id, date) function was removed as part of
+// the privacy hardening. On-chain attestations are now keyed by nullifier only,
+// which prevents identity linkage. Local attestation records (LocalProofOfLifeRecord)
+// can still be keyed by (node_id, date) in on-device storage.
 
 // ============================================================================
 // Tests

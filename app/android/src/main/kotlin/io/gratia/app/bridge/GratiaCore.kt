@@ -4,13 +4,16 @@ import android.util.Log
 import uniffi.gratia_ffi.GratiaNode
 import uniffi.gratia_ffi.FfiException
 import uniffi.gratia_ffi.FfiConsensusStatus
+import uniffi.gratia_ffi.FfiMeshStatus
 import uniffi.gratia_ffi.FfiMiningStatus
 import uniffi.gratia_ffi.FfiNetworkEvent
 import uniffi.gratia_ffi.FfiNetworkStatus
 import uniffi.gratia_ffi.FfiProofOfLifeStatus
 import uniffi.gratia_ffi.FfiSensorEvent
+import uniffi.gratia_ffi.FfiShardInfo
 import uniffi.gratia_ffi.FfiStakeInfo
 import uniffi.gratia_ffi.FfiTransactionInfo
+import uniffi.gratia_ffi.FfiVmInfo
 import uniffi.gratia_ffi.FfiWalletInfo
 
 /**
@@ -63,6 +66,19 @@ object GratiaCoreManager {
             Log.e(TAG, "Failed to initialize Rust core", e)
             throw GratiaBridgeException("Failed to initialize Rust core: ${e.message}", e)
         }
+    }
+
+    // ========================================================================
+    // Debug methods
+    // ========================================================================
+
+    /**
+     * Enable debug bypass for PoL and staking checks.
+     * Allows testing mining and transactions without waiting 24 hours for PoL.
+     */
+    fun enableDebugBypass() {
+        callNode { it.enableDebugBypass() }
+        Log.i(TAG, "Debug bypass enabled")
     }
 
     // ========================================================================
@@ -123,6 +139,19 @@ object GratiaCoreManager {
         }
     }
 
+    /**
+     * Export the wallet's seed phrase as a hex string.
+     *
+     * The hex string encodes the raw Ed25519 private key. In production this
+     * would be converted to a BIP39 24-word mnemonic.
+     *
+     * @return Hex-encoded seed phrase string.
+     * @throws GratiaBridgeException if wallet not initialized.
+     */
+    fun exportSeedPhrase(): String {
+        return callNode { it.exportSeedPhrase() }
+    }
+
     // ========================================================================
     // Mining methods
     // ========================================================================
@@ -162,6 +191,18 @@ object GratiaCoreManager {
      */
     fun startMining(): MiningStatus {
         return callNode { it.startMining() }.toBridge()
+    }
+
+    /**
+     * Tick mining rewards for one minute of active mining.
+     *
+     * Called by the MiningService every 60 seconds. Credits the wallet
+     * with the flat-rate mining reward (1 GRAT/minute in Phase 1).
+     *
+     * @return Updated wallet balance in Lux.
+     */
+    fun tickMiningReward(): Long {
+        return callNode { it.tickMiningReward().toLong() }
     }
 
     /**
@@ -339,6 +380,19 @@ object GratiaCoreManager {
         }
     }
 
+    /**
+     * Start the block explorer HTTP API.
+     *
+     * WHY: Serves chain data as JSON so the web-based block explorer can
+     * connect and display live blocks, transactions, and network stats.
+     *
+     * @param port HTTP port to listen on (default 8080).
+     * @return URL the explorer should connect to.
+     */
+    fun startExplorerApi(port: Int = 8080): String {
+        return callNode { it.startExplorerApi(port.toUShort()) }
+    }
+
     // ========================================================================
     // Consensus methods
     // ========================================================================
@@ -373,6 +427,245 @@ object GratiaCoreManager {
     fun getConsensusStatus(): ConsensusStatus {
         val ffi = callNode { it.getConsensusStatus() }
         return ffi.toBridge()
+    }
+
+    /**
+     * Request block sync from connected peers.
+     *
+     * Checks if this node is behind the network and requests missing blocks.
+     *
+     * @return Current sync state string (e.g., "synced", "syncing 5/10", "behind 3/10").
+     */
+    fun requestSync(): String {
+        return callNode { it.requestSync() }
+    }
+
+    // ========================================================================
+    // Mesh transport methods (Phase 3 — Bluetooth + Wi-Fi Direct)
+    // ========================================================================
+
+    /**
+     * Start the mesh transport layer (Bluetooth LE + Wi-Fi Direct).
+     *
+     * Enables local peer-to-peer communication for offline transaction relay
+     * and connectivity in areas without internet.
+     */
+    fun startMesh() {
+        callNode { it.startMesh() }
+        Log.i(TAG, "Mesh transport started")
+    }
+
+    /**
+     * Stop the mesh transport layer.
+     */
+    fun stopMesh() {
+        callNode { it.stopMesh() }
+        Log.i(TAG, "Mesh transport stopped")
+    }
+
+    /**
+     * Get the current mesh transport status.
+     *
+     * @return Mesh status with Bluetooth/Wi-Fi Direct state and peer counts.
+     */
+    fun getMeshStatus(): MeshStatus {
+        val ffi = callNode { it.getMeshStatus() }
+        return MeshStatus(
+            enabled = ffi.enabled,
+            bluetoothActive = ffi.bluetoothActive,
+            wifiDirectActive = ffi.wifiDirectActive,
+            meshPeerCount = ffi.meshPeerCount.toInt(),
+            bridgePeerCount = ffi.bridgePeerCount.toInt(),
+            pendingRelayCount = ffi.pendingRelayCount.toInt(),
+        )
+    }
+
+    /**
+     * Broadcast a transaction via the mesh layer.
+     *
+     * WHY: Allows transactions to propagate even without internet connectivity.
+     * Mesh peers with internet (bridge peers) relay to the wider network.
+     *
+     * @param txHex Hex-encoded signed transaction.
+     * @return Relay ID for tracking.
+     */
+    fun meshBroadcastTransaction(txHex: String): String {
+        return callNode { it.meshBroadcastTransaction(txHex) }
+    }
+
+    // ========================================================================
+    // Sharding methods (Phase 3 — Geographic sharding)
+    // ========================================================================
+
+    /**
+     * Get this node's shard assignment and sharding network info.
+     *
+     * @return Shard info with shard ID, validator counts, and activity status.
+     */
+    fun getShardInfo(): ShardInfo {
+        val ffi = callNode { it.getShardInfo() }
+        return ShardInfo(
+            shardId = ffi.shardId.toInt(),
+            shardCount = ffi.shardCount.toInt(),
+            localValidators = ffi.localValidators.toInt(),
+            crossShardValidators = ffi.crossShardValidators.toInt(),
+            shardHeight = ffi.shardHeight.toLong(),
+            isShardingActive = ffi.isShardingActive,
+        )
+    }
+
+    /**
+     * Get the number of cross-shard transactions queued for routing.
+     *
+     * @return Count of pending cross-shard messages.
+     */
+    fun getCrossShardQueueSize(): Int {
+        return callNode { it.getCrossShardQueueSize().toInt() }
+    }
+
+    // ========================================================================
+    // ZK proof methods (Phase 3 — Bulletproofs range + Groth16)
+    // ========================================================================
+
+    /**
+     * Generate a Bulletproofs range proof for a given value.
+     *
+     * WHY: Range proofs are used in shielded transactions to prove a value
+     * is within a valid range without revealing the actual amount.
+     *
+     * @param value The value to prove is in range.
+     * @param bitWidth Number of bits for the range (e.g., 64 for u64).
+     * @return Hex-encoded proof bytes.
+     */
+    fun generateRangeProof(value: Long, bitWidth: Int): String {
+        return callNode { it.generateRangeProof(value.toULong(), bitWidth.toUInt()) }
+    }
+
+    /**
+     * Verify a Groth16 zero-knowledge proof.
+     *
+     * WHY: Verification is fast (~5-10ms on ARM) compared to proof generation.
+     * Every validator verifies proofs for transactions in each block.
+     *
+     * @param proofHex Hex-encoded proof bytes.
+     * @param publicInputsHex Hex-encoded public inputs.
+     * @param vkHex Hex-encoded verification key.
+     * @return True if the proof is valid.
+     */
+    fun verifyGroth16Proof(proofHex: String, publicInputsHex: String, vkHex: String): Boolean {
+        return callNode { it.verifyGroth16Proof(proofHex, publicInputsHex, vkHex) }
+    }
+
+    // ========================================================================
+    // VM info methods (Phase 3 — GratiaVM status)
+    // ========================================================================
+
+    /**
+     * Get GratiaVM runtime information.
+     *
+     * @return VM info with runtime type, contract count, gas usage, and memory state.
+     */
+    fun getVmInfo(): VmInfo {
+        val ffi = callNode { it.getVmInfo() }
+        return VmInfo(
+            runtimeType = ffi.runtimeType,
+            contractsLoaded = ffi.contractsLoaded.toInt(),
+            totalGasUsed = ffi.totalGasUsed.toLong(),
+            memoryWired = ffi.memoryWired,
+        )
+    }
+
+    // ========================================================================
+    // Smart Contract methods
+    // ========================================================================
+
+    /**
+     * Initialize the GratiaVM with built-in demo contracts.
+     *
+     * @return List of deployed contract addresses.
+     */
+    fun initVm(): List<String> {
+        return callNode { it.initVm() }
+    }
+
+    /**
+     * Call a smart contract function.
+     *
+     * @param contractAddress The "grat:..." address of the deployed contract.
+     * @param functionName The function to call.
+     * @param gasLimit Maximum gas to spend.
+     * @return Execution result with success, return value, gas used, events.
+     */
+    fun callContract(contractAddress: String, functionName: String, gasLimit: Long = 1_000_000): ContractResult {
+        val ffi = callNode { it.callContract(contractAddress, functionName, gasLimit.toULong()) }
+        return ContractResult(
+            success = ffi.success,
+            returnValue = ffi.returnValue,
+            gasUsed = ffi.gasUsed.toLong(),
+            gasRemaining = ffi.gasRemaining.toLong(),
+            events = ffi.events,
+            error = ffi.error,
+        )
+    }
+
+    /**
+     * List deployed contracts.
+     */
+    fun listContracts(): List<String> {
+        return callNode { it.listContracts() }
+    }
+
+    // ========================================================================
+    // Governance methods — One Phone, One Vote
+    // ========================================================================
+
+    fun submitProposal(title: String, description: String): String {
+        return callNode { it.submitProposal(title, description) }
+    }
+
+    fun voteOnProposal(proposalIdHex: String, vote: String) {
+        callNode { it.voteOnProposal(proposalIdHex, vote) }
+    }
+
+    fun getProposals(): List<BridgeProposal> {
+        val ffiList = callNode { it.getProposals() }
+        return ffiList.map { ffi ->
+            BridgeProposal(
+                idHex = ffi.idHex,
+                title = ffi.title,
+                description = ffi.description,
+                status = ffi.status,
+                votesYes = ffi.votesYes.toLong(),
+                votesNo = ffi.votesNo.toLong(),
+                votesAbstain = ffi.votesAbstain.toLong(),
+                discussionEndMillis = ffi.discussionEndMillis,
+                votingEndMillis = ffi.votingEndMillis,
+                submittedBy = ffi.submittedBy,
+            )
+        }
+    }
+
+    fun createPoll(question: String, options: List<String>, durationSecs: Long = 604800): String {
+        return callNode { it.createPoll(question, options, durationSecs.toULong()) }
+    }
+
+    fun voteOnPoll(pollIdHex: String, optionIndex: Int) {
+        callNode { it.voteOnPoll(pollIdHex, optionIndex.toUInt()) }
+    }
+
+    fun getPolls(): List<BridgePoll> {
+        val ffiList = callNode { it.getPolls() }
+        return ffiList.map { ffi ->
+            BridgePoll(
+                idHex = ffi.idHex,
+                question = ffi.question,
+                options = ffi.options,
+                votes = ffi.votes.map { it.toLong() },
+                totalVoters = ffi.totalVoters.toLong(),
+                endMillis = ffi.endMillis,
+                createdBy = ffi.createdBy,
+            )
+        }
     }
 
     // ========================================================================
@@ -549,6 +842,84 @@ sealed class NetworkEvent {
     /** A transaction was received from the network. */
     data class TransactionReceived(val hashHex: String) : NetworkEvent()
 }
+
+/**
+ * Result of a smart contract execution.
+ */
+data class ContractResult(
+    val success: Boolean,
+    val returnValue: String,
+    val gasUsed: Long,
+    val gasRemaining: Long,
+    val events: List<String>,
+    val error: String?,
+)
+
+/**
+ * Governance proposal for the UI layer.
+ */
+data class BridgeProposal(
+    val idHex: String,
+    val title: String,
+    val description: String,
+    val status: String,
+    val votesYes: Long,
+    val votesNo: Long,
+    val votesAbstain: Long,
+    val discussionEndMillis: Long,
+    val votingEndMillis: Long,
+    val submittedBy: String,
+)
+
+/**
+ * On-chain poll for the UI layer.
+ */
+data class BridgePoll(
+    val idHex: String,
+    val question: String,
+    val options: List<String>,
+    val votes: List<Long>,
+    val totalVoters: Long,
+    val endMillis: Long,
+    val createdBy: String,
+)
+
+/**
+ * Mesh transport status for the UI layer.
+ * Mirrors [FfiMeshStatus] from the Rust FFI.
+ */
+data class MeshStatus(
+    val enabled: Boolean,
+    val bluetoothActive: Boolean,
+    val wifiDirectActive: Boolean,
+    val meshPeerCount: Int,
+    val bridgePeerCount: Int,
+    val pendingRelayCount: Int,
+)
+
+/**
+ * Shard assignment info for the UI layer.
+ * Mirrors [FfiShardInfo] from the Rust FFI.
+ */
+data class ShardInfo(
+    val shardId: Int,
+    val shardCount: Int,
+    val localValidators: Int,
+    val crossShardValidators: Int,
+    val shardHeight: Long,
+    val isShardingActive: Boolean,
+)
+
+/**
+ * GratiaVM runtime info for the UI layer.
+ * Mirrors [FfiVmInfo] from the Rust FFI.
+ */
+data class VmInfo(
+    val runtimeType: String,
+    val contractsLoaded: Int,
+    val totalGasUsed: Long,
+    val memoryWired: Boolean,
+)
 
 /**
  * Exception thrown by the bridge layer when an FFI operation fails.

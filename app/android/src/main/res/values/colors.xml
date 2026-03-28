@@ -1,29 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Gratia brand colors.
-         These are used by the XML-based theme (styles.xml) for the splash screen
-         and any non-Compose UI elements. The Compose theme defines its own
-         Color values in Theme.kt — these two sources should stay in sync. -->
+    <!-- Gratia Brand Colors — from Brand Identity Guide v1.0.
+         Every color traces back to the logo SVG. These are used by the XML-based
+         theme (themes.xml) for the splash/activity window. The Compose theme
+         defines its own Color values in Theme.kt — keep these in sync. -->
 
-    <!-- Primary: Teal — trust and technology -->
-    <color name="gratia_primary">#00897B</color>
-    <color name="gratia_primary_light">#4DB6AC</color>
-    <color name="gratia_primary_dark">#00695C</color>
+    <!-- Primary -->
+    <color name="gratia_deep_navy">#1A2744</color>
+    <color name="gratia_amber_gold">#F5A623</color>
 
-    <!-- Secondary: Gold — rewards, earning -->
-    <color name="gratia_secondary">#FFA726</color>
-    <color name="gratia_secondary_dark">#FF8F00</color>
+    <!-- Secondary: The Instrument Palette -->
+    <color name="gratia_dark_goldenrod">#B8860B</color>
+    <color name="gratia_dark_amber">#D4890F</color>
+    <color name="gratia_golden">#E8A020</color>
+    <color name="gratia_aged_gold">#8B6914</color>
 
-    <!-- Backgrounds -->
-    <color name="gratia_background_light">#FBFDF9</color>
-    <color name="gratia_background_dark">#121212</color>
-    <color name="gratia_surface_dark">#1E1E1E</color>
+    <!-- Extended Palette -->
+    <color name="gratia_midnight">#0D1527</color>
+    <color name="gratia_charcoal_navy">#2A3A5C</color>
+    <color name="gratia_warm_white">#FAF5EB</color>
+    <color name="gratia_off_white">#F0E8D8</color>
+    <color name="gratia_light_gold">#FDD888</color>
+    <color name="gratia_pale_amber">#FEF3D5</color>
 
     <!-- Status -->
-    <color name="gratia_error">#B00020</color>
-    <color name="gratia_error_dark">#CF6679</color>
-    <color name="gratia_success">#4CAF50</color>
-    <color name="gratia_warning">#FF9800</color>
+    <color name="gratia_success">#2ECC71</color>
+    <color name="gratia_error">#E74C3C</color>
 
     <!-- Common -->
     <color name="white">#FFFFFF</color>

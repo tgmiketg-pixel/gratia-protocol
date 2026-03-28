@@ -467,7 +467,7 @@ mod tests {
     fn test_active_proposals_filter() {
         let mut mgr = manager();
         let ts = now();
-        let config = default_config();
+        let _config = default_config();
 
         // Submit two proposals.
         let id1 = mgr

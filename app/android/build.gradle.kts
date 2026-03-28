@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "io.gratia.app"
-    compileSdk = 34
+    compileSdk = 35
 
     // WHY: NDK 27.1 is the version installed on this machine and provides
     // the ARM64 cross-compilation toolchain for the Rust core.
@@ -17,7 +17,7 @@ android {
         // to all sensor APIs, foreground services, and JobScheduler features we need.
         // This aligns with the project target of $50+ phones manufactured after 2018.
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
 
@@ -61,6 +61,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     composeOptions {
@@ -125,6 +126,25 @@ dependencies {
     // WHY: JNA (Java Native Access) is required by UniFFI-generated Kotlin bindings
     // to load and call into the Rust native library (libgratia_ffi.so).
     implementation("net.java.dev.jna:jna:5.14.0@aar")
+
+    // WHY: WorkManager guarantees periodic task execution even when the app
+    // is killed by the OS or the device is in doze mode. Used as a backup
+    // heartbeat to restart ProofOfLifeService if it gets killed.
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
+
+    // WHY: ZXing core for QR code generation in the Receive dialog.
+    // The wallet address is a 69-character string (grat:<64 hex>) which is
+    // impractical to type manually. QR codes enable phone-to-phone transfers
+    // by scanning. Only the core library is needed (~500KB), not the full
+    // Android integration library.
+    implementation("com.google.zxing:core:3.5.3")
+
+    // WHY: CameraX + ML Kit barcode scanning for the Send dialog QR scanner.
+    // Allows scanning a recipient's QR code instead of pasting the address.
+    implementation("androidx.camera:camera-camera2:1.3.1")
+    implementation("androidx.camera:camera-lifecycle:1.3.1")
+    implementation("androidx.camera:camera-view:1.3.1")
+    implementation("com.google.mlkit:barcode-scanning:17.2.0")
 
     // Testing
     testImplementation("junit:junit:4.13.2")

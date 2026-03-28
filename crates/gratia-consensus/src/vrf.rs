@@ -314,6 +314,14 @@ pub fn vrf_output_to_selection(vrf_output: &[u8; 32], presence_score: u8) -> f64
     // A score-100 node gets uniform * 1.0, a score-40 node gets uniform * 2.5.
     let weighted = uniform * (100.0 / score);
 
+    // WHY: NaN or infinite values from floating-point edge cases would cause
+    // non-deterministic sorting of the committee across different nodes.
+    // Replacing with f64::MAX effectively de-prioritizes this node in selection
+    // without crashing consensus.
+    if weighted.is_nan() || weighted.is_infinite() {
+        return f64::MAX;
+    }
+
     // Clamp to [0, 1) for safety, though in practice values above 1.0
     // just mean the node is very unlikely to be selected.
     weighted.min(1.0 - f64::EPSILON)
@@ -459,6 +467,24 @@ mod tests {
         let selection = vrf_output_to_selection(&max_output, 40);
         // Even with worst score, clamped to < 1.0
         assert!(selection < 1.0);
+    }
+
+    #[test]
+    fn test_vrf_output_to_selection_nan_safety() {
+        // WHY: Ensure NaN/infinite values are replaced with f64::MAX
+        // to maintain deterministic committee sorting.
+        let output = [0u8; 32]; // zero output
+        // Even with a score of 0 (which gets clamped to 40), the result
+        // should never be NaN.
+        let selection = vrf_output_to_selection(&output, 0);
+        assert!(!selection.is_nan());
+        assert!(!selection.is_infinite());
+
+        // All-ones output with minimum score should still be valid
+        let max_output = [0xFF; 32];
+        let selection = vrf_output_to_selection(&max_output, 40);
+        assert!(!selection.is_nan());
+        assert!(!selection.is_infinite());
     }
 
     #[test]

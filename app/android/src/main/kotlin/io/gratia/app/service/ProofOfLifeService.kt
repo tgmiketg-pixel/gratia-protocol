@@ -1,5 +1,7 @@
 package io.gratia.app.service
 
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -8,6 +10,7 @@ import android.content.IntentFilter
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import io.gratia.app.bridge.GratiaCoreManager
 import io.gratia.app.bridge.SensorEvent
@@ -96,9 +99,27 @@ class ProofOfLifeService : Service(), SensorEventListener {
 
         // WHY: GratiaCoreManager is initialized by GratiaApplication.onCreate()
         // before any service starts. We verify it here as a safety check.
+        // We do NOT call stopSelf() here — the system may have restarted us
+        // before the Application finished initializing. Instead we retry after
+        // a short delay to give Application.onCreate() time to complete.
         if (!GratiaCoreManager.isInitialized) {
-            Log.e(TAG, "GratiaCoreManager not initialized — cannot start PoL service")
-            stopSelf()
+            Log.w(TAG, "GratiaCoreManager not yet initialized — waiting for init")
+            serviceScope.launch {
+                // WHY: 3-second delay gives Application.onCreate() time to finish
+                // initializing the Rust core. If it's still not ready, we log an
+                // error but keep the service alive so the system doesn't kill it.
+                delay(3000L)
+                if (GratiaCoreManager.isInitialized) {
+                    Log.i(TAG, "GratiaCoreManager initialized after delay — resuming PoL setup")
+                    initializeSensors()
+                    registerScreenReceiver()
+                    registerPowerReceiver()
+                    startMidnightRolloverLoop()
+                    evaluateMiningConditions()
+                } else {
+                    Log.e(TAG, "GratiaCoreManager still not initialized — PoL data collection inactive")
+                }
+            }
             return
         }
 
@@ -122,15 +143,37 @@ class ProofOfLifeService : Service(), SensorEventListener {
         registerScreenReceiver()
         registerPowerReceiver()
 
-        // TODO: Schedule day-finalization and keep-alive via WorkManager once
-        // the androidx.work dependency is added to the build.
+        // WHY: WorkManager heartbeat (PolHeartbeatWorker) is scheduled by
+        // GratiaApplication.onCreate() and runs every 15 minutes to restart
+        // this service if the OS kills it. No scheduling needed here.
 
         // Start the midnight rollover coroutine for precise timing.
         startMidnightRolloverLoop()
+
+        // WHY: Evaluate mining conditions immediately on service start.
+        // If the phone is already plugged in and charged above 80% when
+        // the app launches (common during development — phone connected
+        // to USB), we need to detect this and start mining right away
+        // rather than waiting for the next BATTERY_CHANGED broadcast.
+        evaluateMiningConditions()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "onStartCommand received")
+        if (intent == null) {
+            // WHY: When the system restarts a START_STICKY service after killing it,
+            // it delivers onStartCommand with a null intent. We need to detect this
+            // and re-initialize sensors in case onCreate() state was lost.
+            Log.i(TAG, "PoL service restarted by system (null intent) — re-initializing sensors")
+            if (GratiaCoreManager.isInitialized && sensorManagers.isEmpty()) {
+                initializeSensors()
+                registerScreenReceiver()
+                registerPowerReceiver()
+                startMidnightRolloverLoop()
+                evaluateMiningConditions()
+            }
+        } else {
+            Log.d(TAG, "onStartCommand received")
+        }
 
         // WHY: START_STICKY tells the system to recreate the service if it's
         // killed due to memory pressure. PoL data collection must be continuous;
@@ -173,6 +216,49 @@ class ProofOfLifeService : Service(), SensorEventListener {
         super.onDestroy()
     }
 
+    /**
+     * Called when the user swipes the app from the recent apps list.
+     *
+     * WHY: On some Android devices/OEMs, swiping the app from recents can kill
+     * the service even if it's a foreground service. We explicitly do NOT stop
+     * the service here — PoL must keep collecting data. As an extra safety net,
+     * we schedule a restart alarm so that even if the OEM kills us anyway, the
+     * service comes back within 60 seconds.
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        Log.i(TAG, "App swiped from recents — PoL service continuing")
+
+        // WHY: Some aggressive OEM Android skins (Xiaomi MIUI, Huawei EMUI,
+        // Samsung OneUI) kill foreground services when the app is swiped.
+        // AlarmManager provides a fallback restart mechanism. We use
+        // setExactAndAllowWhileIdle to work even in Doze mode.
+        try {
+            val restartIntent = Intent(this, ProofOfLifeService::class.java)
+            val pendingIntent = PendingIntent.getService(
+                this,
+                // WHY: Request code 1 is arbitrary but fixed — ensures we update
+                // any existing pending restart rather than creating duplicates.
+                1,
+                restartIntent,
+                PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            // WHY: 60-second delay. Short enough to minimize PoL data gaps,
+            // long enough to avoid rapid restart loops if something is wrong.
+            alarmManager.setExactAndAllowWhileIdle(
+                AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                SystemClock.elapsedRealtime() + 60_000L,
+                pendingIntent
+            )
+            Log.d(TAG, "Restart alarm scheduled as safety net (60s)")
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not schedule restart alarm: ${e.message}")
+        }
+
+        super.onTaskRemoved(rootIntent)
+    }
+
     // -- Sensor Initialization ---------------------------------------------
 
     /**
@@ -181,6 +267,10 @@ class ProofOfLifeService : Service(), SensorEventListener {
      * Each manager is started in a try-catch so that a missing sensor
      * (e.g., barometer on a budget phone) does not prevent the service
      * from collecting data from sensors that ARE available.
+     *
+     * WHY: Construction and start() are separate steps because some managers
+     * need the constructor to succeed (hardware detection) before start()
+     * can register listeners. We call start() immediately after construction.
      */
     private fun initializeSensors() {
         Log.i(TAG, "Initializing sensor managers")
@@ -191,19 +281,19 @@ class ProofOfLifeService : Service(), SensorEventListener {
         // Phase 1 development.
 
         tryInitSensor("GPS") {
-            io.gratia.app.sensors.GpsManager(this, this)
+            io.gratia.app.sensors.GpsManager(this, this).also { it.start() }
         }
         tryInitSensor("Accelerometer") {
-            io.gratia.app.sensors.AccelerometerManager(this, this)
+            io.gratia.app.sensors.AccelerometerManager(this, this).also { it.start() }
         }
         tryInitSensor("Bluetooth") {
-            io.gratia.app.sensors.BluetoothManager(this, this)
+            io.gratia.app.sensors.BluetoothManager(this, this).also { it.start() }
         }
         tryInitSensor("WiFi") {
-            io.gratia.app.sensors.GratiaWifiManager(this, this)
+            io.gratia.app.sensors.GratiaWifiManager(this, this).also { it.start() }
         }
         tryInitSensor("Battery") {
-            io.gratia.app.sensors.GratiaBatteryManager(this, this)
+            io.gratia.app.sensors.GratiaBatteryManager(this, this).also { it.start() }
         }
         // WHY: BarometerManager, MagnetometerManager, LightSensorManager, and
         // NfcManager are optional sensors that do not implement SensorEventListener
@@ -222,6 +312,9 @@ class ProofOfLifeService : Service(), SensorEventListener {
         }
 
         Log.i(TAG, "Sensor initialization complete: ${sensorManagers.size} managers active")
+
+        // Start the periodic PoL status logging loop.
+        startPolStatusLoop()
     }
 
     /**
@@ -232,7 +325,7 @@ class ProofOfLifeService : Service(), SensorEventListener {
         try {
             val manager = factory()
             sensorManagers.add(manager)
-            Log.d(TAG, "Sensor manager started: $name")
+            Log.i(TAG, "Sensor manager started: $name")
         } catch (e: Exception) {
             // WHY: Not all phones have all sensors. A budget phone from 2018
             // may lack a barometer or magnetometer. The core four (GPS,
@@ -374,16 +467,78 @@ class ProofOfLifeService : Service(), SensorEventListener {
      */
     private fun submitEvent(event: SensorEvent) {
         if (!GratiaCoreManager.isInitialized) {
-            Log.w(TAG, "GratiaCoreManager not initialized — dropping sensor event")
+            Log.w(TAG, "GratiaCoreManager not initialized — dropping sensor event: ${event.type}")
             return
         }
+
+        Log.i(TAG, "PoL sensor event: ${event.type}")
 
         serviceScope.launch {
             try {
                 GratiaCoreManager.submitSensorEvent(event)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to submit sensor event: ${e.message}")
+                Log.e(TAG, "Failed to submit sensor event [${event.type}]: ${e.message}")
             }
+        }
+    }
+
+    // -- Periodic PoL Status Logging ------------------------------------------
+
+    /**
+     * Periodically log the current Proof of Life parameter completion status.
+     *
+     * WHY: Without periodic status logging, the service produces zero visible
+     * output even when it's working correctly. This loop logs a summary every
+     * 5 minutes so developers can verify data collection is progressing.
+     */
+    private fun startPolStatusLoop() {
+        // WHY: 5-minute interval balances visibility against log spam.
+        // Frequent enough to confirm the service is alive and collecting,
+        // infrequent enough to not overwhelm logcat.
+        val statusIntervalMs = 5L * 60 * 1000 // 5 minutes
+
+        serviceScope.launch {
+            // WHY: Initial 60-second delay lets sensor managers finish their
+            // first collection cycle before we query status. GPS, Wi-Fi, and
+            // Bluetooth all need time for their first scan to complete.
+            delay(60_000L)
+
+            while (true) {
+                try {
+                    logPolStatus()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error logging PoL status: ${e.message}")
+                }
+                delay(statusIntervalMs)
+            }
+        }
+    }
+
+    /**
+     * Query the Rust core for current PoL status and log a human-readable summary.
+     */
+    private fun logPolStatus() {
+        if (!GratiaCoreManager.isInitialized) return
+
+        try {
+            val status = GratiaCoreManager.getProofOfLifeStatus()
+            val metCount = status.parametersMet.size
+            // WHY: 8 is the total number of daily PoL parameters defined in the protocol.
+            val totalParams = 8
+            val metList = if (status.parametersMet.isNotEmpty()) {
+                status.parametersMet.joinToString(", ")
+            } else {
+                "none"
+            }
+
+            Log.i(
+                TAG,
+                "PoL status: $metCount/$totalParams parameters met " +
+                    "[valid=${status.isValidToday}, onboarded=${status.isOnboarded}, " +
+                    "streak=${status.consecutiveDays}d] — met: $metList"
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not query PoL status: ${e.message}")
         }
     }
 
@@ -500,9 +655,10 @@ class ProofOfLifeService : Service(), SensorEventListener {
         }
     }
 
-    // -- WorkManager Scheduling (TODO) ----------------------------------------
-    // TODO: Add WorkManager dependency (androidx.work:work-runtime-ktx) and
-    // implement DayFinalizationWorker and KeepAliveWorker for guaranteed
-    // execution when the service is killed by the OS. The coroutine-based
-    // midnight rollover handles the precise case while the service is alive.
+    // -- WorkManager Scheduling ------------------------------------------------
+    // PolHeartbeatWorker (scheduled by GratiaApplication) runs every 15 minutes
+    // and restarts this service if the OS has killed it. DayFinalizationWorker
+    // is a future addition for guaranteed midnight rollover when this service
+    // is dead — the coroutine-based loop above handles it while the service
+    // is alive.
 }

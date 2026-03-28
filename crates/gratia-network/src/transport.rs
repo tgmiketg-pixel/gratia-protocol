@@ -9,6 +9,8 @@ use std::time::Duration;
 use libp2p::Multiaddr;
 use serde::{Deserialize, Serialize};
 
+use crate::mesh::MeshConfig;
+
 /// Configuration for the network transport layer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransportConfig {
@@ -41,6 +43,12 @@ pub struct TransportConfig {
     /// WHY: Mobile connections are unstable (Wi-Fi to cellular handoffs).
     /// Regular pings detect dead connections quickly.
     pub keepalive_interval_secs: u64,
+
+    /// Mesh layer (Layer 0) configuration.
+    /// WHY: Optional because mesh transport (BLE/Wi-Fi Direct) is only available
+    /// on devices with the necessary hardware. Desktop archive nodes and bootstrap
+    /// servers do not participate in the mesh layer.
+    pub mesh: Option<MeshConfig>,
 }
 
 impl Default for TransportConfig {
@@ -58,11 +66,21 @@ impl Default for TransportConfig {
             idle_timeout_secs: 300,
             // 30 seconds — frequent enough to detect dead connections on flaky mobile networks
             keepalive_interval_secs: 30,
+            // WHY: Mesh is None by default — enabled explicitly on mobile devices
+            // that have BLE/Wi-Fi Direct hardware. Bootstrap servers and archive
+            // nodes leave this as None.
+            mesh: None,
         }
     }
 }
 
 impl TransportConfig {
+    /// Create a transport config with mesh layer enabled (for mobile devices).
+    pub fn with_mesh(mut self, mesh_config: MeshConfig) -> Self {
+        self.mesh = Some(mesh_config);
+        self
+    }
+
     /// Parse listen addresses into libp2p Multiaddr values.
     /// Returns only the addresses that parse successfully, logging warnings for failures.
     pub fn parsed_listen_addresses(&self) -> Vec<Multiaddr> {
@@ -107,6 +125,10 @@ impl TransportConfig {
                 "max_inbound ({}) + max_outbound ({}) exceeds max_peers ({})",
                 self.max_inbound, self.max_outbound, self.max_peers
             ));
+        }
+        // Validate mesh config if present
+        if let Some(ref mesh) = self.mesh {
+            mesh.validate()?;
         }
         Ok(())
     }

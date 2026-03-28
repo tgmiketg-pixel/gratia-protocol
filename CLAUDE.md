@@ -76,7 +76,9 @@ All three must be satisfied simultaneously:
 - **Optional inheritance feature** (designate beneficiary wallet, 365-day dead-man switch, opt-in)
 
 ### Onboarding
-- 1-day onboarding (NOT 7 days). User installs app, uses phone normally for one day, first mining session activates that evening when plugged in.
+- Zero-delay onboarding. User installs app, plugs in phone, mining starts immediately. No waiting period.
+- Progressive trust builds in background: Day 0 = Unverified (max scrutiny), Day 7 = Provisional, Day 30 = Established, Day 90+ = Trusted (committee/governance eligible)
+- Mining rewards are flat at every trust level — what changes is trust, not earnings
 - Must maintain valid Proof of Life EVERY DAY to remain mining-eligible
 - 1-day grace period for missed Proof of Life. Two consecutive missed days pauses mining. Resumes immediately on next valid day.
 
@@ -128,7 +130,7 @@ All three must be satisfied simultaneously:
 
 ### App Store Strategy
 - Position as "wallet with rewards" not "crypto mining app"
-- Fallback: PWA, Android sideloading, alternative app stores (F-Droid, Samsung, Huawei)
+- Fallback: Android sideloading, alternative app stores (F-Droid, Samsung, Huawei), TestFlight (iOS), EU alternative stores (AltStore PAL)
 - Mining only when plugged in + above 80% means zero battery degradation concern
 
 ### Privacy

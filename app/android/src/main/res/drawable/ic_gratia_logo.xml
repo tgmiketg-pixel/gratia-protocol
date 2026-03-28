@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Gratia full logo for in-app use (top bar). Simplified from the 500x500
+     SVG to keep key elements visible at small sizes: outer compass ring,
+     gold filled circle, phone silhouette, heartbeat ECG line, and cardinal
+     tick marks. Minor tick marks and diagonal markers omitted — they vanish
+     at 36dp anyway. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="36dp"
+    android:height="36dp"
+    android:viewportWidth="500"
+    android:viewportHeight="500">
+
+    <!-- Outer compass ring (goldenrod) -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#B8860B"
+        android:strokeWidth="5"
+        android:pathData="M250,250 m-248,0 a248,248 0 1,1 496,0 a248,248 0 1,1 -496,0"/>
+
+    <!-- Inner gold filled circle -->
+    <path
+        android:fillColor="#F5A623"
+        android:pathData="M250,250 m-230,0 a230,230 0 1,1 460,0 a230,230 0 1,1 -460,0"/>
+
+    <!-- Cardinal tick marks — N -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#8B6914"
+        android:strokeWidth="5"
+        android:strokeAlpha="0.35"
+        android:pathData="M250,28 L250,86"/>
+    <path
+        android:fillColor="#8B6914"
+        android:fillAlpha="0.35"
+        android:pathData="M246,20 h8 c1.1,0 2,0.9 2,2 v8 c0,1.1 -0.9,2 -2,2 h-8 c-1.1,0 -2,-0.9 -2,-2 v-8 c0,-1.1 0.9,-2 2,-2 z"/>
+
+    <!-- Cardinal tick marks — S -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#8B6914"
+        android:strokeWidth="5"
+        android:strokeAlpha="0.35"
+        android:pathData="M250,414 L250,472"/>
+    <path
+        android:fillColor="#8B6914"
+        android:fillAlpha="0.35"
+        android:pathData="M246,468 h8 c1.1,0 2,0.9 2,2 v8 c0,1.1 -0.9,2 -2,2 h-8 c-1.1,0 -2,-0.9 -2,-2 v-8 c0,-1.1 0.9,-2 2,-2 z"/>
+
+    <!-- Cardinal tick marks — W -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#8B6914"
+        android:strokeWidth="5"
+        android:strokeAlpha="0.35"
+        android:pathData="M28,250 L86,250"/>
+    <path
+        android:fillColor="#8B6914"
+        android:fillAlpha="0.35"
+        android:pathData="M22,244 h8 c1.1,0 2,0.9 2,2 v8 c0,1.1 -0.9,2 -2,2 h-8 c-1.1,0 -2,-0.9 -2,-2 v-8 c0,-1.1 0.9,-2 2,-2 z"/>
+
+    <!-- Cardinal tick marks — E -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#8B6914"
+        android:strokeWidth="5"
+        android:strokeAlpha="0.35"
+        android:pathData="M414,250 L472,250"/>
+    <path
+        android:fillColor="#8B6914"
+        android:fillAlpha="0.35"
+        android:pathData="M470,244 h8 c1.1,0 2,0.9 2,2 v8 c0,1.1 -0.9,2 -2,2 h-8 c-1.1,0 -2,-0.9 -2,-2 v-8 c0,-1.1 0.9,-2 2,-2 z"/>
+
+    <!-- Phone body (Deep Navy) -->
+    <path
+        android:fillColor="#1A2744"
+        android:pathData="M194.6,105.5 h111.8 c13.9,0 25.1,11.2 25.1,25.1 v239.9 c0,13.9 -11.2,25.1 -25.1,25.1 H194.6 c-13.9,0 -25.1,-11.2 -25.1,-25.1 V130.6 c0,-13.9 11.2,-25.1 25.1,-25.1 z"/>
+
+    <!-- Phone screen (Amber Gold) -->
+    <path
+        android:fillColor="#F5A623"
+        android:pathData="M195.9,141.9 h109.3 c4.2,0 7.5,3.4 7.5,7.5 v180.8 c0,4.2 -3.4,7.5 -7.5,7.5 H195.9 c-4.2,0 -7.5,-3.4 -7.5,-7.5 V149.4 c0,-4.2 3.4,-7.5 7.5,-7.5 z"/>
+
+    <!-- Phone home button (Amber Gold circle) -->
+    <path
+        android:fillColor="#F5A623"
+        android:pathData="M249.9,367.9 m-15.1,0 a15.1,15.1 0 1,1 30.2,0 a15.1,15.1 0 1,1 -30.2,0"/>
+
+    <!-- Phone top speaker bar (Amber Gold line) -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#F5A623"
+        android:strokeWidth="4.5"
+        android:strokeLineCap="round"
+        android:pathData="M222.2,123 L278.8,123"/>
+
+    <!-- ECG heartbeat line (Deep Navy on gold screen) -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#1A2744"
+        android:strokeWidth="8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M204.7,239.8 h17.6 l7.5,-45.2 l20.1,86.7 l20.1,-79.1 l7.5,37.7 h17.6"/>
+
+</vector>

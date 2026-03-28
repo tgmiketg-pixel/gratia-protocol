@@ -3,10 +3,12 @@
 //! All fundamental data structures that flow through the protocol are defined here.
 //! These types are serializable and designed to be compact for mobile network transmission.
 
-use ed25519_dalek::{SigningKey, VerifyingKey, Signature};
+use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
 use sha2::{Sha256, Digest};
 use chrono::{DateTime, Utc};
+
+use crate::error::GratiaError;
 
 // ============================================================================
 // Token Units
@@ -74,6 +76,21 @@ impl Address {
         addr.copy_from_slice(&result);
         Address(addr)
     }
+
+    /// Derive an address from raw Ed25519 public key bytes.
+    ///
+    /// WHY: When receiving a transaction via gossipsub, we only have the raw
+    /// sender_pubkey bytes (Vec<u8>). This avoids requiring callers to construct
+    /// a VerifyingKey just to derive an address.
+    pub fn from_pubkey(pubkey_bytes: &[u8]) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(b"gratia-address-v1:");
+        hasher.update(pubkey_bytes);
+        let result = hasher.finalize();
+        let mut addr = [0u8; 32];
+        addr.copy_from_slice(&result);
+        Address(addr)
+    }
 }
 
 impl std::fmt::Display for Address {
@@ -133,14 +150,20 @@ pub struct BlockHeader {
 
 impl BlockHeader {
     /// Compute the hash of this block header.
-    pub fn hash(&self) -> BlockHash {
-        let encoded = bincode::serialize(self).expect("block header serialization");
+    ///
+    /// Returns `Err` if the header cannot be serialized (e.g., corrupt data).
+    /// Previously this used `.expect()` which would panic and crash the node.
+    pub fn hash(&self) -> Result<BlockHash, GratiaError> {
+        let encoded = bincode::serialize(self)
+            .map_err(|e| GratiaError::SerializationError(
+                format!("block header serialization failed: {}", e),
+            ))?;
         let mut hasher = Sha256::new();
         hasher.update(&encoded);
         let result = hasher.finalize();
         let mut hash = [0u8; 32];
         hash.copy_from_slice(&result);
-        BlockHash(hash)
+        Ok(BlockHash(hash))
     }
 }
 
@@ -281,22 +304,63 @@ pub struct GeographicFilter {
 // Proof of Life Types
 // ============================================================================
 
-/// A Proof of Life attestation submitted by a node.
-/// Contains zero-knowledge proofs — no raw sensor data.
+/// A Proof of Life attestation included in blocks.
+///
+/// This is the ON-CHAIN form. It proves that SOME valid node produced
+/// valid PoL without revealing WHICH node or WHEN (beyond the block it
+/// appears in). This implements the "unlinkable attestations between days"
+/// privacy guarantee from the whitepaper.
+///
+/// Privacy properties:
+/// - `blinded_id`: Hash of (node_id + daily_secret), different each day
+/// - `nullifier`: Hash of (node_id + epoch), prevents double-submission
+///   within an epoch without linking across epochs
+/// - No plaintext node_id or date
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProofOfLifeAttestation {
-    /// The node submitting this attestation.
-    pub node_id: NodeId,
-    /// The day this attestation covers (UTC date).
-    pub date: chrono::NaiveDate,
+    /// Blinded identifier — hash of (node_id + daily_randomness).
+    /// Different every day, unlinkable across days.
+    /// WHY: Proves this attestation came from a unique node without
+    /// revealing which node. Two attestations from different days
+    /// produce different blinded_ids.
+    pub blinded_id: [u8; 32],
+    /// Nullifier — hash of (node_id + epoch_number).
+    /// Same within an epoch, prevents double-submission.
+    /// WHY: The network can detect if the same node submitted two
+    /// attestations in the same epoch, but cannot link attestations
+    /// across different epochs.
+    pub nullifier: [u8; 32],
     /// ZK proof that all required PoL parameters were met.
     pub zk_proof: Vec<u8>,
     /// Composite Presence Score (40-100).
+    /// WHY: The score is included because it affects VRF weighting
+    /// but doesn't reveal identity. Many nodes share the same score.
     pub presence_score: u8,
     /// Which optional sensors contributed to the score.
     pub sensor_flags: SensorFlags,
-    /// Signature over the attestation by the node's key.
+    /// Signature over the attestation using a daily ephemeral key.
+    /// WHY: Using an ephemeral key (derived from node key + daily seed)
+    /// prevents linking via signature analysis.
     pub signature: Vec<u8>,
+}
+
+/// Local Proof of Life record — used on-device only, NEVER broadcast.
+/// Contains the linkable identity information needed for local
+/// eligibility checks and behavioral analysis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalProofOfLifeRecord {
+    /// The node that produced this record.
+    pub node_id: NodeId,
+    /// The day this record covers.
+    pub date: chrono::NaiveDate,
+    /// Whether PoL was valid this day.
+    pub valid: bool,
+    /// The blinded_id used in the on-chain attestation (for cross-reference).
+    pub blinded_id: [u8; 32],
+    /// The nullifier used (for cross-reference).
+    pub nullifier: [u8; 32],
+    /// Composite Presence Score.
+    pub presence_score: u8,
 }
 
 /// Bitflags indicating which sensors contributed to the Presence Score.
@@ -384,17 +448,20 @@ pub struct DailyProofOfLifeData {
 
 impl DailyProofOfLifeData {
     /// Check if all required Proof of Life parameters are met.
-    pub fn is_valid(&self) -> bool {
-        // 1. Minimum 10 unlocks spread across at least 6 hours
+    ///
+    /// Uses thresholds from `ProofOfLifeConfig` so that governance can
+    /// adjust requirements without code changes.
+    pub fn is_valid(&self, config: &crate::config::ProofOfLifeConfig) -> bool {
+        // 1. Minimum unlock events spread across the configured hour window
         let unlock_spread = match (self.first_unlock, self.last_unlock) {
             (Some(first), Some(last)) => {
-                (last - first).num_hours() >= 6
+                (last - first).num_hours() >= config.min_unlock_spread_hours as i64
             }
             _ => false,
         };
 
         // 2. Screen interactions at multiple points
-        let interactions_ok = self.interaction_sessions >= 3;
+        let interactions_ok = self.interaction_sessions >= config.min_interaction_sessions;
 
         // 3. At least one orientation change
         let orientation_ok = self.orientation_changed;
@@ -408,13 +475,16 @@ impl DailyProofOfLifeData {
         // 6. Wi-Fi OR Bluetooth connectivity
         let network_ok = self.distinct_wifi_networks >= 1 || self.distinct_bt_environments >= 1;
 
-        // 7. Varying Bluetooth environments
-        let bt_variation_ok = self.distinct_bt_environments >= 2;
+        // 7. Varying Bluetooth environments (only required if BT is used for connectivity)
+        // WHY: Wi-Fi-only phones are first-class citizens per spec. BT variation
+        // requirement only applies when the device actually has BT peers.
+        let bt_variation_ok = self.distinct_bt_environments == 0
+            || self.distinct_bt_environments >= config.min_distinct_bt_environments;
 
         // 8. Charge cycle event
         let charge_ok = self.charge_cycle_event;
 
-        self.unlock_count >= 10
+        self.unlock_count >= config.min_daily_unlocks
             && unlock_spread
             && interactions_ok
             && orientation_ok
@@ -558,7 +628,11 @@ impl Proposal {
             return false;
         }
         let total_votes = self.votes_yes + self.votes_no; // Abstains don't count for/against
-        self.votes_yes > total_votes / 2
+        // WHY: Using multiplication instead of division avoids integer truncation.
+        // e.g., with 100 votes, `51 > 100/2` = `51 > 50` = true (correct),
+        // but `50 > 100/2` = `50 > 50` = false (correct). With odd totals like 3,
+        // `2*2 > 3` = true (correct 51% majority).
+        self.votes_yes * 2 > total_votes
     }
 }
 

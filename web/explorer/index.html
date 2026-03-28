@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gratia Block Explorer</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <div class="brand">
+        <svg class="logo" viewBox="0 0 40 40" width="36" height="36">
+          <polygon points="20,2 37,11 37,29 20,38 3,29 3,11" fill="none" stroke="#6366f1" stroke-width="2.5"/>
+          <text x="20" y="26" text-anchor="middle" fill="#6366f1" font-size="18" font-weight="700" font-family="system-ui, sans-serif">G</text>
+        </svg>
+        <h1>Gratia Block Explorer</h1>
+      </div>
+      <div class="search-container">
+        <input type="text" id="search-input" placeholder="Search by block height, tx hash, or address..." autocomplete="off">
+        <button id="search-btn" aria-label="Search">
+          <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="8" cy="8" r="6"/>
+            <line x1="13" y1="13" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <nav>
+    <div class="nav-inner">
+      <button class="nav-tab active" data-tab="dashboard">Dashboard</button>
+      <button class="nav-tab" data-tab="blocks">Blocks</button>
+      <button class="nav-tab" data-tab="transactions">Transactions</button>
+    </div>
+    <div class="network-badge" id="network-badge">
+      <span class="status-dot" id="status-dot"></span>
+      <span id="network-name">Gratia Testnet</span>
+      <span class="connection-label" id="connection-label">Demo</span>
+    </div>
+  </nav>
+
+  <!-- Dashboard Tab -->
+  <main id="tab-dashboard" class="tab-content active">
+    <section class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">Block Height</div>
+        <div class="stat-value" id="stat-height">--</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total Transactions</div>
+        <div class="stat-value" id="stat-txs">--</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Consensus Nodes</div>
+        <div class="stat-value" id="stat-nodes">--</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Mesh Peers</div>
+        <div class="stat-value" id="stat-mesh-peers">--</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Active Shards</div>
+        <div class="stat-value" id="stat-shards">--</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Avg Block Time</div>
+        <div class="stat-value" id="stat-blocktime">--</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">TPS (Total)</div>
+        <div class="stat-value" id="stat-tps">--</div>
+        <div class="stat-sub" id="stat-tps-per-shard"></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Data Source</div>
+        <div class="stat-value stat-value-small" id="stat-source">--</div>
+      </div>
+    </section>
+
+    <!-- Shard Visualization -->
+    <section class="card shard-card">
+      <div class="card-header">
+        <h2>Shard Overview</h2>
+        <div class="shard-filter">
+          <label for="shard-select">Filter by shard:</label>
+          <select id="shard-select">
+            <option value="all">All Shards</option>
+          </select>
+        </div>
+      </div>
+      <div class="shard-grid" id="shard-grid"></div>
+      <div class="shard-info" id="shard-info">
+        <span class="shard-info-item"><span class="shard-dot shard-dot-local"></span> Your shard</span>
+        <span class="shard-info-item"><span class="shard-dot shard-dot-active"></span> Active</span>
+        <span class="shard-info-item"><span class="shard-dot shard-dot-inactive"></span> Inactive</span>
+      </div>
+    </section>
+
+    <!-- Mesh Network Section -->
+    <section class="card mesh-card">
+      <div class="card-header">
+        <h2>Mesh Network</h2>
+      </div>
+      <div class="mesh-stats">
+        <div class="mesh-stat">
+          <span class="mesh-stat-value" id="mesh-ble-peers">--</span>
+          <span class="mesh-stat-label">BLE Peers</span>
+        </div>
+        <div class="mesh-stat">
+          <span class="mesh-stat-value" id="mesh-wifi-peers">--</span>
+          <span class="mesh-stat-label">Wi-Fi Direct Peers</span>
+        </div>
+        <div class="mesh-stat">
+          <span class="mesh-stat-value" id="mesh-bridge-peers">--</span>
+          <span class="mesh-stat-label">Bridge Peers</span>
+        </div>
+        <div class="mesh-stat">
+          <span class="mesh-stat-value" id="mesh-relayed-txs">--</span>
+          <span class="mesh-stat-label">Mesh-Relayed Txs</span>
+        </div>
+      </div>
+    </section>
+
+    <div class="tables-row">
+      <section class="card table-card">
+        <div class="card-header">
+          <h2>Latest Blocks</h2>
+          <button class="view-all-btn" data-goto="blocks">View All</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Height</th>
+                <th>Time</th>
+                <th>Producer</th>
+                <th>Txs</th>
+                <th>Size</th>
+              </tr>
+            </thead>
+            <tbody id="latest-blocks"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card table-card">
+        <div class="card-header">
+          <h2>Latest Transactions</h2>
+          <button class="view-all-btn" data-goto="transactions">View All</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Hash</th>
+                <th>Type</th>
+                <th>From / To</th>
+                <th>Amount</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="latest-txs"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <!-- Blocks Tab -->
+  <main id="tab-blocks" class="tab-content">
+    <section class="card">
+      <div class="card-header">
+        <h2>All Blocks</h2>
+        <div class="card-header-right">
+          <select id="blocks-shard-filter" class="shard-filter-select">
+            <option value="all">All Shards</option>
+          </select>
+          <div class="pagination" id="blocks-pagination"></div>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Height</th>
+              <th>Shard</th>
+              <th>Hash</th>
+              <th>Time</th>
+              <th>Producer</th>
+              <th>Txs</th>
+              <th>Sigs</th>
+              <th>Size</th>
+            </tr>
+          </thead>
+          <tbody id="blocks-table"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <!-- Transactions Tab -->
+  <main id="tab-transactions" class="tab-content">
+    <section class="card">
+      <div class="card-header">
+        <h2>All Transactions</h2>
+        <div class="pagination" id="txs-pagination"></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Hash</th>
+              <th>Type</th>
+              <th>Block</th>
+              <th>From</th>
+              <th>To</th>
+              <th>Amount</th>
+              <th>Fee</th>
+              <th>Status</th>
+              <th>Time</th>
+            </tr>
+          </thead>
+          <tbody id="txs-table"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <!-- Search Results Overlay -->
+  <div id="search-results" class="search-results hidden">
+    <div class="search-results-inner">
+      <div class="search-results-header">
+        <h3>Search Results</h3>
+        <button id="search-close" aria-label="Close">&times;</button>
+      </div>
+      <div id="search-results-body"></div>
+    </div>
+  </div>
+
+  <!-- Block / Tx Detail Modal -->
+  <div id="detail-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content card">
+      <div class="modal-header">
+        <h3 id="modal-title">Details</h3>
+        <button id="modal-close" aria-label="Close">&times;</button>
+      </div>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <footer>
+    <p>Gratia Block Explorer &mdash; Phase 3 Testnet &middot; 10 Shards &middot; Mesh + Consensus</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

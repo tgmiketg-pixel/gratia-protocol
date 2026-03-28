@@ -12,12 +12,15 @@
 pub mod collector;
 pub mod validator;
 pub mod behavioral;
+pub mod behavioral_anomaly;
+pub mod clustering;
+pub mod trust;
+pub mod tee;
+pub mod scoring;
 
 use gratia_core::{
-    DailyProofOfLifeData, ProofOfLifeAttestation, SensorFlags,
-    NodeId, MiningState, PowerState, GeoLocation,
+    DailyProofOfLifeData, MiningState, PowerState, GeoLocation,
     config::Config,
-    error::GratiaError,
 };
 use chrono::{NaiveDate, Utc};
 use std::collections::VecDeque;
@@ -108,7 +111,7 @@ impl ProofOfLifeManager {
     /// Finalize the day's Proof of Life. Returns whether the day was valid.
     pub fn finalize_day(&mut self) -> bool {
         let today = Utc::now().date_naive();
-        let is_valid = self.current_day_data.is_valid();
+        let is_valid = self.current_day_data.is_valid(&self.config.proof_of_life);
 
         if is_valid {
             self.valid_days.push_back(today);
@@ -172,9 +175,58 @@ impl ProofOfLifeManager {
         self.consecutive_valid_days
     }
 
+    /// Save PoL state to a file for persistence across restarts.
+    /// WHY: The consecutive day streak and onboarding status must survive
+    /// app restarts. Without this, the trust tier resets to Unverified
+    /// every time the app is killed and restarted.
+    pub fn save_state(&self, data_dir: &str) {
+        let path = format!("{}/pol_state.bin", data_dir);
+        // Format: 8 bytes consecutive_days + 8 bytes total_days + 1 byte onboarded
+        let mut data = Vec::with_capacity(17);
+        data.extend_from_slice(&self.consecutive_valid_days.to_le_bytes());
+        data.extend_from_slice(&(self.valid_days.len() as u64).to_le_bytes());
+        data.push(if self.onboarding_complete { 1 } else { 0 });
+        let _ = std::fs::write(&path, &data);
+    }
+
+    /// Load PoL state from a file.
+    pub fn load_state(&mut self, data_dir: &str) {
+        let path = format!("{}/pol_state.bin", data_dir);
+        if let Ok(data) = std::fs::read(&path) {
+            if data.len() >= 17 {
+                self.consecutive_valid_days = u64::from_le_bytes(
+                    data[0..8].try_into().unwrap_or([0; 8]),
+                );
+                let total_days = u64::from_le_bytes(
+                    data[8..16].try_into().unwrap_or([0; 8]),
+                );
+                self.onboarding_complete = data[16] != 0;
+                self.mining_eligible = self.onboarding_complete;
+
+                // WHY: Reconstruct valid_days with placeholder dates.
+                // The exact dates don't matter for the streak counter —
+                // what matters is the count for trust tier calculation.
+                let today = Utc::now().date_naive();
+                self.valid_days.clear();
+                for i in 0..total_days.min(365) {
+                    if let Some(d) = today.checked_sub_signed(chrono::Duration::days(i as i64)) {
+                        self.valid_days.push_back(d);
+                    }
+                }
+
+                tracing::info!(
+                    consecutive = self.consecutive_valid_days,
+                    total = total_days,
+                    onboarded = self.onboarding_complete,
+                    "PoL state restored from persistence"
+                );
+            }
+        }
+    }
+
     /// Check current day's validity in real-time.
     pub fn current_day_valid(&self) -> bool {
-        self.current_day_data.is_valid()
+        self.current_day_data.is_valid(&self.config.proof_of_life)
     }
 
     /// Determine mining state based on current conditions.

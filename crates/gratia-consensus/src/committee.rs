@@ -1,7 +1,8 @@
-//! Validator committee management.
+//! Validator committee management with graduated scaling.
 //!
-//! The Gratia consensus uses a 21-validator committee that produces blocks
-//! via VRF-based selection. The committee rotates at epoch boundaries.
+//! The Gratia consensus uses a validator committee that scales with network size,
+//! from 3 validators at bootstrap to 21 at full scale. The committee produces blocks
+//! via VRF-based selection and rotates at epoch boundaries.
 //! Selection is weighted by Composite Presence Score (40-100), which affects
 //! selection probability but NOT rewards.
 
@@ -11,19 +12,21 @@ use serde::{Deserialize, Serialize};
 use gratia_core::error::GratiaError;
 use gratia_core::types::NodeId;
 
-use crate::vrf::{self, VrfProof, VrfPublicKey, VrfSecretKey};
+use crate::vrf::{self, VrfProof, VrfPublicKey};
 
 // ============================================================================
 // Constants
 // ============================================================================
 
-/// Number of validators per committee.
+/// Maximum committee size at full network scale (100K+ nodes).
 /// WHY: 21 balances decentralization (enough nodes for geographic diversity)
 /// against finality speed (14/21 signatures can be collected quickly on mobile networks).
-pub const COMMITTEE_SIZE: usize = 21;
+pub const MAX_COMMITTEE_SIZE: usize = 21;
 
-/// Number of committee signatures required for finality.
-/// WHY: 14/21 = 66.7%, just above the 2/3 Byzantine fault tolerance threshold.
+/// Legacy alias — code referencing COMMITTEE_SIZE gets the max.
+pub const COMMITTEE_SIZE: usize = MAX_COMMITTEE_SIZE;
+
+/// Legacy alias — finality threshold for a full 21-validator committee.
 pub const FINALITY_THRESHOLD: usize = 14;
 
 /// Number of slots per epoch before committee rotation.
@@ -33,6 +36,115 @@ pub const SLOTS_PER_EPOCH: u64 = 900;
 
 /// Domain separator for committee selection VRF input.
 const COMMITTEE_SELECTION_DOMAIN: &[u8] = b"gratia-committee-select-v1";
+
+/// Number of days a network size must persist below a tier before the committee
+/// downsizes. Prevents attacker-induced shrinking.
+/// WHY: 7 days prevents an attacker from knocking nodes offline to force a
+/// committee shrink, which would make capture easier.
+#[allow(dead_code)] // Phase 2: used when epoch-boundary downsizing is implemented
+const DOWNSIZE_PERSISTENCE_DAYS: u64 = 7;
+
+// ============================================================================
+// Graduated Scaling
+// ============================================================================
+
+/// A tier in the graduated committee scaling curve.
+/// WHY: Odd committee sizes prevent tie conditions in voting. Finality
+/// threshold stays near 67% at every level for BFT consistency.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommitteeTier {
+    /// Minimum total network nodes to use this tier.
+    pub min_network_size: u64,
+    /// Number of validators in the committee at this tier.
+    pub committee_size: usize,
+    /// Number of signatures required for finality.
+    pub finality_threshold: usize,
+    /// Minimum eligible nodes required in the VRF selection pool.
+    pub min_selection_pool: u64,
+    /// Cooldown: how many consecutive rounds a node must sit out after serving.
+    /// WHY: At low node counts, cooldowns prevent a small set of attacker nodes
+    /// from appearing in back-to-back committees.
+    pub cooldown_rounds: u64,
+}
+
+/// The 7-tier graduated scaling curve.
+/// WHY: The curve is deliberately conservative — the committee stays small
+/// until the network has significant depth in its selection pool.
+pub const SCALING_TIERS: [CommitteeTier; 7] = [
+    CommitteeTier {
+        min_network_size: 0,
+        committee_size: 3,
+        finality_threshold: 2,
+        min_selection_pool: 10,
+        // WHY: At <100 nodes, a cooldown of 5 rounds ensures at least 15 distinct
+        // nodes are needed to fill committees across 5 consecutive rounds.
+        cooldown_rounds: 5,
+    },
+    CommitteeTier {
+        min_network_size: 100,
+        committee_size: 5,
+        finality_threshold: 4,
+        min_selection_pool: 50,
+        cooldown_rounds: 3,
+    },
+    CommitteeTier {
+        min_network_size: 500,
+        committee_size: 7,
+        finality_threshold: 5,
+        min_selection_pool: 100,
+        cooldown_rounds: 2,
+    },
+    CommitteeTier {
+        min_network_size: 2_500,
+        committee_size: 11,
+        finality_threshold: 8,
+        min_selection_pool: 500,
+        cooldown_rounds: 1,
+    },
+    CommitteeTier {
+        min_network_size: 10_000,
+        committee_size: 15,
+        finality_threshold: 10,
+        min_selection_pool: 2_000,
+        cooldown_rounds: 1,
+    },
+    CommitteeTier {
+        min_network_size: 50_000,
+        committee_size: 19,
+        finality_threshold: 13,
+        min_selection_pool: 10_000,
+        cooldown_rounds: 1,
+    },
+    CommitteeTier {
+        min_network_size: 100_000,
+        committee_size: 21,
+        finality_threshold: 14,
+        min_selection_pool: 20_000,
+        cooldown_rounds: 1,
+    },
+];
+
+/// Determine the appropriate committee tier for a given network size.
+pub fn tier_for_network_size(network_size: u64) -> &'static CommitteeTier {
+    // Walk tiers in reverse to find the highest tier the network qualifies for.
+    for tier in SCALING_TIERS.iter().rev() {
+        if network_size >= tier.min_network_size {
+            return tier;
+        }
+    }
+    // Fallback: smallest tier (should be unreachable since tier 0 starts at 0).
+    &SCALING_TIERS[0]
+}
+
+/// Determine committee size for a given network size.
+pub fn committee_size_for_network(network_size: u64) -> usize {
+    tier_for_network_size(network_size).committee_size
+}
+
+/// Determine finality threshold for a given network size.
+pub fn finality_threshold_for_network(network_size: u64) -> usize {
+    tier_for_network_size(network_size).finality_threshold
+}
 
 // ============================================================================
 // Types
@@ -51,6 +163,10 @@ pub struct EligibleNode {
     pub has_valid_pol: bool,
     /// Whether the node meets the minimum stake requirement.
     pub meets_minimum_stake: bool,
+    /// Number of consecutive days of valid PoL history.
+    /// WHY: Progressive trust model — only Established+ nodes (30+ days)
+    /// are eligible for validator committees.
+    pub pol_days: u64,
 }
 
 impl EligibleNode {
@@ -59,6 +175,14 @@ impl EligibleNode {
         self.has_valid_pol
             && self.meets_minimum_stake
             && self.presence_score >= 40
+    }
+
+    /// Check if this node meets the progressive trust requirement for
+    /// committee membership (Established tier: 30+ days PoL).
+    /// WHY: Prevents an attacker from flooding the network with fresh nodes
+    /// to influence consensus. Committee eligibility must be earned.
+    pub fn is_committee_eligible(&self) -> bool {
+        self.is_eligible() && self.pol_days >= 30
     }
 }
 
@@ -93,13 +217,20 @@ pub struct CommitteeEpoch {
     pub seed: [u8; 32],
 }
 
-/// The active 21-validator committee for the current epoch.
+/// The active validator committee for the current epoch.
+/// Committee size scales with network size per the graduated scaling curve.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidatorCommittee {
     /// The current epoch info.
     pub epoch: CommitteeEpoch,
-    /// The 21 committee members, sorted by selection value (lowest first).
+    /// The committee members, sorted by selection value (lowest first).
     pub members: Vec<CommitteeMember>,
+    /// The committee size used for this epoch (from graduated scaling).
+    pub committee_size: usize,
+    /// The finality threshold for this epoch.
+    pub finality_threshold: usize,
+    /// Network size snapshot used to determine the committee tier.
+    pub network_size_snapshot: u64,
 }
 
 impl ValidatorCommittee {
@@ -133,7 +264,7 @@ impl ValidatorCommittee {
 
     /// Check if enough signatures have been collected for finality.
     pub fn has_finality(&self, signature_count: usize) -> bool {
-        signature_count >= FINALITY_THRESHOLD
+        signature_count >= self.finality_threshold
     }
 
     /// Check if a slot belongs to this epoch.
@@ -148,14 +279,64 @@ impl ValidatorCommittee {
 }
 
 // ============================================================================
+// Cooldown Tracking
+// ============================================================================
+
+/// Tracks recent committee membership for cooldown enforcement.
+/// WHY: At low node counts, cooldowns prevent a small set of attacker nodes
+/// from appearing in back-to-back committees.
+#[derive(Debug, Clone, Default)]
+pub struct CooldownTracker {
+    /// Ring buffer of recent committee member sets (most recent first).
+    /// Each entry is the set of NodeIds that served in that round.
+    recent_committees: Vec<Vec<NodeId>>,
+}
+
+impl CooldownTracker {
+    /// Create a new cooldown tracker.
+    pub fn new() -> Self {
+        Self {
+            recent_committees: Vec::new(),
+        }
+    }
+
+    /// Record a committee that was just selected.
+    pub fn record_committee(&mut self, members: &[CommitteeMember]) {
+        let ids: Vec<NodeId> = members.iter().map(|m| m.node_id).collect();
+        self.recent_committees.insert(0, ids);
+        // WHY: Keep only the last 10 rounds — sufficient for the maximum cooldown of 5.
+        if self.recent_committees.len() > 10 {
+            self.recent_committees.truncate(10);
+        }
+    }
+
+    /// Check if a node is in cooldown and cannot serve on the next committee.
+    pub fn is_in_cooldown(&self, node_id: &NodeId, cooldown_rounds: u64) -> bool {
+        // A cooldown of 1 means the node must sit out the immediately next round
+        // (standard behavior — just skip if served in the most recent committee).
+        // A cooldown of 0 means no cooldown.
+        if cooldown_rounds == 0 {
+            return false;
+        }
+        let check_rounds = cooldown_rounds as usize;
+        for recent in self.recent_committees.iter().take(check_rounds) {
+            if recent.contains(node_id) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+// ============================================================================
 // Committee Selection
 // ============================================================================
 
-/// Select a committee of up to 21 validators from all eligible nodes.
+/// Select a committee of validators from all eligible nodes.
 ///
-/// Each eligible node generates a VRF proof using the epoch seed. The nodes
-/// with the lowest weighted selection values (VRF output weighted by Presence
-/// Score) are chosen for the committee.
+/// Committee size is determined by the graduated scaling curve based on
+/// `network_size`. Each eligible node generates a VRF proof using the epoch
+/// seed. The nodes with the lowest weighted selection values are chosen.
 ///
 /// This function is called by each node independently. Because VRF outputs
 /// are deterministic and verifiable, all honest nodes will agree on the
@@ -166,16 +347,70 @@ pub fn select_committee(
     epoch_number: u64,
     current_slot: u64,
 ) -> Result<ValidatorCommittee, GratiaError> {
-    // Filter to truly eligible nodes
-    let eligible: Vec<&EligibleNode> = eligible_nodes
+    // Use the count of all eligible nodes as network size for tier selection.
+    let network_size = eligible_nodes.iter().filter(|n| n.is_eligible()).count() as u64;
+    select_committee_with_network_size(
+        eligible_nodes,
+        epoch_seed,
+        epoch_number,
+        current_slot,
+        network_size,
+        None,
+    )
+}
+
+/// Select a committee with an explicit network size and optional cooldown tracker.
+///
+/// This is the full-featured selection function used when the caller provides
+/// the network size (e.g., from beacon chain state) and cooldown tracking.
+pub fn select_committee_with_network_size(
+    eligible_nodes: &[EligibleNode],
+    epoch_seed: &[u8; 32],
+    epoch_number: u64,
+    current_slot: u64,
+    network_size: u64,
+    cooldown_tracker: Option<&CooldownTracker>,
+) -> Result<ValidatorCommittee, GratiaError> {
+    let tier = tier_for_network_size(network_size);
+
+    // Filter to committee-eligible nodes (30+ days PoL for progressive trust).
+    // WHY: If not enough committee-eligible nodes exist (early network), fall back
+    // to basic eligibility. This prevents the network from stalling during bootstrap
+    // when no one has 30 days of history yet.
+    let mut eligible: Vec<&EligibleNode> = eligible_nodes
         .iter()
-        .filter(|n| n.is_eligible())
+        .filter(|n| n.is_committee_eligible())
         .collect();
+
+    if eligible.len() < tier.committee_size {
+        // WHY: Fallback — use any eligible node if we can't fill the committee
+        // with 30+ day nodes. This is expected during the first month of the network.
+        eligible = eligible_nodes
+            .iter()
+            .filter(|n| n.is_eligible())
+            .collect();
+    }
 
     if eligible.is_empty() {
         return Err(GratiaError::BlockValidationFailed {
             reason: "No eligible nodes for committee selection".into(),
         });
+    }
+
+    // Apply cooldown filtering if tracker is provided.
+    if let Some(tracker) = cooldown_tracker {
+        let before_cooldown = eligible.len();
+        eligible.retain(|n| !tracker.is_in_cooldown(&n.node_id, tier.cooldown_rounds));
+
+        // WHY: If cooldown filtering removed too many candidates, fall back to
+        // unfiltered. Better to reuse some validators than to have a tiny committee.
+        if eligible.len() < tier.committee_size {
+            eligible = eligible_nodes
+                .iter()
+                .filter(|n| n.is_eligible())
+                .collect();
+            let _ = before_cooldown; // suppress unused warning
+        }
     }
 
     // Build the VRF input for committee selection
@@ -225,9 +460,9 @@ pub fn select_committee(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    // Take the top COMMITTEE_SIZE (or fewer if not enough eligible nodes)
-    let committee_size = COMMITTEE_SIZE.min(candidates.len());
-    candidates.truncate(committee_size);
+    // Take the top committee_size (or fewer if not enough eligible nodes)
+    let actual_size = tier.committee_size.min(candidates.len());
+    candidates.truncate(actual_size);
 
     let epoch = CommitteeEpoch {
         epoch_number,
@@ -240,6 +475,9 @@ pub fn select_committee(
     Ok(ValidatorCommittee {
         epoch,
         members: candidates,
+        committee_size: tier.committee_size,
+        finality_threshold: tier.finality_threshold,
+        network_size_snapshot: network_size,
     })
 }
 
@@ -269,6 +507,33 @@ pub fn rotate_committee(
     ]);
 
     select_committee(eligible_nodes, &new_seed, new_epoch_number, new_start_slot)
+}
+
+/// Rotate the committee with explicit network size and cooldown tracking.
+pub fn rotate_committee_with_network_size(
+    eligible_nodes: &[EligibleNode],
+    previous_committee: &ValidatorCommittee,
+    last_block_hash: &[u8; 32],
+    network_size: u64,
+    cooldown_tracker: Option<&CooldownTracker>,
+) -> Result<ValidatorCommittee, GratiaError> {
+    let new_epoch_number = previous_committee.epoch.epoch_number + 1;
+    let new_start_slot = previous_committee.epoch.end_slot;
+
+    let new_seed = gratia_core::crypto::sha256_multi(&[
+        b"gratia-epoch-seed-v1:",
+        last_block_hash,
+        &new_epoch_number.to_be_bytes(),
+    ]);
+
+    select_committee_with_network_size(
+        eligible_nodes,
+        &new_seed,
+        new_epoch_number,
+        new_start_slot,
+        network_size,
+        cooldown_tracker,
+    )
 }
 
 /// Verify that a node was legitimately selected for a committee by checking
@@ -329,8 +594,82 @@ mod tests {
             presence_score: score,
             has_valid_pol: true,
             meets_minimum_stake: true,
+            pol_days: 90, // Default to Trusted tier for backward compat
         }
     }
+
+    fn make_new_node(id_byte: u8, score: u8, days: u64) -> EligibleNode {
+        let mut node = make_eligible_node(id_byte, score);
+        node.pol_days = days;
+        node
+    }
+
+    // ========================================================================
+    // Graduated Scaling Tests
+    // ========================================================================
+
+    #[test]
+    fn test_tier_for_network_size() {
+        assert_eq!(tier_for_network_size(0).committee_size, 3);
+        assert_eq!(tier_for_network_size(50).committee_size, 3);
+        assert_eq!(tier_for_network_size(99).committee_size, 3);
+        assert_eq!(tier_for_network_size(100).committee_size, 5);
+        assert_eq!(tier_for_network_size(499).committee_size, 5);
+        assert_eq!(tier_for_network_size(500).committee_size, 7);
+        assert_eq!(tier_for_network_size(2_499).committee_size, 7);
+        assert_eq!(tier_for_network_size(2_500).committee_size, 11);
+        assert_eq!(tier_for_network_size(9_999).committee_size, 11);
+        assert_eq!(tier_for_network_size(10_000).committee_size, 15);
+        assert_eq!(tier_for_network_size(49_999).committee_size, 15);
+        assert_eq!(tier_for_network_size(50_000).committee_size, 19);
+        assert_eq!(tier_for_network_size(99_999).committee_size, 19);
+        assert_eq!(tier_for_network_size(100_000).committee_size, 21);
+        assert_eq!(tier_for_network_size(1_000_000).committee_size, 21);
+    }
+
+    #[test]
+    fn test_finality_thresholds_are_above_two_thirds() {
+        for tier in &SCALING_TIERS {
+            let ratio = tier.finality_threshold as f64 / tier.committee_size as f64;
+            assert!(
+                ratio >= 0.66,
+                "Tier with committee_size={} has finality ratio {:.2}, below 2/3",
+                tier.committee_size, ratio
+            );
+        }
+    }
+
+    #[test]
+    fn test_all_committee_sizes_are_odd() {
+        // WHY: Odd sizes prevent tie conditions in voting.
+        for tier in &SCALING_TIERS {
+            assert!(
+                tier.committee_size % 2 == 1,
+                "Committee size {} is even",
+                tier.committee_size
+            );
+        }
+    }
+
+    #[test]
+    fn test_tiers_are_monotonically_increasing() {
+        for i in 1..SCALING_TIERS.len() {
+            assert!(
+                SCALING_TIERS[i].min_network_size > SCALING_TIERS[i - 1].min_network_size,
+                "Tiers not monotonically increasing at index {}",
+                i
+            );
+            assert!(
+                SCALING_TIERS[i].committee_size > SCALING_TIERS[i - 1].committee_size,
+                "Committee sizes not monotonically increasing at index {}",
+                i
+            );
+        }
+    }
+
+    // ========================================================================
+    // Committee Selection Tests (adapted from original)
+    // ========================================================================
 
     #[test]
     fn test_select_committee_basic() {
@@ -341,22 +680,61 @@ mod tests {
         let seed = [0xAB; 32];
         let committee = select_committee(&nodes, &seed, 0, 0).unwrap();
 
-        assert_eq!(committee.size(), COMMITTEE_SIZE);
+        // 30 eligible nodes → tier for 30 = committee of 3
+        assert_eq!(committee.committee_size, 3);
+        assert_eq!(committee.size(), 3);
         assert_eq!(committee.epoch.epoch_number, 0);
         assert_eq!(committee.epoch.start_slot, 0);
         assert_eq!(committee.epoch.end_slot, SLOTS_PER_EPOCH);
     }
 
     #[test]
-    fn test_select_committee_fewer_than_21() {
+    fn test_select_committee_scales_with_network() {
+        // 150 nodes → tier 2 (committee of 5)
+        let nodes: Vec<EligibleNode> = (0..150)
+            .map(|i| make_eligible_node(i as u8, 60))
+            .collect();
+
+        let seed = [0xAB; 32];
+        let committee = select_committee_with_network_size(
+            &nodes, &seed, 0, 0, 150, None,
+        ).unwrap();
+
+        assert_eq!(committee.committee_size, 5);
+        assert_eq!(committee.size(), 5);
+        assert_eq!(committee.finality_threshold, 4);
+    }
+
+    #[test]
+    fn test_select_committee_full_scale() {
+        // Simulate 100K+ network
+        let nodes: Vec<EligibleNode> = (0..50)
+            .map(|i| make_eligible_node(i, 60))
+            .collect();
+
+        let seed = [0xCD; 32];
+        let committee = select_committee_with_network_size(
+            &nodes, &seed, 0, 0, 100_000, None,
+        ).unwrap();
+
+        assert_eq!(committee.committee_size, 21);
+        assert_eq!(committee.finality_threshold, 14);
+        assert_eq!(committee.size(), 21);
+        assert_eq!(committee.network_size_snapshot, 100_000);
+    }
+
+    #[test]
+    fn test_select_committee_fewer_than_tier_size() {
         let nodes: Vec<EligibleNode> = (0..5)
             .map(|i| make_eligible_node(i, 60))
             .collect();
 
         let seed = [0xCD; 32];
-        let committee = select_committee(&nodes, &seed, 0, 0).unwrap();
+        // 5 eligible nodes, network says 100K → wants 21 committee, gets 5
+        let committee = select_committee_with_network_size(
+            &nodes, &seed, 0, 0, 100_000, None,
+        ).unwrap();
 
-        // Should include all 5 nodes since there aren't enough for a full committee
         assert_eq!(committee.size(), 5);
     }
 
@@ -373,9 +751,6 @@ mod tests {
 
         let seed = [0xEF; 32];
         let committee = select_committee(&nodes, &seed, 0, 0).unwrap();
-
-        // Should have 21 from the 22 eligible nodes
-        assert_eq!(committee.size(), COMMITTEE_SIZE);
 
         // Ineligible nodes should not be in the committee
         assert!(!committee.is_committee_member(&nodes[0].node_id));
@@ -394,27 +769,6 @@ mod tests {
     }
 
     #[test]
-    fn test_is_committee_member() {
-        let nodes: Vec<EligibleNode> = (0..25)
-            .map(|i| make_eligible_node(i, 60))
-            .collect();
-
-        let seed = [0xAB; 32];
-        let committee = select_committee(&nodes, &seed, 0, 0).unwrap();
-
-        // All members should be found
-        for member in &committee.members {
-            assert!(committee.is_committee_member(&member.node_id));
-        }
-
-        // A non-member should not be found (one of the 4 excluded nodes)
-        let non_member_count = nodes.iter()
-            .filter(|n| !committee.is_committee_member(&n.node_id))
-            .count();
-        assert_eq!(non_member_count, 4); // 25 - 21 = 4
-    }
-
-    #[test]
     fn test_block_producer_for_slot() {
         let nodes: Vec<EligibleNode> = (0..25)
             .map(|i| make_eligible_node(i, 60))
@@ -422,6 +776,7 @@ mod tests {
 
         let seed = [0xAB; 32];
         let committee = select_committee(&nodes, &seed, 0, 0).unwrap();
+        let size = committee.size();
 
         // Slot 0 should map to member 0
         let producer_0 = committee.block_producer_for_slot(0).unwrap();
@@ -431,9 +786,9 @@ mod tests {
         let producer_1 = committee.block_producer_for_slot(1).unwrap();
         assert_eq!(producer_1.node_id, committee.members[1].node_id);
 
-        // Slot 21 should wrap back to member 0
-        let producer_21 = committee.block_producer_for_slot(21).unwrap();
-        assert_eq!(producer_21.node_id, committee.members[0].node_id);
+        // Slot wrapping
+        let producer_wrap = committee.block_producer_for_slot(size as u64).unwrap();
+        assert_eq!(producer_wrap.node_id, committee.members[0].node_id);
     }
 
     #[test]
@@ -517,43 +872,176 @@ mod tests {
     }
 
     #[test]
-    fn test_has_finality() {
-        let nodes: Vec<EligibleNode> = (0..25)
+    fn test_has_finality_scaled() {
+        // At 30 nodes, tier is committee=3, finality=2
+        let nodes: Vec<EligibleNode> = (0..30)
             .map(|i| make_eligible_node(i, 60))
             .collect();
 
         let committee = select_committee(&nodes, &[0xAB; 32], 0, 0).unwrap();
+        assert_eq!(committee.finality_threshold, 2);
+        assert!(!committee.has_finality(1));
+        assert!(committee.has_finality(2));
+        assert!(committee.has_finality(3));
+    }
 
-        assert!(!committee.has_finality(0));
+    #[test]
+    fn test_has_finality_full_scale() {
+        let nodes: Vec<EligibleNode> = (0..50)
+            .map(|i| make_eligible_node(i, 60))
+            .collect();
+
+        let committee = select_committee_with_network_size(
+            &nodes, &[0xAB; 32], 0, 0, 100_000, None,
+        ).unwrap();
+
+        assert_eq!(committee.finality_threshold, 14);
         assert!(!committee.has_finality(13));
         assert!(committee.has_finality(14));
         assert!(committee.has_finality(21));
     }
 
+    // ========================================================================
+    // Progressive Trust Tests
+    // ========================================================================
+
     #[test]
-    fn test_higher_score_more_likely_selected() {
-        // Create nodes where half have score 40 and half have score 100
-        let mut nodes: Vec<EligibleNode> = Vec::new();
-        for i in 0..50 {
-            let score = if i < 25 { 40 } else { 100 };
-            nodes.push(make_eligible_node(i, score));
+    fn test_new_nodes_excluded_from_committee_when_enough_established() {
+        // 20 established nodes (90 days) + 20 new nodes (5 days)
+        let mut nodes: Vec<EligibleNode> = (0..20)
+            .map(|i| make_eligible_node(i, 60))
+            .collect();
+        for i in 20..40u8 {
+            nodes.push(make_new_node(i, 60, 5));
+        }
+
+        let seed = [0xAB; 32];
+        let committee = select_committee_with_network_size(
+            &nodes, &seed, 0, 0, 40, None,
+        ).unwrap();
+
+        // All committee members should be from the established group (90 days)
+        for member in &committee.members {
+            let node = nodes.iter().find(|n| n.node_id == member.node_id).unwrap();
+            assert!(
+                node.pol_days >= 30,
+                "Node with {} PoL days shouldn't be on committee",
+                node.pol_days
+            );
+        }
+    }
+
+    #[test]
+    fn test_new_nodes_used_as_fallback_when_not_enough_established() {
+        // Only 2 established nodes but committee needs 3
+        let mut nodes: Vec<EligibleNode> = (0..2)
+            .map(|i| make_eligible_node(i, 60))
+            .collect();
+        for i in 2..10u8 {
+            nodes.push(make_new_node(i, 60, 5));
         }
 
         let seed = [0xAB; 32];
         let committee = select_committee(&nodes, &seed, 0, 0).unwrap();
 
-        // Count how many high-score nodes made the committee
-        let high_score_count = committee.members.iter()
-            .filter(|m| m.presence_score == 100)
-            .count();
-
-        // With score weighting, high-score nodes should be over-represented
-        // (they get lower selection values). Not a hard guarantee due to
-        // randomness, but statistically very likely.
-        assert!(high_score_count > 10,
-            "Expected >10 high-score nodes in committee, got {}",
-            high_score_count);
+        // Committee should still form (fallback to all eligible)
+        assert_eq!(committee.size(), 3);
     }
+
+    // ========================================================================
+    // Cooldown Tests
+    // ========================================================================
+
+    #[test]
+    fn test_cooldown_tracker_basic() {
+        let mut tracker = CooldownTracker::new();
+
+        let node_a = NodeId([1u8; 32]);
+        let node_b = NodeId([2u8; 32]);
+
+        // No history — nothing in cooldown
+        assert!(!tracker.is_in_cooldown(&node_a, 1));
+
+        // Record node_a as a committee member
+        tracker.record_committee(&[CommitteeMember {
+            node_id: node_a,
+            vrf_pubkey: VrfPublicKey { bytes: [1; 32] },
+            presence_score: 60,
+            selection_proof: VrfProof { output: [0; 32], proof_bytes: vec![] },
+            selection_value: 0.5,
+        }]);
+
+        // node_a is in cooldown for 1 round, node_b is not
+        assert!(tracker.is_in_cooldown(&node_a, 1));
+        assert!(!tracker.is_in_cooldown(&node_b, 1));
+
+        // Record another round without node_a
+        tracker.record_committee(&[CommitteeMember {
+            node_id: node_b,
+            vrf_pubkey: VrfPublicKey { bytes: [2; 32] },
+            presence_score: 60,
+            selection_proof: VrfProof { output: [0; 32], proof_bytes: vec![] },
+            selection_value: 0.5,
+        }]);
+
+        // node_a is no longer in cooldown for 1 round, but would be for 2
+        assert!(!tracker.is_in_cooldown(&node_a, 1));
+        assert!(tracker.is_in_cooldown(&node_a, 2));
+    }
+
+    #[test]
+    fn test_cooldown_zero_means_no_cooldown() {
+        let mut tracker = CooldownTracker::new();
+        let node_a = NodeId([1u8; 32]);
+
+        tracker.record_committee(&[CommitteeMember {
+            node_id: node_a,
+            vrf_pubkey: VrfPublicKey { bytes: [1; 32] },
+            presence_score: 60,
+            selection_proof: VrfProof { output: [0; 32], proof_bytes: vec![] },
+            selection_value: 0.5,
+        }]);
+
+        assert!(!tracker.is_in_cooldown(&node_a, 0));
+    }
+
+    #[test]
+    fn test_cooldown_applied_in_selection() {
+        // Create 10 nodes, select committee, then select again with cooldown
+        let nodes: Vec<EligibleNode> = (0..10)
+            .map(|i| make_eligible_node(i, 60))
+            .collect();
+
+        let seed = [0xAB; 32];
+        let committee1 = select_committee_with_network_size(
+            &nodes, &seed, 0, 0, 10, None,
+        ).unwrap();
+
+        let mut tracker = CooldownTracker::new();
+        tracker.record_committee(&committee1.members);
+
+        // At <100 nodes, cooldown is 5 rounds — all 3 members should be excluded
+        let committee2 = select_committee_with_network_size(
+            &nodes, &[0xBB; 32], 1, SLOTS_PER_EPOCH, 10, Some(&tracker),
+        ).unwrap();
+
+        // With 10 nodes and cooldown excluding 3, we still have 7 eligible
+        // Committee should form with 3 different members
+        let c1_ids: Vec<NodeId> = committee1.members.iter().map(|m| m.node_id).collect();
+        let c2_ids: Vec<NodeId> = committee2.members.iter().map(|m| m.node_id).collect();
+
+        // At least some members should differ
+        let overlap = c2_ids.iter().filter(|id| c1_ids.contains(id)).count();
+        assert!(
+            overlap < committee2.size(),
+            "Expected cooldown to prevent full overlap, got {} of {} overlapping",
+            overlap, committee2.size()
+        );
+    }
+
+    // ========================================================================
+    // Membership Verification Tests
+    // ========================================================================
 
     #[test]
     fn test_verify_committee_membership_deterministic() {
@@ -568,5 +1056,68 @@ mod tests {
         for member in &committee.members {
             assert!(verify_committee_membership(member, &seed, 0, None).is_ok());
         }
+    }
+
+    #[test]
+    fn test_higher_score_more_likely_selected() {
+        // Create nodes where half have score 40 and half have score 100
+        let mut nodes: Vec<EligibleNode> = Vec::new();
+        for i in 0..50 {
+            let score = if i < 25 { 40 } else { 100 };
+            nodes.push(make_eligible_node(i, score));
+        }
+
+        let seed = [0xAB; 32];
+        // Use large network size to get a bigger committee for statistical testing
+        let committee = select_committee_with_network_size(
+            &nodes, &seed, 0, 0, 100_000, None,
+        ).unwrap();
+
+        // Count how many high-score nodes made the committee
+        let high_score_count = committee.members.iter()
+            .filter(|m| m.presence_score == 100)
+            .count();
+
+        // With score weighting, high-score nodes should be over-represented
+        assert!(high_score_count > 10,
+            "Expected >10 high-score nodes in committee, got {}",
+            high_score_count);
+    }
+
+    #[test]
+    fn test_committee_stores_network_snapshot() {
+        let nodes: Vec<EligibleNode> = (0..25)
+            .map(|i| make_eligible_node(i, 60))
+            .collect();
+
+        let committee = select_committee_with_network_size(
+            &nodes, &[0xAB; 32], 0, 0, 42_000, None,
+        ).unwrap();
+
+        assert_eq!(committee.network_size_snapshot, 42_000);
+        assert_eq!(committee.committee_size, 15); // 10K-50K tier
+        assert_eq!(committee.finality_threshold, 10);
+    }
+
+    #[test]
+    fn test_is_committee_member() {
+        let nodes: Vec<EligibleNode> = (0..25)
+            .map(|i| make_eligible_node(i, 60))
+            .collect();
+
+        let seed = [0xAB; 32];
+        let committee = select_committee(&nodes, &seed, 0, 0).unwrap();
+
+        // All members should be found
+        for member in &committee.members {
+            assert!(committee.is_committee_member(&member.node_id));
+        }
+
+        // Non-members should not be found
+        let non_member_count = nodes.iter()
+            .filter(|n| !committee.is_committee_member(&n.node_id))
+            .count();
+        // 25 total - 3 committee (tier for 25 nodes) = 22
+        assert_eq!(non_member_count, 25 - committee.size());
     }
 }

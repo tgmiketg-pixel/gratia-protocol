@@ -106,6 +106,21 @@ pub fn sha256_multi(segments: &[&[u8]]) -> [u8; 32] {
     hash
 }
 
+/// Generate a blinded identifier for an unlinkable PoL attestation.
+/// Different every day due to daily_randomness.
+/// WHY: Domain-separated hash prevents cross-protocol collisions.
+pub fn generate_blinded_id(node_id: &crate::types::NodeId, daily_randomness: &[u8; 32]) -> [u8; 32] {
+    sha256_multi(&[b"gratia-blinded-id-v1:", &node_id.0, daily_randomness])
+}
+
+/// Generate a nullifier for double-submission detection.
+/// Same within an epoch, different across epochs.
+/// WHY: Epoch-scoped nullifiers allow the network to reject duplicate
+/// attestations within an epoch without linking across epochs.
+pub fn generate_nullifier(node_id: &crate::types::NodeId, epoch_number: u64) -> [u8; 32] {
+    sha256_multi(&[b"gratia-nullifier-v1:", &node_id.0, &epoch_number.to_be_bytes()])
+}
+
 /// Compute a simple Merkle root from a list of hashes.
 pub fn merkle_root(hashes: &[[u8; 32]]) -> [u8; 32] {
     if hashes.is_empty() {
@@ -196,7 +211,10 @@ mod tests {
     #[test]
     fn test_proof_of_life_validation() {
         use crate::types::{DailyProofOfLifeData, OptionalSensorData};
+        use crate::config::ProofOfLifeConfig;
         use chrono::Utc;
+
+        let config = ProofOfLifeConfig::default();
 
         // Valid PoL data
         let now = Utc::now();
@@ -214,21 +232,60 @@ mod tests {
             charge_cycle_event: true,
             optional_sensors: OptionalSensorData::default(),
         };
-        assert!(valid_data.is_valid());
+        assert!(valid_data.is_valid(&config));
 
         // Invalid: too few unlocks
         let mut invalid = valid_data.clone();
         invalid.unlock_count = 5;
-        assert!(!invalid.is_valid());
+        assert!(!invalid.is_valid(&config));
 
         // Invalid: no charge cycle
         let mut invalid = valid_data.clone();
         invalid.charge_cycle_event = false;
-        assert!(!invalid.is_valid());
+        assert!(!invalid.is_valid(&config));
 
-        // Invalid: no BT variation
+        // Invalid: only 1 BT environment (variation requires 0 or >= 2)
+        // WHY: Having exactly 1 BT environment means BT is available but
+        // doesn't show variation. This fails the BT variation check.
         let mut invalid = valid_data.clone();
         invalid.distinct_bt_environments = 1;
-        assert!(!invalid.is_valid());
+        assert!(!invalid.is_valid(&config));
+
+        // Valid: Wi-Fi-only (0 BT environments) — first-class citizen
+        let mut wifi_only = valid_data.clone();
+        wifi_only.distinct_bt_environments = 0;
+        assert!(wifi_only.is_valid(&config));
+    }
+
+    #[test]
+    fn test_proof_of_life_respects_config() {
+        use crate::types::{DailyProofOfLifeData, OptionalSensorData};
+        use crate::config::ProofOfLifeConfig;
+        use chrono::Utc;
+
+        let now = Utc::now();
+        let data = DailyProofOfLifeData {
+            unlock_count: 5, // Below default (10) but we'll lower the config
+            first_unlock: Some(now - chrono::Duration::hours(14)),
+            last_unlock: Some(now),
+            interaction_sessions: 3,
+            orientation_changed: true,
+            human_motion_detected: true,
+            gps_fix_obtained: true,
+            approximate_location: None,
+            distinct_wifi_networks: 3,
+            distinct_bt_environments: 4,
+            charge_cycle_event: true,
+            optional_sensors: OptionalSensorData::default(),
+        };
+
+        let default_config = ProofOfLifeConfig::default();
+        // Should fail with default config (requires 10 unlocks)
+        assert!(!data.is_valid(&default_config));
+
+        // Should pass with relaxed config
+        let mut relaxed_config = ProofOfLifeConfig::default();
+        relaxed_config.min_daily_unlocks = 3;
+        assert!(data.is_valid(&relaxed_config));
     }
 }

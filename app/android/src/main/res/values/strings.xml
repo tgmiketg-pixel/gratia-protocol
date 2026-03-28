@@ -61,6 +61,10 @@
     <!-- Network screen -->
     <string name="tab_network">Network</string>
 
+    <!-- NFC tap-to-transact service -->
+    <string name="nfc_service_desc">Gratia NFC Transfer</string>
+    <string name="nfc_aid_desc">Gratia Wallet Address</string>
+
     <!-- Settings screen -->
     <string name="settings_wallet_section">Wallet</string>
     <string name="settings_security_section">Security</string>

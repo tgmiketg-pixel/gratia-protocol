@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.BatteryFull
@@ -29,6 +30,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Power
 import androidx.compose.material.icons.filled.PowerOff
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -39,20 +41,28 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import io.gratia.app.GratiaLogo
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import io.gratia.app.ui.theme.*
 
 // ============================================================================
 // MiningScreen
@@ -68,6 +78,7 @@ fun MiningScreen(
     Scaffold(
         topBar = {
             TopAppBar(
+                navigationIcon = { GratiaLogo(modifier = Modifier.padding(start = 12.dp)) },
                 title = { Text("Mining") },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
@@ -89,7 +100,39 @@ fun MiningScreen(
                 state = state,
                 onStartMining = { viewModel.startMining() },
                 onStopMining = { viewModel.stopMining() },
+                onStakeClick = { viewModel.showStakeDialog() },
+                onUnstakeClick = { viewModel.showUnstakeDialog() },
                 modifier = Modifier.padding(padding),
+            )
+        }
+
+        // Stake dialog
+        if (state.showStakeDialog) {
+            StakeAmountDialog(
+                title = "Stake GRAT",
+                confirmLabel = "Stake",
+                errorMessage = state.stakeError,
+                onConfirm = { amountGrat ->
+                    // WHY: Convert whole GRAT to Lux (1 GRAT = 1,000,000 Lux)
+                    // because the FFI bridge operates in the smallest unit.
+                    val amountLux = amountGrat * 1_000_000L
+                    viewModel.stake(amountLux)
+                },
+                onDismiss = { viewModel.hideStakeDialog() },
+            )
+        }
+
+        // Unstake dialog
+        if (state.showUnstakeDialog) {
+            StakeAmountDialog(
+                title = "Unstake GRAT",
+                confirmLabel = "Unstake",
+                errorMessage = state.stakeError,
+                onConfirm = { amountGrat ->
+                    val amountLux = amountGrat * 1_000_000L
+                    viewModel.unstake(amountLux)
+                },
+                onDismiss = { viewModel.hideUnstakeDialog() },
             )
         }
     }
@@ -100,6 +143,8 @@ private fun MiningContent(
     state: MiningUiState,
     onStartMining: () -> Unit,
     onStopMining: () -> Unit,
+    onStakeClick: () -> Unit,
+    onUnstakeClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val mining = state.miningStatus ?: return
@@ -142,6 +187,15 @@ private fun MiningContent(
                 earningsTotal = state.earningsTotal,
             )
         }
+
+        // Staking
+        item {
+            StakingCard(
+                stakeInfo = state.stakeInfo,
+                onStakeClick = onStakeClick,
+                onUnstakeClick = onUnstakeClick,
+            )
+        }
     }
 }
 
@@ -156,11 +210,11 @@ private fun MiningStateCard(
     onStopMining: () -> Unit,
 ) {
     val stateColor = when (status.state) {
-        "mining" -> Color(0xFF4CAF50)          // Green
-        "proof_of_life" -> Color(0xFF2196F3)   // Blue
-        "battery_low" -> Color(0xFFFFC107)     // Yellow
-        "throttled" -> Color(0xFFFF9800)       // Orange
-        "pending_activation" -> Color(0xFF9E9E9E) // Gray
+        "mining" -> SignalGreen
+        "proof_of_life" -> CharcoalNavy
+        "battery_low" -> AmberGold
+        "throttled" -> DarkAmber
+        "pending_activation" -> AgedGold
         else -> MaterialTheme.colorScheme.outline
     }
 
@@ -222,7 +276,7 @@ private fun MiningStateCard(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Stop Mining")
                 }
-            } else if (status.state == "proof_of_life" && status.isPluggedIn && status.batteryPercent >= 80 && status.currentDayPolValid) {
+            } else if ((status.state == "proof_of_life" || status.state == "pending_activation") && status.isPluggedIn && status.batteryPercent >= 80 && status.currentDayPolValid) {
                 Button(onClick = onStartMining) {
                     Icon(
                         Icons.Default.PlayArrow,
@@ -237,16 +291,25 @@ private fun MiningStateCard(
     }
 }
 
+/**
+ * Pulsing ring animation behind the mining state circle.
+ *
+ * WHY: Uses graphicsLayer instead of Modifier.alpha() for the fade effect.
+ * Modifier.alpha() can fail to animate on some Samsung/MediaTek devices because
+ * it triggers a full recomposition path. graphicsLayer operates at the render
+ * layer (hardware-accelerated) and is consistently animated across all devices.
+ * EaseOut easing gives a more organic "heartbeat" feel than linear.
+ */
 @Composable
 private fun MiningPulseAnimation(color: Color) {
     val infiniteTransition = rememberInfiniteTransition(label = "mining_pulse")
     val alpha by infiniteTransition.animateFloat(
-        initialValue = 0.3f,
+        initialValue = 0.4f,
         targetValue = 0.0f,
         animationSpec = infiniteRepeatable(
             animation = tween(
-                durationMillis = 1500, // Smooth 1.5s pulse cycle
-                easing = LinearEasing,
+                durationMillis = 1500,
+                easing = androidx.compose.animation.core.EaseOut,
             ),
             repeatMode = RepeatMode.Restart,
         ),
@@ -254,11 +317,11 @@ private fun MiningPulseAnimation(color: Color) {
     )
     val scale by infiniteTransition.animateFloat(
         initialValue = 1.0f,
-        targetValue = 1.6f,
+        targetValue = 1.8f,
         animationSpec = infiniteRepeatable(
             animation = tween(
                 durationMillis = 1500,
-                easing = LinearEasing,
+                easing = androidx.compose.animation.core.EaseOut,
             ),
             repeatMode = RepeatMode.Restart,
         ),
@@ -268,11 +331,15 @@ private fun MiningPulseAnimation(color: Color) {
     Canvas(
         modifier = Modifier
             .size(80.dp)
-            .alpha(alpha),
+            .graphicsLayer {
+                this.alpha = alpha
+                scaleX = scale
+                scaleY = scale
+            },
     ) {
         drawCircle(
             color = color,
-            radius = size.minDimension / 2 * scale,
+            radius = size.minDimension / 2,
         )
     }
 }
@@ -312,8 +379,8 @@ private fun BatteryStatusCard(status: MiningStatus) {
                     },
                     contentDescription = null,
                     tint = when {
-                        status.batteryPercent >= 80 -> Color(0xFF4CAF50)
-                        status.batteryPercent >= 50 -> Color(0xFFFFC107)
+                        status.batteryPercent >= 80 -> SignalGreen
+                        status.batteryPercent >= 50 -> AmberGold
                         else -> MaterialTheme.colorScheme.error
                     },
                     modifier = Modifier.size(24.dp),
@@ -350,7 +417,7 @@ private fun BatteryStatusCard(status: MiningStatus) {
                 Icon(
                     imageVector = if (status.isPluggedIn) Icons.Default.Power else Icons.Default.PowerOff,
                     contentDescription = null,
-                    tint = if (status.isPluggedIn) Color(0xFF4CAF50) else MaterialTheme.colorScheme.outline,
+                    tint = if (status.isPluggedIn) SignalGreen else MaterialTheme.colorScheme.outline,
                     modifier = Modifier.size(24.dp),
                 )
                 Spacer(modifier = Modifier.width(12.dp))
@@ -394,7 +461,7 @@ private fun ProofOfLifeCard(polStatus: ProofOfLifeStatus) {
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
-                val validColor = if (polStatus.isValidToday) Color(0xFF4CAF50) else Color(0xFFFFA000)
+                val validColor = if (polStatus.isValidToday) SignalGreen else AmberGold
                 Text(
                     text = if (polStatus.isValidToday) "Valid" else "Incomplete",
                     style = MaterialTheme.typography.labelLarge,
@@ -433,7 +500,7 @@ private fun PolParameterRow(label: String, isMet: Boolean) {
         Icon(
             imageVector = if (isMet) Icons.Default.Check else Icons.Default.Close,
             contentDescription = if (isMet) "Met" else "Not met",
-            tint = if (isMet) Color(0xFF4CAF50) else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+            tint = if (isMet) SignalGreen else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
             modifier = Modifier.size(18.dp),
         )
         Spacer(modifier = Modifier.width(8.dp))
@@ -539,4 +606,160 @@ private fun EarningsRow(label: String, amountLux: Long) {
             fontWeight = FontWeight.SemiBold,
         )
     }
+}
+
+// ============================================================================
+// Staking Card
+// ============================================================================
+
+@Composable
+private fun StakingCard(
+    stakeInfo: StakeInfo,
+    onStakeClick: () -> Unit,
+    onUnstakeClick: () -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Staking",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                // WHY: Minimum stake is a prerequisite for mining (three-pillar consensus).
+                // Show a clear pass/fail indicator so the user knows immediately.
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = if (stakeInfo.meetsMinimum) Icons.Default.Check else Icons.Default.Close,
+                        contentDescription = if (stakeInfo.meetsMinimum) "Minimum met" else "Minimum not met",
+                        tint = if (stakeInfo.meetsMinimum) SignalGreen else AlertRed,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = if (stakeInfo.meetsMinimum) "Minimum Met" else "Below Minimum",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (stakeInfo.meetsMinimum) SignalGreen else AlertRed,
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Node Stake
+            StakeInfoRow("Node Stake", stakeInfo.nodeStakeLux)
+
+            // WHY: Overflow is the amount above the per-node cap that flows to the
+            // Network Security Pool. Users should see this so they understand the cap.
+            StakeInfoRow("Overflow", stakeInfo.overflowAmountLux)
+
+            StakeInfoRow("Total Committed", stakeInfo.totalCommittedLux)
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Stake / Unstake buttons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Button(
+                    onClick = onStakeClick,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Stake")
+                }
+                OutlinedButton(
+                    onClick = onUnstakeClick,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Unstake")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StakeInfoRow(label: String, amountLux: Long) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+        )
+        Text(
+            text = "${formatGrat(amountLux)} GRAT",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
+// ============================================================================
+// Stake / Unstake Amount Dialog
+// ============================================================================
+
+@Composable
+private fun StakeAmountDialog(
+    title: String,
+    confirmLabel: String,
+    errorMessage: String?,
+    onConfirm: (amountGrat: Long) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var amountText by remember { mutableStateOf("") }
+
+    // WHY: Parse as Long (whole GRAT) because the minimum stake and cap are
+    // whole-number values. Fractional staking can be added later if needed.
+    val parsedAmount = amountText.toLongOrNull()
+    val isValid = parsedAmount != null && parsedAmount > 0
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = amountText,
+                    onValueChange = { amountText = it },
+                    label = { Text("Amount (GRAT)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    isError = errorMessage != null,
+                )
+                if (errorMessage != null) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = errorMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AlertRed,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { if (isValid) onConfirm(parsedAmount!!) },
+                enabled = isValid,
+            ) {
+                Text(confirmLabel)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+    )
 }

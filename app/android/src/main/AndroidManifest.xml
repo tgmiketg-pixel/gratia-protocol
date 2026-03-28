@@ -16,6 +16,9 @@
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
+    <!-- Camera: required for QR code scanning in wallet send flow -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
     <!-- NFC: required for tap-to-transact feature -->
     <uses-permission android:name="android.permission.NFC" />
 
@@ -24,6 +27,11 @@
     <!-- Android 14+ requires declaring foreground service types -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+
+    <!-- Battery optimization exemption: allows requesting that Samsung, Xiaomi, Huawei
+         and other aggressive OEMs don't kill the ProofOfLifeService in the background.
+         Without this, PoL sensor collection silently stops on many devices. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- Boot completed: restart PoL service after device reboot -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -51,6 +59,7 @@
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.Gratia"
+        android:enableOnBackInvokedCallback="true"
         tools:targetApi="34">
 
         <activity
@@ -78,12 +87,37 @@
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
 
-        <!-- Restart PoL service after device reboot -->
+        <!-- NFC Host Card Emulation service for tap-to-transact.
+             WHY exported="true": The Android NFC system service must be able to
+             route incoming APDU commands from external NFC readers to this service.
+             The BIND_NFC_SERVICE permission ensures only the system can bind to it. -->
+        <service
+            android:name=".service.NfcTransactService"
+            android:exported="true"
+            android:permission="android.permission.BIND_NFC_SERVICE">
+            <intent-filter>
+                <action android:name="android.nfc.cardemulation.action.HOST_APDU_SERVICE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.nfc.cardemulation.host_apdu_service"
+                android:resource="@xml/nfc_aid_list" />
+        </service>
+
+        <!-- Restart PoL service after device reboot.
+             WHY exported="true": Boot receivers must be exported to receive
+             the system BOOT_COMPLETED broadcast.
+             WHY directBootAware="true": Fires before user unlock on Android 7.0+,
+             so PoL data collection starts immediately — not hours later when
+             the user first unlocks. -->
         <receiver
             android:name=".service.BootReceiver"
-            android:exported="true">
+            android:exported="true"
+            android:directBootAware="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <!-- WHY: HTC, Samsung, and some other OEMs send QUICKBOOT_POWERON
+                     instead of BOOT_COMPLETED on fast-boot/hibernation resume. -->
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
         </receiver>
 

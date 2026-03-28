@@ -36,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import io.gratia.app.GratiaLogo
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -43,6 +44,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -63,6 +66,7 @@ fun SettingsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
+                navigationIcon = { GratiaLogo(modifier = Modifier.padding(start = 12.dp)) },
                 title = { Text("Settings") },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
@@ -99,6 +103,14 @@ fun SettingsScreen(
             ExportSeedConfirmationDialog(
                 onConfirm = { viewModel.exportSeedPhrase() },
                 onDismiss = { viewModel.hideExportSeedConfirmation() },
+            )
+        }
+
+        // Seed phrase display dialog
+        state.exportedSeedPhrase?.let { phrase ->
+            SeedPhraseDisplayDialog(
+                seedPhrase = phrase,
+                onDismiss = { viewModel.clearExportedSeedPhrase() },
             )
         }
 
@@ -187,6 +199,16 @@ private fun SettingsContent(
                 onToggle = onInheritanceToggle,
                 onEditBeneficiary = onShowBeneficiaryDialog,
             )
+        }
+
+        // Shard info section (Phase 3 — Geographic sharding)
+        item {
+            ShardInfoSection(shardInfo = state.shardInfo)
+        }
+
+        // VM info section (Phase 3 — GratiaVM runtime)
+        item {
+            VmInfoSection(vmInfo = state.vmInfo)
         }
 
         // About section
@@ -453,6 +475,72 @@ private fun InheritanceSection(
 }
 
 // ============================================================================
+// Section: Shard Info (Phase 3)
+// ============================================================================
+
+@Composable
+private fun ShardInfoSection(shardInfo: ShardInfoUi) {
+    SettingsSection(title = "Geographic Sharding") {
+        if (shardInfo.isShardingActive) {
+            Text(
+                text = "This node is participating in geographic shard ${shardInfo.shardId} of ${shardInfo.shardCount} total shards.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            AboutRow("Shard ID", "${shardInfo.shardId}")
+            AboutRow("Total shards", "${shardInfo.shardCount}")
+            AboutRow("Local validators", "${shardInfo.localValidators}")
+            AboutRow("Cross-shard validators", "${shardInfo.crossShardValidators}")
+            AboutRow("Shard height", "${shardInfo.shardHeight}")
+            AboutRow("Cross-shard queue", "${shardInfo.crossShardQueueSize}")
+        } else {
+            Text(
+                text = "Geographic sharding is not yet active. Sharding activates when the network grows large enough to benefit from parallel shard processing.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            AboutRow("Shard ID", "${shardInfo.shardId}")
+            AboutRow("Status", "Inactive")
+        }
+    }
+}
+
+// ============================================================================
+// Section: VM Info (Phase 3)
+// ============================================================================
+
+@Composable
+private fun VmInfoSection(vmInfo: VmInfoUi) {
+    SettingsSection(title = "GratiaVM") {
+        Text(
+            text = "WASM-based smart contract runtime for mobile-native dApps.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        AboutRow("Runtime", vmInfo.runtimeType.replaceFirstChar { it.uppercase() })
+        AboutRow("Contracts loaded", "${vmInfo.contractsLoaded}")
+        AboutRow("Total gas used", formatGasUsed(vmInfo.totalGasUsed))
+        AboutRow("Memory wired", if (vmInfo.memoryWired) "Yes" else "No")
+    }
+}
+
+/**
+ * Format gas usage into a human-readable string.
+ * WHY: Raw gas numbers can be very large. Abbreviating with K/M suffixes
+ * keeps the settings display clean on small screens.
+ */
+private fun formatGasUsed(gas: Long): String {
+    return when {
+        gas >= 1_000_000 -> "%.1fM".format(gas / 1_000_000.0)
+        gas >= 1_000 -> "%.1fK".format(gas / 1_000.0)
+        else -> "$gas"
+    }
+}
+
+// ============================================================================
 // Section: About
 // ============================================================================
 
@@ -593,6 +681,72 @@ private fun ExportSeedConfirmationDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text("Cancel")
+            }
+        },
+    )
+}
+
+/**
+ * Dialog that displays the exported seed phrase hex string.
+ *
+ * WHY: The seed phrase is shown as a monospace hex string that the user can
+ * copy to clipboard. In production, this would be displayed as a 24-word
+ * BIP39 mnemonic. The dialog warns the user to store it securely and never
+ * share it.
+ */
+@Composable
+private fun SeedPhraseDisplayDialog(
+    seedPhrase: String,
+    onDismiss: () -> Unit,
+) {
+    val clipboardManager = LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                Icons.Default.Key,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+            )
+        },
+        title = { Text("Your Seed Phrase") },
+        text = {
+            Column {
+                Text(
+                    text = "Store this securely. Anyone with this key can access your wallet. Never share it.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    ),
+                ) {
+                    Text(
+                        text = seedPhrase,
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = {
+                        clipboardManager.setText(AnnotatedString(seedPhrase))
+                        copied = true
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (copied) "Copied!" else "Copy to Clipboard")
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onDismiss) {
+                Text("Done")
             }
         },
     )

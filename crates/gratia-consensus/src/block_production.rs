@@ -11,12 +11,12 @@ use gratia_core::crypto::{sha256, merkle_root, Keypair};
 use gratia_core::error::GratiaError;
 use gratia_core::types::{
     Block, BlockHash, BlockHeader, NodeId, ProofOfLifeAttestation,
-    Transaction, TxHash, ValidatorSignature,
+    Transaction, ValidatorSignature,
 };
 
-use crate::committee::{ValidatorCommittee, FINALITY_THRESHOLD};
-use crate::validation::{self, ValidationContext, MAX_BLOCK_SIZE};
-use crate::vrf::{self, VrfProof, VrfSecretKey};
+use crate::committee::ValidatorCommittee;
+use crate::validation::MAX_BLOCK_SIZE;
+use crate::vrf::{self, VrfSecretKey};
 
 // ============================================================================
 // Types
@@ -44,12 +44,16 @@ pub struct PendingBlock {
     pub signatures: Vec<ValidatorSignature>,
     /// The slot in which this block was produced.
     pub slot: u64,
+    /// The finality threshold for this block's committee (from graduated scaling).
+    /// WHY: Committee size and finality threshold scale with network size.
+    /// This stores the threshold at the time the block was produced.
+    pub finality_threshold: usize,
 }
 
 impl PendingBlock {
     /// Check if enough signatures have been collected for finality.
     pub fn is_finalized(&self) -> bool {
-        self.signatures.len() >= FINALITY_THRESHOLD
+        self.signatures.len() >= self.finality_threshold
     }
 
     /// Add a validator signature. Returns error if the signer already signed.
@@ -68,7 +72,7 @@ impl PendingBlock {
         if !self.is_finalized() {
             return Err(GratiaError::InsufficientSignatures {
                 count: self.signatures.len(),
-                required: FINALITY_THRESHOLD,
+                required: self.finality_threshold,
             });
         }
         self.block.validator_signatures = self.signatures;
@@ -123,6 +127,7 @@ impl BlockProducer {
         height: u64,
         state_root: [u8; 32],
         vrf_secret_key: &VrfSecretKey,
+        committee: &ValidatorCommittee,
     ) -> Result<PendingBlock, GratiaError> {
         // Compute transaction Merkle root
         let tx_hashes: Vec<[u8; 32]> = transactions.iter().map(|tx| tx.hash.0).collect();
@@ -180,6 +185,7 @@ impl BlockProducer {
             block,
             signatures: Vec::new(),
             slot: self.current_slot,
+            finality_threshold: committee.finality_threshold,
         })
     }
 }
@@ -189,13 +195,13 @@ pub fn sign_block(
     header: &BlockHeader,
     node_id: NodeId,
     keypair: &Keypair,
-) -> ValidatorSignature {
-    let header_hash = header.hash();
+) -> Result<ValidatorSignature, GratiaError> {
+    let header_hash = header.hash()?;
     let signature = keypair.sign(&header_hash.0);
-    ValidatorSignature {
+    Ok(ValidatorSignature {
         validator: node_id,
         signature,
-    }
+    })
 }
 
 /// Verify a validator's signature on a block header.
@@ -204,7 +210,7 @@ pub fn verify_block_signature(
     sig: &ValidatorSignature,
     public_key_bytes: &[u8],
 ) -> Result<(), GratiaError> {
-    let header_hash = header.hash();
+    let header_hash = header.hash()?;
     gratia_core::crypto::verify_signature(public_key_bytes, &header_hash.0, &sig.signature)
 }
 
@@ -217,7 +223,7 @@ mod tests {
     use super::*;
     use gratia_core::crypto::Keypair;
     use gratia_core::types::*;
-    use crate::committee::{self, EligibleNode, COMMITTEE_SIZE};
+    use crate::committee::{self, EligibleNode};
     use crate::vrf::{VrfPublicKey, VrfSecretKey};
     use rand::rngs::OsRng;
 
@@ -232,6 +238,7 @@ mod tests {
                     presence_score: 60,
                     has_valid_pol: true,
                     meets_minimum_stake: true,
+                    pol_days: 90,
                 }
             })
             .collect();
@@ -286,6 +293,7 @@ mod tests {
             1,
             [0; 32],
             &vrf_sk,
+            &committee,
         );
 
         assert!(result.is_ok());
@@ -315,6 +323,7 @@ mod tests {
             1,
             [0; 32],
             &vrf_sk,
+            &committee,
         );
 
         assert!(result.is_ok());
@@ -359,14 +368,17 @@ mod tests {
             1,
             [0; 32],
             &vrf_sk,
+            &committee,
         ).unwrap();
+
+        let threshold = pending.finality_threshold;
 
         // Not enough signatures yet
         assert!(!pending.is_finalized());
         assert!(pending.clone().finalize().is_err());
 
-        // Add 14 signatures (finality threshold)
-        for i in 0..14u8 {
+        // Add exactly `threshold` signatures (finality threshold from graduated scaling)
+        for i in 0..threshold as u8 {
             let mut validator_id = [0u8; 32];
             validator_id[0] = i;
             let sig = ValidatorSignature {
@@ -378,7 +390,7 @@ mod tests {
 
         assert!(pending.is_finalized());
         let finalized = pending.finalize().unwrap();
-        assert_eq!(finalized.validator_signatures.len(), 14);
+        assert_eq!(finalized.validator_signatures.len(), threshold);
     }
 
     #[test]
@@ -397,6 +409,7 @@ mod tests {
             1,
             [0; 32],
             &vrf_sk,
+            &committee,
         ).unwrap();
 
         let sig = ValidatorSignature {
@@ -426,7 +439,7 @@ mod tests {
             geographic_diversity: 5,
         };
 
-        let sig = sign_block(&header, node_id, &keypair);
+        let sig = sign_block(&header, node_id, &keypair).unwrap();
         assert_eq!(sig.validator, node_id);
 
         // Verify the signature
@@ -453,7 +466,7 @@ mod tests {
             geographic_diversity: 5,
         };
 
-        let sig = sign_block(&header, node_id, &keypair1);
+        let sig = sign_block(&header, node_id, &keypair1).unwrap();
 
         // Verify with wrong key should fail
         let result = verify_block_signature(&header, &sig, &keypair2.public_key_bytes());
@@ -476,6 +489,7 @@ mod tests {
             1,
             [0; 32],
             &vrf_sk,
+            &committee,
         ).unwrap();
 
         // VRF proof should be present in the header
@@ -503,6 +517,7 @@ mod tests {
             1,
             [0xBB; 32],
             &vrf_sk,
+            &committee,
         ).unwrap();
 
         assert_eq!(pending.block.header.transactions_root, expected_tx_root);

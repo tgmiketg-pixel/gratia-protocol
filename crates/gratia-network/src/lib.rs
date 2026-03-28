@@ -4,12 +4,13 @@
 //!
 //! ## Architecture
 //!
-//! - **Layer 0 (Mesh):** Bluetooth + Wi-Fi Direct — stubbed, planned for Phase 3.
+//! - **Layer 0 (Mesh):** Bluetooth + Wi-Fi Direct via [`mesh::MeshTransport`].
 //! - **Layer 1 (Consensus):** Cellular/Wi-Fi via libp2p — primary implementation.
 //!
 //! ## Components
 //!
 //! - [`transport`] — QUIC transport with connection management.
+//! - [`mesh`] — Bluetooth/Wi-Fi Direct mesh transport (Layer 0).
 //! - [`discovery`] — Kademlia DHT peer discovery.
 //! - [`gossip`] — Gossipsub for block/transaction/attestation propagation.
 //! - [`sync`] — Block synchronization protocol.
@@ -22,6 +23,7 @@
 pub mod discovery;
 pub mod error;
 pub mod gossip;
+pub mod mesh;
 pub mod sync;
 pub mod transport;
 
@@ -42,6 +44,7 @@ use gratia_core::types::{Block, BlockHash, NodeId, ProofOfLifeAttestation, Trans
 use crate::discovery::PeerDiscovery;
 use crate::error::NetworkError;
 use crate::gossip::{GossipHandler, GossipMessage, NodeAnnouncement, ALL_TOPICS};
+use crate::mesh::MeshTransport;
 use crate::sync::{SyncManager, SyncPayload, SyncProtocolMessage, SyncRequest, SyncState, CHAIN_TIP_POLL_INTERVAL_SECS};
 use crate::transport::{ConnectionManager, TransportConfig};
 
@@ -199,6 +202,11 @@ pub struct NetworkManager {
     /// Connection tracking and limit enforcement.
     connections: ConnectionManager,
 
+    /// Mesh transport layer (Layer 0: BLE + Wi-Fi Direct).
+    /// WHY: Optional because mesh is only available on mobile devices with
+    /// BLE/Wi-Fi Direct hardware. Bootstrap servers leave this as None.
+    mesh_transport: Option<MeshTransport>,
+
     /// Whether the network event loop is running.
     running: bool,
 
@@ -250,12 +258,21 @@ impl NetworkManager {
         let bootstrap = config.bootstrap_peers.clone();
         let max_cached = config.max_cached_peers;
 
+        // WHY: Initialize mesh transport if mesh config is present in the
+        // transport config. The mesh peer ID is derived from the node's identity
+        // (same 32-byte key as NodeId).
+        let mesh_transport = transport_config.mesh.as_ref().map(|mesh_config| {
+            let mesh_peer_id = mesh::MeshPeerId(config.local_node_id.0);
+            MeshTransport::new(mesh_config.clone(), mesh_peer_id)
+        });
+
         NetworkManager {
             config,
             gossip: GossipHandler::new(),
             discovery: PeerDiscovery::new(bootstrap, max_cached),
             sync_manager: SyncManager::new(0, BlockHash([0u8; 32])),
             connections: ConnectionManager::new(transport_config),
+            mesh_transport,
             running: false,
             command_tx: None,
             block_provider: std::sync::Arc::new(NoBlockProvider),
@@ -418,6 +435,9 @@ impl NetworkManager {
         if let Some(tx) = &self.command_tx {
             let _ = tx.send(NetworkCommand::Shutdown).await;
         }
+
+        // Stop mesh layer if it was running
+        self.stop_mesh();
 
         self.command_tx = None;
         self.running = false;
@@ -612,6 +632,40 @@ impl NetworkManager {
     /// Get a mutable reference to the gossip handler.
     pub fn gossip_mut(&mut self) -> &mut GossipHandler {
         &mut self.gossip
+    }
+
+    /// Get a reference to the mesh transport (if configured).
+    pub fn mesh_transport(&self) -> Option<&MeshTransport> {
+        self.mesh_transport.as_ref()
+    }
+
+    /// Get a mutable reference to the mesh transport (if configured).
+    pub fn mesh_transport_mut(&mut self) -> Option<&mut MeshTransport> {
+        self.mesh_transport.as_mut()
+    }
+
+    /// Start the mesh layer (Layer 0).
+    /// WHY: Mesh is started separately from the main network because it depends
+    /// on native platform BLE/Wi-Fi Direct APIs that initialize asynchronously.
+    /// The native layer calls this after its BLE stack is ready.
+    pub fn start_mesh(&mut self) -> Result<(), NetworkError> {
+        if let Some(ref mut mesh) = self.mesh_transport {
+            mesh.start()?;
+            tracing::info!("Mesh transport layer started");
+            Ok(())
+        } else {
+            Err(NetworkError::Transport(
+                "Mesh transport not configured".to_string(),
+            ))
+        }
+    }
+
+    /// Stop the mesh layer.
+    pub fn stop_mesh(&mut self) {
+        if let Some(ref mut mesh) = self.mesh_transport {
+            mesh.stop();
+            tracing::info!("Mesh transport layer stopped");
+        }
     }
 
     /// Get the network configuration.

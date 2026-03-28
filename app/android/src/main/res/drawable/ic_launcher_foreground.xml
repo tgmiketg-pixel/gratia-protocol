@@ -1,14 +1,43 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Simplified Gratia logomark for launcher icon: phone silhouette with ECG
+     heartbeat line. Per Brand Guide: favicon/small sizes use phone + heartbeat
+     only (no outer compass ring). Amber Gold on Deep Navy background.
+     Dark background rule: phone body gets goldenrod outline at 60% opacity. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Simple "G" letter as placeholder launcher icon foreground -->
+
+    <!-- Phone body outline (goldenrod at 60% opacity per dark background rule) -->
     <path
-        android:fillColor="#00897B"
-        android:pathData="M54,24C37.43,24 24,37.43 24,54s13.43,30 30,30s30,-13.43 30,-30S70.57,24 54,24zM54,78c-13.23,0 -24,-10.77 -24,-24s10.77,-24 24,-24s24,10.77 24,24S67.23,78 54,78z"/>
+        android:fillColor="#00000000"
+        android:strokeColor="#B8860B"
+        android:strokeWidth="1.5"
+        android:strokeAlpha="0.6"
+        android:pathData="M42,28 L66,28 C68.2,28 70,29.8 70,32 L70,76 C70,78.2 68.2,80 66,80 L42,80 C39.8,80 38,78.2 38,76 L38,32 C38,29.8 39.8,28 42,28 Z"/>
+
+    <!-- Phone screen area (Amber Gold) -->
     <path
-        android:fillColor="#00897B"
-        android:pathData="M66,54h-12v12h-6V48h18v6z"/>
+        android:fillColor="#F5A623"
+        android:pathData="M42,34 L66,34 L66,72 L42,72 Z"/>
+
+    <!-- Phone top speaker notch (Deep Navy on gold screen) -->
+    <path
+        android:fillColor="#1A2744"
+        android:pathData="M50,31 L58,31 C58.55,31 59,31.45 59,32 C59,32.55 58.55,33 58,33 L50,33 C49.45,33 49,32.55 49,32 C49,31.45 49.45,31 50,31 Z"/>
+
+    <!-- Phone home button circle (Amber Gold) -->
+    <path
+        android:fillColor="#F5A623"
+        android:pathData="M54,77 m-2.5,0 a2.5,2.5 0 1,1 5,0 a2.5,2.5 0 1,1 -5,0"/>
+
+    <!-- ECG heartbeat line (Deep Navy on gold screen — per brand guide) -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#1A2744"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M44,53 L48,53 L50,47 L52,59 L54,44 L56,56 L58,53 L60,53 L64,53"/>
 </vector>

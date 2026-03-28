@@ -51,7 +51,7 @@
         </div>
         <div class="hero-stats">
           <div class="hero-stat">
-            <span class="hero-stat-num">725</span>
+            <span class="hero-stat-num">866</span>
             <span class="hero-stat-label">Tests Passing</span>
           </div>
           <div class="hero-stat">
@@ -59,12 +59,16 @@
             <span class="hero-stat-label">Block Time</span>
           </div>
           <div class="hero-stat">
-            <span class="hero-stat-num">14</span>
+            <span class="hero-stat-num">15</span>
             <span class="hero-stat-label">Rust Crates</span>
           </div>
           <div class="hero-stat">
             <span class="hero-stat-num">$50</span>
             <span class="hero-stat-label">Min Phone</span>
+          </div>
+          <div class="hero-stat">
+            <span class="hero-stat-num">iOS + Android</span>
+            <span class="hero-stat-label">Both Platforms</span>
           </div>
         </div>
       </div>
@@ -183,8 +187,39 @@
     </div>
   </section>
 
+  <!-- ═══════════════ PHASE 3 FEATURES ═══════════════ -->
+  <section class="section section-dark" id="features">
+    <div class="container">
+      <h2 class="section-title">Phase 3 Complete</h2>
+      <p class="section-subtitle">The latest milestone brings cross-platform support, scalability, advanced privacy, and offline resilience.</p>
+
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">&#128241;</div>
+          <h3>iOS Support</h3>
+          <p>Full iOS app built with SwiftUI, all sensor managers (Core Motion, Core Location, Core Bluetooth, Core NFC), and the same shared Rust core via UniFFI Swift bindings. One codebase, both platforms.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128752;</div>
+          <h3>Bluetooth Mesh</h3>
+          <p>Offline transactions via Bluetooth LE and Wi-Fi Direct. Bridge peers relay mesh transactions to the consensus layer. Works without any internet connection — true peer-to-peer.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#127760;</div>
+          <h3>Geographic Sharding</h3>
+          <p>10 geographic shards scale throughput to ~2,000 TPS while keeping each phone's storage requirements low. Cross-shard transactions handled transparently with finality proofs.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128274;</div>
+          <h3>Groth16 ZK Proofs</h3>
+          <p>Complex privacy-preserving smart contract interactions via Groth16 zero-knowledge proofs. Proof generation runs during Mining Mode when the phone has power to spare.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- ═══════════════ SPECS ═══════════════ -->
-  <section class="section section-dark" id="specs">
+  <section class="section" id="specs">
     <div class="container">
       <h2 class="section-title">Technical Specs</h2>
       <div class="specs-grid">
@@ -214,7 +249,7 @@
         </div>
         <div class="spec-card">
           <div class="spec-label">Zero-Knowledge</div>
-          <div class="spec-value">Bulletproofs</div>
+          <div class="spec-value">Bulletproofs + Groth16</div>
         </div>
         <div class="spec-card">
           <div class="spec-label">Smart Contracts</div>
@@ -326,15 +361,15 @@
           <h3>Phase 2 — Smart Contracts &amp; Sync</h3>
           <p>GratiaScript compiler + WASM execution (interpreter + Wasmer), linear memory, contract storage, event emission, state sync protocol, block sync between peers, debug bypass hardened for release builds.</p>
         </div>
+        <div class="roadmap-phase roadmap-done">
+          <div class="roadmap-marker">&#10003;</div>
+          <h3>Phase 3 — iOS, Sharding &amp; Mesh</h3>
+          <p>Full iOS app (SwiftUI + same Rust core), geographic sharding (10 shards, ~2,000 TPS), Bluetooth mesh + Wi-Fi Direct offline transactions, Groth16 ZK proofs for complex smart contracts, environmental oracle layer, 15 Rust crates, 866 tests.</p>
+        </div>
         <div class="roadmap-phase roadmap-active">
           <div class="roadmap-marker roadmap-marker-active"></div>
-          <h3>Phase 3 — Public Testnet</h3>
-          <p>Public testnet launch, community onboarding, multi-user testing, app store submission preparation, bootstrap node infrastructure, landing page.</p>
-        </div>
-        <div class="roadmap-phase">
-          <div class="roadmap-marker"></div>
-          <h3>Phase 4 — Mainnet</h3>
-          <p>iOS app, geographic sharding, Bluetooth mesh transport, security audit, App Store submission, environmental oracle layer, Groth16 proofs for complex ZK contracts.</p>
+          <h3>Phase 4 — Public Mainnet</h3>
+          <p>Security audit by external firm, App Store submission (Google Play + Apple App Store), geographic sharding activation (10 shards live), multi-party ceremony for Groth16 trusted setup, community governance launch.</p>
         </div>
       </div>
     </div>

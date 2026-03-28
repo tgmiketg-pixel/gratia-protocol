@@ -760,6 +760,56 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -785,27 +835,61 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_gratia_ffi_fn_constructor_gratianode_new(`dataDir`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
+    fun uniffi_gratia_ffi_fn_method_gratianode_call_contract(`ptr`: Pointer,`contractAddress`: RustBuffer.ByValue,`functionName`: RustBuffer.ByValue,`gasLimit`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_compile_and_deploy_contract(`ptr`: Pointer,`source`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_compile_contract(`ptr`: Pointer,`source`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_connect_peer(`ptr`: Pointer,`addr`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_gratia_ffi_fn_method_gratianode_create_poll(`ptr`: Pointer,`question`: RustBuffer.ByValue,`options`: RustBuffer.ByValue,`durationSecs`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_create_wallet(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_enable_debug_bypass(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_gratia_ffi_fn_method_gratianode_export_seed_phrase(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_finalize_day(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    fun uniffi_gratia_ffi_fn_method_gratianode_generate_range_proof(`ptr`: Pointer,`value`: Long,`bitWidth`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_consensus_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_get_cross_shard_queue_size(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Int
+    fun uniffi_gratia_ffi_fn_method_gratianode_get_mesh_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_mining_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_network_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_get_polls(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_proof_of_life_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_get_proposals(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_get_shard_info(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_stake_info(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_transaction_history(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_get_vm_info(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_wallet_info(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_init_vm(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_list_contracts(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_mesh_broadcast_transaction(`ptr`: Pointer,`txHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_poll_network_events(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_request_sync(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_send_transfer(`ptr`: Pointer,`to`: RustBuffer.ByValue,`amount`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -813,22 +897,38 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_start_consensus(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_start_explorer_api(`ptr`: Pointer,`port`: Short,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_start_mesh(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_gratia_ffi_fn_method_gratianode_start_mining(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_start_network(`ptr`: Pointer,`listenPort`: Short,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_stop_consensus(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_gratia_ffi_fn_method_gratianode_stop_mesh(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_gratia_ffi_fn_method_gratianode_stop_mining(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_stop_network(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_gratia_ffi_fn_method_gratianode_submit_proposal(`ptr`: Pointer,`title`: RustBuffer.ByValue,`description`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_submit_sensor_event(`ptr`: Pointer,`event`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_gratia_ffi_fn_method_gratianode_tick_mining_reward(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Long
     fun uniffi_gratia_ffi_fn_method_gratianode_unstake(`ptr`: Pointer,`amount`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_update_power_state(`ptr`: Pointer,`isPluggedIn`: Byte,`batteryPercent`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_verify_groth16_proof(`ptr`: Pointer,`proofHex`: RustBuffer.ByValue,`publicInputsHex`: RustBuffer.ByValue,`vkHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    fun uniffi_gratia_ffi_fn_method_gratianode_vote_on_poll(`ptr`: Pointer,`pollIdHex`: RustBuffer.ByValue,`optionIndex`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_gratia_ffi_fn_method_gratianode_vote_on_proposal(`ptr`: Pointer,`proposalIdHex`: RustBuffer.ByValue,`vote`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun ffi_gratia_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun ffi_gratia_ffi_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -941,27 +1041,61 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_gratia_ffi_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_gratia_ffi_checksum_method_gratianode_call_contract(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_compile_and_deploy_contract(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_compile_contract(
+    ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_connect_peer(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_create_poll(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_create_wallet(
     ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_enable_debug_bypass(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_export_seed_phrase(
+    ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_finalize_day(
     ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_generate_range_proof(
+    ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_consensus_status(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_get_cross_shard_queue_size(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_get_mesh_status(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_mining_status(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_network_status(
     ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_get_polls(
+    ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_proof_of_life_status(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_get_proposals(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_get_shard_info(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_stake_info(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_transaction_history(
     ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_get_vm_info(
+    ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_wallet_info(
     ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_init_vm(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_list_contracts(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_mesh_broadcast_transaction(
+    ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_poll_network_events(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_request_sync(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_send_transfer(
     ): Short
@@ -969,21 +1103,37 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_start_consensus(
     ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_start_explorer_api(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_start_mesh(
+    ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_start_mining(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_start_network(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_stop_consensus(
     ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_stop_mesh(
+    ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_stop_mining(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_stop_network(
     ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_submit_proposal(
+    ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_submit_sensor_event(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_tick_mining_reward(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_unstake(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_update_power_state(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_verify_groth16_proof(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_vote_on_poll(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_vote_on_proposal(
     ): Short
     fun uniffi_gratia_ffi_checksum_constructor_gratianode_new(
     ): Short
@@ -1004,16 +1154,43 @@ private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
 
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: UniffiLib) {
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_call_contract() != 7135.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_compile_and_deploy_contract() != 43067.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_compile_contract() != 2896.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_connect_peer() != 21663.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_create_poll() != 50014.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_create_wallet() != 41645.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_enable_debug_bypass() != 32320.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_export_seed_phrase() != 28164.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_finalize_day() != 29277.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_generate_range_proof() != 62923.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_consensus_status() != 58194.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_cross_shard_queue_size() != 8286.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_mesh_status() != 5869.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_mining_status() != 12667.toShort()) {
@@ -1022,7 +1199,16 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_network_status() != 38657.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_polls() != 17116.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_proof_of_life_status() != 59779.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_proposals() != 23105.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_shard_info() != 53298.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_stake_info() != 60972.toShort()) {
@@ -1031,10 +1217,25 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_transaction_history() != 43027.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_vm_info() != 25703.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_wallet_info() != 25150.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_init_vm() != 54906.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_list_contracts() != 47931.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_mesh_broadcast_transaction() != 3163.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_poll_network_events() != 10879.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_request_sync() != 53273.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_send_transfer() != 18482.toShort()) {
@@ -1046,6 +1247,12 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_start_consensus() != 59213.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_start_explorer_api() != 56730.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_start_mesh() != 36439.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_start_mining() != 41256.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1055,13 +1262,22 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_stop_consensus() != 56015.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_stop_mesh() != 60787.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_stop_mining() != 55353.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_stop_network() != 26688.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_submit_proposal() != 11592.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_submit_sensor_event() != 26895.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_tick_mining_reward() != 31103.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_unstake() != 10598.toShort()) {
@@ -1070,7 +1286,16 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_update_power_state() != 49033.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_gratia_ffi_checksum_constructor_gratianode_new() != 15400.toShort()) {
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_verify_groth16_proof() != 43772.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_vote_on_poll() != 60397.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_vote_on_proposal() != 9487.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_constructor_gratianode_new() != 20088.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1186,6 +1411,29 @@ public object FfiConverterUInt: FfiConverter<UInt, Int> {
 
     override fun write(value: UInt, buf: ByteBuffer) {
         buf.putInt(value.toInt())
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterInt: FfiConverter<Int, Int> {
+    override fun lift(value: Int): Int {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Int {
+        return buf.getInt()
+    }
+
+    override fun lower(value: Int): Int {
+        return value
+    }
+
+    override fun allocationSize(value: Int) = 4UL
+
+    override fun write(value: Int, buf: ByteBuffer) {
+        buf.putInt(value)
     }
 }
 
@@ -1513,6 +1761,36 @@ private class JavaLangRefCleanable(
 public interface GratiaNodeInterface {
     
     /**
+     * Call a smart contract function.
+     *
+     * Executes a function on a deployed contract with gas metering,
+     * sandboxing, and access to mobile-native host functions.
+     */
+    fun `callContract`(`contractAddress`: kotlin.String, `functionName`: kotlin.String, `gasLimit`: kotlin.ULong): FfiContractResult
+    
+    /**
+     * Compile GratiaScript source and deploy the contract in one step.
+     *
+     * Compiles the source to WASM, deploys it to GratiaVM, and returns
+     * the contract address. This is the primary way contracts get deployed
+     * from the mobile app.
+     */
+    fun `compileAndDeployContract`(`source`: kotlin.String): kotlin.String
+    
+    /**
+     * Compile GratiaScript source code to WASM bytecode.
+     *
+     * Takes a `.gs` source string and returns the compiled WASM binary
+     * as a hex-encoded string. This lets the mobile app compile contracts
+     * on-device before deploying them.
+     *
+     * WHY: On-device compilation means developers can write, test, and deploy
+     * contracts from their phone — no desktop toolchain needed. This is
+     * consistent with the phone-first philosophy.
+     */
+    fun `compileContract`(`source`: kotlin.String): kotlin.String
+    
+    /**
      * Connect to a remote peer by multiaddr string.
      *
      * For local WiFi demo, use: "/ip4/<peer-ip>/udp/<port>/quic-v1"
@@ -1521,12 +1799,44 @@ public interface GratiaNodeInterface {
     fun `connectPeer`(`addr`: kotlin.String)
     
     /**
+     * Create an on-chain poll. One phone, one vote.
+     *
+     * `options` is a list of option labels (2-10 options).
+     * `duration_secs` is how long the poll stays open.
+     * Returns the poll ID as a hex string.
+     */
+    fun `createPoll`(`question`: kotlin.String, `options`: List<kotlin.String>, `durationSecs`: kotlin.ULong): kotlin.String
+    
+    /**
      * Generate a new wallet keypair. Returns the wallet address string.
      *
      * Can only be called once per device. Returns `WalletAlreadyExists` if
      * a wallet already exists.
      */
     fun `createWallet`(): kotlin.String
+    
+    /**
+     * Enable debug bypass for PoL and staking checks.
+     * WHY: During development and device testing, a full 24-hour PoL window
+     * is impractical. This lets us test the mining and transaction flow
+     * immediately. Only compiles in debug builds — release builds exclude
+     * this method entirely so it cannot be called.
+     */
+    fun `enableDebugBypass`()
+    
+    /**
+     * Export the wallet's seed phrase as a hex string.
+     *
+     * WHY: Optional backup mechanism. The seed phrase IS the raw Ed25519
+     * private key encoded as hex. In production, this would be converted to
+     * a BIP39 24-word mnemonic. For Phase 2, hex export is sufficient for
+     * wallet recovery between devices.
+     *
+     * This is deliberately buried behind a confirmation dialog in the UI
+     * and not shown during onboarding — per the design spec, behavioral
+     * recovery (Proof of Life matching) is the primary recovery method.
+     */
+    fun `exportSeedPhrase`(): kotlin.String
     
     /**
      * Finalize the current day's Proof of Life.
@@ -1539,9 +1849,42 @@ public interface GratiaNodeInterface {
     fun `finalizeDay`(): kotlin.Boolean
     
     /**
+     * Generate a Groth16 range proof for a value.
+     *
+     * Creates a zero-knowledge proof that a value lies within [0, 2^bit_width)
+     * without revealing the actual value. Used for smart contract interactions
+     * that need private amount verification.
+     *
+     * Returns the proof and verification key as a hex-encoded JSON string.
+     *
+     * WHY: Groth16 proofs are computationally heavy to generate (~2-5 seconds
+     * on ARM). This is designed to run during Mining Mode (plugged in, 80%+
+     * battery) so the phone has power to spare. The mobile app can queue proof
+     * generation and execute it when conditions are met.
+     */
+    fun `generateRangeProof`(`value`: kotlin.ULong, `bitWidth`: kotlin.UInt): kotlin.String
+    
+    /**
      * Get the current consensus status.
      */
     fun `getConsensusStatus`(): FfiConsensusStatus
+    
+    /**
+     * Get the number of cross-shard transactions waiting to be routed.
+     *
+     * WHY: Cross-shard transactions require receipts to be relayed between
+     * shard committees. The queue size indicates routing backlog — useful
+     * for the mobile UI to show network health.
+     */
+    fun `getCrossShardQueueSize`(): kotlin.UInt
+    
+    /**
+     * Get the current mesh network status.
+     *
+     * Returns connectivity information for the Bluetooth/Wi-Fi Direct
+     * mesh layer including peer counts and relay queue depth.
+     */
+    fun `getMeshStatus`(): FfiMeshStatus
     
     /**
      * Get the current mining status.
@@ -1554,9 +1897,32 @@ public interface GratiaNodeInterface {
     fun `getNetworkStatus`(): FfiNetworkStatus
     
     /**
+     * Get all active polls.
+     */
+    fun `getPolls`(): List<FfiPoll>
+    
+    /**
      * Get the current Proof of Life status.
      */
     fun `getProofOfLifeStatus`(): FfiProofOfLifeStatus
+    
+    /**
+     * Get all proposals (active and past).
+     */
+    fun `getProposals`(): List<FfiProposal>
+    
+    /**
+     * Get geographic shard information for this node.
+     *
+     * Returns the node's assigned shard, total shard count, and
+     * validator distribution. If sharding is not yet active (fewer
+     * than the minimum nodes required), returns default single-shard info.
+     *
+     * WHY: The mobile UI displays shard assignment so users understand
+     * which geographic region their node serves and can see cross-shard
+     * transaction routing in the explorer.
+     */
+    fun `getShardInfo`(): FfiShardInfo
     
     /**
      * Get current staking information for this node.
@@ -1569,9 +1935,51 @@ public interface GratiaNodeInterface {
     fun `getTransactionHistory`(): List<FfiTransactionInfo>
     
     /**
+     * Get GratiaVM runtime information.
+     *
+     * Returns the VM runtime type, number of deployed contracts,
+     * cumulative gas usage, and memory configuration.
+     *
+     * WHY: The mobile UI displays VM health so developers and users
+     * can monitor smart contract system status. This is also useful
+     * for the DevKit app when testing contracts on real phones.
+     */
+    fun `getVmInfo`(): FfiVmInfo
+    
+    /**
      * Get current wallet information (address, balance, mining state).
      */
     fun `getWalletInfo`(): FfiWalletInfo
+    
+    /**
+     * Initialize the GratiaVM with built-in demo contracts.
+     *
+     * Creates the VM engine with InterpreterRuntime for real WASM execution
+     * and deploys demo contracts that showcase mobile-native opcodes.
+     *
+     * WHY: InterpreterRuntime is a pure-Rust WASM interpreter (no wasmer/LLVM).
+     * It compiles for any target (Android ARM64, iOS, desktop) with zero C++
+     * dependencies. GratiaScript contracts compile to WASM and execute for real.
+     */
+    fun `initVm`(): List<kotlin.String>
+    
+    /**
+     * List deployed contracts.
+     */
+    fun `listContracts`(): List<kotlin.String>
+    
+    /**
+     * Broadcast a transaction via the mesh layer for offline use.
+     *
+     * The transaction is serialized and broadcast to all mesh peers.
+     * Bridge peers with internet connectivity will relay it to the
+     * main network. Returns the transaction hash as a hex string.
+     *
+     * WHY: This enables sending transactions when the phone has no
+     * internet (airplane mode, poor signal, rural areas) by relaying
+     * through Bluetooth/Wi-Fi Direct to nearby peers.
+     */
+    fun `meshBroadcastTransaction`(`txHex`: kotlin.String): kotlin.String
     
     /**
      * Poll for network events.
@@ -1581,6 +1989,15 @@ public interface GratiaNodeInterface {
      * receive peer connection/disconnection and block/transaction notifications.
      */
     fun `pollNetworkEvents`(): List<FfiNetworkEvent>
+    
+    /**
+     * Request block sync from connected peers.
+     *
+     * Checks if this node is behind the network and requests missing blocks.
+     * Called periodically from the mobile app or automatically after peer connect.
+     * Returns the current sync state.
+     */
+    fun `requestSync`(): kotlin.String
     
     /**
      * Send a GRAT transfer to another address.
@@ -1614,6 +2031,30 @@ public interface GratiaNodeInterface {
     fun `startConsensus`(): FfiConsensusStatus
     
     /**
+     * Start a lightweight HTTP API for the block explorer.
+     *
+     * Serves chain data as JSON on the given port. The web-based block explorer
+     * connects to `http://<phone-ip>:<port>/api/explorer/data` to display
+     * live blocks, transactions, and network stats.
+     *
+     * Returns the URL the explorer should connect to.
+     */
+    fun `startExplorerApi`(`port`: kotlin.UShort): kotlin.String
+    
+    /**
+     * Start the Bluetooth/Wi-Fi Direct mesh transport layer.
+     *
+     * Enables offline transaction relay and local peer discovery without
+     * internet connectivity. Mesh peers forward transactions to bridge
+     * peers that relay them to the wider network.
+     *
+     * WHY: The mesh layer is Layer 0 in the Gratia network architecture.
+     * It provides connectivity for users without cellular/Wi-Fi internet,
+     * enabling transactions in areas with poor connectivity.
+     */
+    fun `startMesh`()
+    
+    /**
      * Request to start mining.
      *
      * Returns the current mining status. Mining will only activate if all
@@ -1637,6 +2078,11 @@ public interface GratiaNodeInterface {
     fun `stopConsensus`()
     
     /**
+     * Stop the Bluetooth/Wi-Fi Direct mesh transport layer.
+     */
+    fun `stopMesh`()
+    
+    /**
      * Stop mining.
      *
      * Returns the updated mining status. The node reverts to Proof of Life
@@ -1650,6 +2096,14 @@ public interface GratiaNodeInterface {
     fun `stopNetwork`()
     
     /**
+     * Submit a governance proposal.
+     *
+     * Requires 90+ days of Proof of Life history per the governance spec.
+     * Returns the proposal ID as a hex string.
+     */
+    fun `submitProposal`(`title`: kotlin.String, `description`: kotlin.String): kotlin.String
+    
+    /**
      * Submit a sensor event from the native platform layer.
      *
      * Called by the Android/iOS sensor managers whenever a relevant event
@@ -1657,6 +2111,21 @@ public interface GratiaNodeInterface {
      * processed into the daily PoL attestation.
      */
     fun `submitSensorEvent`(`event`: FfiSensorEvent)
+    
+    /**
+     * Tick mining rewards for one minute of active mining.
+     *
+     * Called by the native MiningService every 60 seconds while mining is
+     * active. Credits the wallet with the flat-rate mining reward.
+     *
+     * WHY: In Phase 1 (no consensus network), mining rewards are credited
+     * directly to the local wallet. In production, rewards flow through
+     * block production and the consensus layer distributes them. This
+     * method provides a working reward loop for development and testing.
+     *
+     * Returns the updated wallet balance in Lux.
+     */
+    fun `tickMiningReward`(): kotlin.ULong
     
     /**
      * Unstake GRAT (subject to cooldown period).
@@ -1676,6 +2145,30 @@ public interface GratiaNodeInterface {
      * mining conditions are met.
      */
     fun `updatePowerState`(`isPluggedIn`: kotlin.Boolean, `batteryPercent`: kotlin.UByte): FfiMiningStatus
+    
+    /**
+     * Verify a Groth16 proof against public inputs and a verification key.
+     *
+     * All parameters are hex-encoded binary (bincode-serialized).
+     * Returns true if the proof is valid.
+     *
+     * WHY: Verification is fast (~5-10ms on ARM) compared to proof generation.
+     * Every validator node verifies proofs for transactions in each block,
+     * so this must be efficient on mobile hardware.
+     */
+    fun `verifyGroth16Proof`(`proofHex`: kotlin.String, `publicInputsHex`: kotlin.String, `vkHex`: kotlin.String): kotlin.Boolean
+    
+    /**
+     * Cast a vote on a poll.
+     */
+    fun `voteOnPoll`(`pollIdHex`: kotlin.String, `optionIndex`: kotlin.UInt)
+    
+    /**
+     * Cast a vote on a proposal.
+     *
+     * `vote` must be "yes", "no", or "abstain".
+     */
+    fun `voteOnProposal`(`proposalIdHex`: kotlin.String, `vote`: kotlin.String)
     
     companion object
 }
@@ -1715,7 +2208,7 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
      */
     constructor(`dataDir`: kotlin.String) :
         this(
-    uniffiRustCall() { _status ->
+    uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_constructor_gratianode_new(
         FfiConverterString.lower(`dataDir`),_status)
 }
@@ -1786,6 +2279,69 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
 
     
     /**
+     * Call a smart contract function.
+     *
+     * Executes a function on a deployed contract with gas metering,
+     * sandboxing, and access to mobile-native host functions.
+     */
+    @Throws(FfiException::class)override fun `callContract`(`contractAddress`: kotlin.String, `functionName`: kotlin.String, `gasLimit`: kotlin.ULong): FfiContractResult {
+            return FfiConverterTypeFfiContractResult.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_call_contract(
+        it, FfiConverterString.lower(`contractAddress`),FfiConverterString.lower(`functionName`),FfiConverterULong.lower(`gasLimit`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Compile GratiaScript source and deploy the contract in one step.
+     *
+     * Compiles the source to WASM, deploys it to GratiaVM, and returns
+     * the contract address. This is the primary way contracts get deployed
+     * from the mobile app.
+     */
+    @Throws(FfiException::class)override fun `compileAndDeployContract`(`source`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_compile_and_deploy_contract(
+        it, FfiConverterString.lower(`source`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Compile GratiaScript source code to WASM bytecode.
+     *
+     * Takes a `.gs` source string and returns the compiled WASM binary
+     * as a hex-encoded string. This lets the mobile app compile contracts
+     * on-device before deploying them.
+     *
+     * WHY: On-device compilation means developers can write, test, and deploy
+     * contracts from their phone — no desktop toolchain needed. This is
+     * consistent with the phone-first philosophy.
+     */
+    @Throws(FfiException::class)override fun `compileContract`(`source`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_compile_contract(
+        it, FfiConverterString.lower(`source`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Connect to a remote peer by multiaddr string.
      *
      * For local WiFi demo, use: "/ip4/<peer-ip>/udp/<port>/quic-v1"
@@ -1804,6 +2360,26 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
 
     
     /**
+     * Create an on-chain poll. One phone, one vote.
+     *
+     * `options` is a list of option labels (2-10 options).
+     * `duration_secs` is how long the poll stays open.
+     * Returns the poll ID as a hex string.
+     */
+    @Throws(FfiException::class)override fun `createPoll`(`question`: kotlin.String, `options`: List<kotlin.String>, `durationSecs`: kotlin.ULong): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_create_poll(
+        it, FfiConverterString.lower(`question`),FfiConverterSequenceString.lower(`options`),FfiConverterULong.lower(`durationSecs`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Generate a new wallet keypair. Returns the wallet address string.
      *
      * Can only be called once per device. Returns `WalletAlreadyExists` if
@@ -1814,6 +2390,50 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
     callWithPointer {
     uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_create_wallet(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Enable debug bypass for PoL and staking checks.
+     * WHY: During development and device testing, a full 24-hour PoL window
+     * is impractical. This lets us test the mining and transaction flow
+     * immediately. Only compiles in debug builds — release builds exclude
+     * this method entirely so it cannot be called.
+     */
+    @Throws(FfiException::class)override fun `enableDebugBypass`()
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_enable_debug_bypass(
+        it, _status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Export the wallet's seed phrase as a hex string.
+     *
+     * WHY: Optional backup mechanism. The seed phrase IS the raw Ed25519
+     * private key encoded as hex. In production, this would be converted to
+     * a BIP39 24-word mnemonic. For Phase 2, hex export is sufficient for
+     * wallet recovery between devices.
+     *
+     * This is deliberately buried behind a confirmation dialog in the UI
+     * and not shown during onboarding — per the design spec, behavioral
+     * recovery (Proof of Life matching) is the primary recovery method.
+     */
+    @Throws(FfiException::class)override fun `exportSeedPhrase`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_export_seed_phrase(
         it, _status)
 }
     }
@@ -1844,6 +2464,33 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
 
     
     /**
+     * Generate a Groth16 range proof for a value.
+     *
+     * Creates a zero-knowledge proof that a value lies within [0, 2^bit_width)
+     * without revealing the actual value. Used for smart contract interactions
+     * that need private amount verification.
+     *
+     * Returns the proof and verification key as a hex-encoded JSON string.
+     *
+     * WHY: Groth16 proofs are computationally heavy to generate (~2-5 seconds
+     * on ARM). This is designed to run during Mining Mode (plugged in, 80%+
+     * battery) so the phone has power to spare. The mobile app can queue proof
+     * generation and execute it when conditions are met.
+     */
+    @Throws(FfiException::class)override fun `generateRangeProof`(`value`: kotlin.ULong, `bitWidth`: kotlin.UInt): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_generate_range_proof(
+        it, FfiConverterULong.lower(`value`),FfiConverterUInt.lower(`bitWidth`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Get the current consensus status.
      */
     @Throws(FfiException::class)override fun `getConsensusStatus`(): FfiConsensusStatus {
@@ -1851,6 +2498,45 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
     callWithPointer {
     uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_get_consensus_status(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Get the number of cross-shard transactions waiting to be routed.
+     *
+     * WHY: Cross-shard transactions require receipts to be relayed between
+     * shard committees. The queue size indicates routing backlog — useful
+     * for the mobile UI to show network health.
+     */
+    @Throws(FfiException::class)override fun `getCrossShardQueueSize`(): kotlin.UInt {
+            return FfiConverterUInt.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_get_cross_shard_queue_size(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Get the current mesh network status.
+     *
+     * Returns connectivity information for the Bluetooth/Wi-Fi Direct
+     * mesh layer including peer counts and relay queue depth.
+     */
+    @Throws(FfiException::class)override fun `getMeshStatus`(): FfiMeshStatus {
+            return FfiConverterTypeFfiMeshStatus.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_get_mesh_status(
         it, _status)
 }
     }
@@ -1892,6 +2578,22 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
 
     
     /**
+     * Get all active polls.
+     */
+    @Throws(FfiException::class)override fun `getPolls`(): List<FfiPoll> {
+            return FfiConverterSequenceTypeFfiPoll.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_get_polls(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Get the current Proof of Life status.
      */
     @Throws(FfiException::class)override fun `getProofOfLifeStatus`(): FfiProofOfLifeStatus {
@@ -1899,6 +2601,46 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
     callWithPointer {
     uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_get_proof_of_life_status(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Get all proposals (active and past).
+     */
+    @Throws(FfiException::class)override fun `getProposals`(): List<FfiProposal> {
+            return FfiConverterSequenceTypeFfiProposal.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_get_proposals(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Get geographic shard information for this node.
+     *
+     * Returns the node's assigned shard, total shard count, and
+     * validator distribution. If sharding is not yet active (fewer
+     * than the minimum nodes required), returns default single-shard info.
+     *
+     * WHY: The mobile UI displays shard assignment so users understand
+     * which geographic region their node serves and can see cross-shard
+     * transaction routing in the explorer.
+     */
+    @Throws(FfiException::class)override fun `getShardInfo`(): FfiShardInfo {
+            return FfiConverterTypeFfiShardInfo.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_get_shard_info(
         it, _status)
 }
     }
@@ -1940,6 +2682,29 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
 
     
     /**
+     * Get GratiaVM runtime information.
+     *
+     * Returns the VM runtime type, number of deployed contracts,
+     * cumulative gas usage, and memory configuration.
+     *
+     * WHY: The mobile UI displays VM health so developers and users
+     * can monitor smart contract system status. This is also useful
+     * for the DevKit app when testing contracts on real phones.
+     */
+    @Throws(FfiException::class)override fun `getVmInfo`(): FfiVmInfo {
+            return FfiConverterTypeFfiVmInfo.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_get_vm_info(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Get current wallet information (address, balance, mining state).
      */
     @Throws(FfiException::class)override fun `getWalletInfo`(): FfiWalletInfo {
@@ -1948,6 +2713,69 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
     uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_get_wallet_info(
         it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Initialize the GratiaVM with built-in demo contracts.
+     *
+     * Creates the VM engine with InterpreterRuntime for real WASM execution
+     * and deploys demo contracts that showcase mobile-native opcodes.
+     *
+     * WHY: InterpreterRuntime is a pure-Rust WASM interpreter (no wasmer/LLVM).
+     * It compiles for any target (Android ARM64, iOS, desktop) with zero C++
+     * dependencies. GratiaScript contracts compile to WASM and execute for real.
+     */
+    @Throws(FfiException::class)override fun `initVm`(): List<kotlin.String> {
+            return FfiConverterSequenceString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_init_vm(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * List deployed contracts.
+     */
+    @Throws(FfiException::class)override fun `listContracts`(): List<kotlin.String> {
+            return FfiConverterSequenceString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_list_contracts(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Broadcast a transaction via the mesh layer for offline use.
+     *
+     * The transaction is serialized and broadcast to all mesh peers.
+     * Bridge peers with internet connectivity will relay it to the
+     * main network. Returns the transaction hash as a hex string.
+     *
+     * WHY: This enables sending transactions when the phone has no
+     * internet (airplane mode, poor signal, rural areas) by relaying
+     * through Bluetooth/Wi-Fi Direct to nearby peers.
+     */
+    @Throws(FfiException::class)override fun `meshBroadcastTransaction`(`txHex`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_mesh_broadcast_transaction(
+        it, FfiConverterString.lower(`txHex`),_status)
 }
     }
     )
@@ -1967,6 +2795,26 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
     callWithPointer {
     uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_poll_network_events(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Request block sync from connected peers.
+     *
+     * Checks if this node is behind the network and requests missing blocks.
+     * Called periodically from the mobile app or automatically after peer connect.
+     * Returns the current sync state.
+     */
+    @Throws(FfiException::class)override fun `requestSync`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_request_sync(
         it, _status)
 }
     }
@@ -2040,6 +2888,51 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
 
     
     /**
+     * Start a lightweight HTTP API for the block explorer.
+     *
+     * Serves chain data as JSON on the given port. The web-based block explorer
+     * connects to `http://<phone-ip>:<port>/api/explorer/data` to display
+     * live blocks, transactions, and network stats.
+     *
+     * Returns the URL the explorer should connect to.
+     */
+    @Throws(FfiException::class)override fun `startExplorerApi`(`port`: kotlin.UShort): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_start_explorer_api(
+        it, FfiConverterUShort.lower(`port`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Start the Bluetooth/Wi-Fi Direct mesh transport layer.
+     *
+     * Enables offline transaction relay and local peer discovery without
+     * internet connectivity. Mesh peers forward transactions to bridge
+     * peers that relay them to the wider network.
+     *
+     * WHY: The mesh layer is Layer 0 in the Gratia network architecture.
+     * It provides connectivity for users without cellular/Wi-Fi internet,
+     * enabling transactions in areas with poor connectivity.
+     */
+    @Throws(FfiException::class)override fun `startMesh`()
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_start_mesh(
+        it, _status)
+}
+    }
+    
+    
+
+    
+    /**
      * Request to start mining.
      *
      * Returns the current mining status. Mining will only activate if all
@@ -2095,6 +2988,21 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
 
     
     /**
+     * Stop the Bluetooth/Wi-Fi Direct mesh transport layer.
+     */
+    @Throws(FfiException::class)override fun `stopMesh`()
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_stop_mesh(
+        it, _status)
+}
+    }
+    
+    
+
+    
+    /**
      * Stop mining.
      *
      * Returns the updated mining status. The node reverts to Proof of Life
@@ -2129,6 +3037,25 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
 
     
     /**
+     * Submit a governance proposal.
+     *
+     * Requires 90+ days of Proof of Life history per the governance spec.
+     * Returns the proposal ID as a hex string.
+     */
+    @Throws(FfiException::class)override fun `submitProposal`(`title`: kotlin.String, `description`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_submit_proposal(
+        it, FfiConverterString.lower(`title`),FfiConverterString.lower(`description`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Submit a sensor event from the native platform layer.
      *
      * Called by the Android/iOS sensor managers whenever a relevant event
@@ -2144,6 +3071,32 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
 }
     }
     
+    
+
+    
+    /**
+     * Tick mining rewards for one minute of active mining.
+     *
+     * Called by the native MiningService every 60 seconds while mining is
+     * active. Credits the wallet with the flat-rate mining reward.
+     *
+     * WHY: In Phase 1 (no consensus network), mining rewards are credited
+     * directly to the local wallet. In production, rewards flow through
+     * block production and the consensus layer distributes them. This
+     * method provides a working reward loop for development and testing.
+     *
+     * Returns the updated wallet balance in Lux.
+     */
+    @Throws(FfiException::class)override fun `tickMiningReward`(): kotlin.ULong {
+            return FfiConverterULong.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_tick_mining_reward(
+        it, _status)
+}
+    }
+    )
+    }
     
 
     
@@ -2185,6 +3138,61 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
     }
     )
     }
+    
+
+    
+    /**
+     * Verify a Groth16 proof against public inputs and a verification key.
+     *
+     * All parameters are hex-encoded binary (bincode-serialized).
+     * Returns true if the proof is valid.
+     *
+     * WHY: Verification is fast (~5-10ms on ARM) compared to proof generation.
+     * Every validator node verifies proofs for transactions in each block,
+     * so this must be efficient on mobile hardware.
+     */
+    @Throws(FfiException::class)override fun `verifyGroth16Proof`(`proofHex`: kotlin.String, `publicInputsHex`: kotlin.String, `vkHex`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_verify_groth16_proof(
+        it, FfiConverterString.lower(`proofHex`),FfiConverterString.lower(`publicInputsHex`),FfiConverterString.lower(`vkHex`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Cast a vote on a poll.
+     */
+    @Throws(FfiException::class)override fun `voteOnPoll`(`pollIdHex`: kotlin.String, `optionIndex`: kotlin.UInt)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_vote_on_poll(
+        it, FfiConverterString.lower(`pollIdHex`),FfiConverterUInt.lower(`optionIndex`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Cast a vote on a proposal.
+     *
+     * `vote` must be "yes", "no", or "abstain".
+     */
+    @Throws(FfiException::class)override fun `voteOnProposal`(`proposalIdHex`: kotlin.String, `vote`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_vote_on_proposal(
+        it, FfiConverterString.lower(`proposalIdHex`),FfiConverterString.lower(`vote`),_status)
+}
+    }
+    
     
 
     
@@ -2288,6 +3296,206 @@ public object FfiConverterTypeFfiConsensusStatus: FfiConverterRustBuffer<FfiCons
 
 
 /**
+ * Result of a smart contract execution.
+ */
+data class FfiContractResult (
+    /**
+     * Whether the contract call succeeded.
+     */
+    var `success`: kotlin.Boolean, 
+    /**
+     * Return value as a string (serialized).
+     */
+    var `returnValue`: kotlin.String, 
+    /**
+     * Gas used by the execution.
+     */
+    var `gasUsed`: kotlin.ULong, 
+    /**
+     * Gas remaining from the limit.
+     */
+    var `gasRemaining`: kotlin.ULong, 
+    /**
+     * Events emitted by the contract.
+     */
+    var `events`: List<kotlin.String>, 
+    /**
+     * Error message if execution failed.
+     */
+    var `error`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiContractResult: FfiConverterRustBuffer<FfiContractResult> {
+    override fun read(buf: ByteBuffer): FfiContractResult {
+        return FfiContractResult(
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiContractResult) = (
+            FfiConverterBoolean.allocationSize(value.`success`) +
+            FfiConverterString.allocationSize(value.`returnValue`) +
+            FfiConverterULong.allocationSize(value.`gasUsed`) +
+            FfiConverterULong.allocationSize(value.`gasRemaining`) +
+            FfiConverterSequenceString.allocationSize(value.`events`) +
+            FfiConverterOptionalString.allocationSize(value.`error`)
+    )
+
+    override fun write(value: FfiContractResult, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`success`, buf)
+            FfiConverterString.write(value.`returnValue`, buf)
+            FfiConverterULong.write(value.`gasUsed`, buf)
+            FfiConverterULong.write(value.`gasRemaining`, buf)
+            FfiConverterSequenceString.write(value.`events`, buf)
+            FfiConverterOptionalString.write(value.`error`, buf)
+    }
+}
+
+
+
+/**
+ * A mesh peer discovered via Bluetooth or Wi-Fi Direct.
+ */
+data class FfiMeshPeer (
+    /**
+     * Peer identifier as hex string.
+     */
+    var `peerId`: kotlin.String, 
+    /**
+     * Transport type: "bluetooth", "wifi_direct", or "both".
+     */
+    var `transport`: kotlin.String, 
+    /**
+     * Signal strength in dBm (negative values; -30 = strong, -90 = weak).
+     */
+    var `signalStrength`: kotlin.Int, 
+    /**
+     * Number of hops from this node (1 = direct peer).
+     */
+    var `hopCount`: kotlin.UByte, 
+    /**
+     * Whether this peer has internet connectivity (bridge peer).
+     */
+    var `hasInternet`: kotlin.Boolean
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiMeshPeer: FfiConverterRustBuffer<FfiMeshPeer> {
+    override fun read(buf: ByteBuffer): FfiMeshPeer {
+        return FfiMeshPeer(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterInt.read(buf),
+            FfiConverterUByte.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiMeshPeer) = (
+            FfiConverterString.allocationSize(value.`peerId`) +
+            FfiConverterString.allocationSize(value.`transport`) +
+            FfiConverterInt.allocationSize(value.`signalStrength`) +
+            FfiConverterUByte.allocationSize(value.`hopCount`) +
+            FfiConverterBoolean.allocationSize(value.`hasInternet`)
+    )
+
+    override fun write(value: FfiMeshPeer, buf: ByteBuffer) {
+            FfiConverterString.write(value.`peerId`, buf)
+            FfiConverterString.write(value.`transport`, buf)
+            FfiConverterInt.write(value.`signalStrength`, buf)
+            FfiConverterUByte.write(value.`hopCount`, buf)
+            FfiConverterBoolean.write(value.`hasInternet`, buf)
+    }
+}
+
+
+
+/**
+ * Bluetooth/Wi-Fi Direct mesh network status for the mobile UI.
+ */
+data class FfiMeshStatus (
+    /**
+     * Whether the mesh layer is enabled.
+     */
+    var `enabled`: kotlin.Boolean, 
+    /**
+     * Whether Bluetooth transport is active.
+     */
+    var `bluetoothActive`: kotlin.Boolean, 
+    /**
+     * Whether Wi-Fi Direct transport is active.
+     */
+    var `wifiDirectActive`: kotlin.Boolean, 
+    /**
+     * Number of mesh peers (Bluetooth + Wi-Fi Direct).
+     */
+    var `meshPeerCount`: kotlin.UInt, 
+    /**
+     * Number of bridge peers (mesh peers that also have internet connectivity).
+     */
+    var `bridgePeerCount`: kotlin.UInt, 
+    /**
+     * Number of messages pending relay to the wider network.
+     */
+    var `pendingRelayCount`: kotlin.UInt
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiMeshStatus: FfiConverterRustBuffer<FfiMeshStatus> {
+    override fun read(buf: ByteBuffer): FfiMeshStatus {
+        return FfiMeshStatus(
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiMeshStatus) = (
+            FfiConverterBoolean.allocationSize(value.`enabled`) +
+            FfiConverterBoolean.allocationSize(value.`bluetoothActive`) +
+            FfiConverterBoolean.allocationSize(value.`wifiDirectActive`) +
+            FfiConverterUInt.allocationSize(value.`meshPeerCount`) +
+            FfiConverterUInt.allocationSize(value.`bridgePeerCount`) +
+            FfiConverterUInt.allocationSize(value.`pendingRelayCount`)
+    )
+
+    override fun write(value: FfiMeshStatus, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`enabled`, buf)
+            FfiConverterBoolean.write(value.`bluetoothActive`, buf)
+            FfiConverterBoolean.write(value.`wifiDirectActive`, buf)
+            FfiConverterUInt.write(value.`meshPeerCount`, buf)
+            FfiConverterUInt.write(value.`bridgePeerCount`, buf)
+            FfiConverterUInt.write(value.`pendingRelayCount`, buf)
+    }
+}
+
+
+
+/**
  * Current mining status for the mobile UI.
  */
 data class FfiMiningStatus (
@@ -2365,7 +3573,15 @@ data class FfiNetworkStatus (
     /**
      * Current listen address (if available).
      */
-    var `listenAddress`: kotlin.String?
+    var `listenAddress`: kotlin.String?, 
+    /**
+     * Sync status: "synced", "syncing 123/456", "unknown", or "not_started".
+     */
+    var `syncStatus`: kotlin.String, 
+    /**
+     * Local chain height.
+     */
+    var `localHeight`: kotlin.ULong
 ) {
     
     companion object
@@ -2380,19 +3596,80 @@ public object FfiConverterTypeFfiNetworkStatus: FfiConverterRustBuffer<FfiNetwor
             FfiConverterBoolean.read(buf),
             FfiConverterUInt.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
         )
     }
 
     override fun allocationSize(value: FfiNetworkStatus) = (
             FfiConverterBoolean.allocationSize(value.`isRunning`) +
             FfiConverterUInt.allocationSize(value.`peerCount`) +
-            FfiConverterOptionalString.allocationSize(value.`listenAddress`)
+            FfiConverterOptionalString.allocationSize(value.`listenAddress`) +
+            FfiConverterString.allocationSize(value.`syncStatus`) +
+            FfiConverterULong.allocationSize(value.`localHeight`)
     )
 
     override fun write(value: FfiNetworkStatus, buf: ByteBuffer) {
             FfiConverterBoolean.write(value.`isRunning`, buf)
             FfiConverterUInt.write(value.`peerCount`, buf)
             FfiConverterOptionalString.write(value.`listenAddress`, buf)
+            FfiConverterString.write(value.`syncStatus`, buf)
+            FfiConverterULong.write(value.`localHeight`, buf)
+    }
+}
+
+
+
+/**
+ * An on-chain poll for the mobile UI.
+ */
+data class FfiPoll (
+    var `idHex`: kotlin.String, 
+    var `question`: kotlin.String, 
+    var `options`: List<kotlin.String>, 
+    var `votes`: List<kotlin.ULong>, 
+    var `totalVoters`: kotlin.ULong, 
+    var `endMillis`: kotlin.Long, 
+    var `createdBy`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiPoll: FfiConverterRustBuffer<FfiPoll> {
+    override fun read(buf: ByteBuffer): FfiPoll {
+        return FfiPoll(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterSequenceULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiPoll) = (
+            FfiConverterString.allocationSize(value.`idHex`) +
+            FfiConverterString.allocationSize(value.`question`) +
+            FfiConverterSequenceString.allocationSize(value.`options`) +
+            FfiConverterSequenceULong.allocationSize(value.`votes`) +
+            FfiConverterULong.allocationSize(value.`totalVoters`) +
+            FfiConverterLong.allocationSize(value.`endMillis`) +
+            FfiConverterString.allocationSize(value.`createdBy`)
+    )
+
+    override fun write(value: FfiPoll, buf: ByteBuffer) {
+            FfiConverterString.write(value.`idHex`, buf)
+            FfiConverterString.write(value.`question`, buf)
+            FfiConverterSequenceString.write(value.`options`, buf)
+            FfiConverterSequenceULong.write(value.`votes`, buf)
+            FfiConverterULong.write(value.`totalVoters`, buf)
+            FfiConverterLong.write(value.`endMillis`, buf)
+            FfiConverterString.write(value.`createdBy`, buf)
     }
 }
 
@@ -2448,6 +3725,142 @@ public object FfiConverterTypeFfiProofOfLifeStatus: FfiConverterRustBuffer<FfiPr
             FfiConverterULong.write(value.`consecutiveDays`, buf)
             FfiConverterBoolean.write(value.`isOnboarded`, buf)
             FfiConverterSequenceString.write(value.`parametersMet`, buf)
+    }
+}
+
+
+
+/**
+ * A governance proposal for the mobile UI.
+ */
+data class FfiProposal (
+    var `idHex`: kotlin.String, 
+    var `title`: kotlin.String, 
+    var `description`: kotlin.String, 
+    var `status`: kotlin.String, 
+    var `votesYes`: kotlin.ULong, 
+    var `votesNo`: kotlin.ULong, 
+    var `votesAbstain`: kotlin.ULong, 
+    var `discussionEndMillis`: kotlin.Long, 
+    var `votingEndMillis`: kotlin.Long, 
+    var `submittedBy`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiProposal: FfiConverterRustBuffer<FfiProposal> {
+    override fun read(buf: ByteBuffer): FfiProposal {
+        return FfiProposal(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiProposal) = (
+            FfiConverterString.allocationSize(value.`idHex`) +
+            FfiConverterString.allocationSize(value.`title`) +
+            FfiConverterString.allocationSize(value.`description`) +
+            FfiConverterString.allocationSize(value.`status`) +
+            FfiConverterULong.allocationSize(value.`votesYes`) +
+            FfiConverterULong.allocationSize(value.`votesNo`) +
+            FfiConverterULong.allocationSize(value.`votesAbstain`) +
+            FfiConverterLong.allocationSize(value.`discussionEndMillis`) +
+            FfiConverterLong.allocationSize(value.`votingEndMillis`) +
+            FfiConverterString.allocationSize(value.`submittedBy`)
+    )
+
+    override fun write(value: FfiProposal, buf: ByteBuffer) {
+            FfiConverterString.write(value.`idHex`, buf)
+            FfiConverterString.write(value.`title`, buf)
+            FfiConverterString.write(value.`description`, buf)
+            FfiConverterString.write(value.`status`, buf)
+            FfiConverterULong.write(value.`votesYes`, buf)
+            FfiConverterULong.write(value.`votesNo`, buf)
+            FfiConverterULong.write(value.`votesAbstain`, buf)
+            FfiConverterLong.write(value.`discussionEndMillis`, buf)
+            FfiConverterLong.write(value.`votingEndMillis`, buf)
+            FfiConverterString.write(value.`submittedBy`, buf)
+    }
+}
+
+
+
+/**
+ * Geographic shard information for the mobile UI.
+ */
+data class FfiShardInfo (
+    /**
+     * This node's assigned shard ID.
+     */
+    var `shardId`: kotlin.UShort, 
+    /**
+     * Total number of active shards in the network.
+     */
+    var `shardCount`: kotlin.UShort, 
+    /**
+     * Number of validators in this node's local shard.
+     */
+    var `localValidators`: kotlin.UInt, 
+    /**
+     * Number of cross-shard validators (participate in multiple shards).
+     */
+    var `crossShardValidators`: kotlin.UInt, 
+    /**
+     * Current block height within this shard.
+     */
+    var `shardHeight`: kotlin.ULong, 
+    /**
+     * Whether geographic sharding is currently active.
+     */
+    var `isShardingActive`: kotlin.Boolean
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiShardInfo: FfiConverterRustBuffer<FfiShardInfo> {
+    override fun read(buf: ByteBuffer): FfiShardInfo {
+        return FfiShardInfo(
+            FfiConverterUShort.read(buf),
+            FfiConverterUShort.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiShardInfo) = (
+            FfiConverterUShort.allocationSize(value.`shardId`) +
+            FfiConverterUShort.allocationSize(value.`shardCount`) +
+            FfiConverterUInt.allocationSize(value.`localValidators`) +
+            FfiConverterUInt.allocationSize(value.`crossShardValidators`) +
+            FfiConverterULong.allocationSize(value.`shardHeight`) +
+            FfiConverterBoolean.allocationSize(value.`isShardingActive`)
+    )
+
+    override fun write(value: FfiShardInfo, buf: ByteBuffer) {
+            FfiConverterUShort.write(value.`shardId`, buf)
+            FfiConverterUShort.write(value.`shardCount`, buf)
+            FfiConverterUInt.write(value.`localValidators`, buf)
+            FfiConverterUInt.write(value.`crossShardValidators`, buf)
+            FfiConverterULong.write(value.`shardHeight`, buf)
+            FfiConverterBoolean.write(value.`isShardingActive`, buf)
     }
 }
 
@@ -2579,6 +3992,61 @@ public object FfiConverterTypeFfiTransactionInfo: FfiConverterRustBuffer<FfiTran
             FfiConverterULong.write(value.`amountLux`, buf)
             FfiConverterLong.write(value.`timestampMillis`, buf)
             FfiConverterString.write(value.`status`, buf)
+    }
+}
+
+
+
+/**
+ * GratiaVM runtime information for the mobile UI.
+ */
+data class FfiVmInfo (
+    /**
+     * Runtime type: "wasmer" or "interpreter".
+     */
+    var `runtimeType`: kotlin.String, 
+    /**
+     * Number of contracts currently deployed.
+     */
+    var `contractsLoaded`: kotlin.UInt, 
+    /**
+     * Cumulative gas consumed across all contract calls.
+     */
+    var `totalGasUsed`: kotlin.ULong, 
+    /**
+     * Whether the WASM runtime uses memory-wired pages (locked in RAM).
+     */
+    var `memoryWired`: kotlin.Boolean
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiVmInfo: FfiConverterRustBuffer<FfiVmInfo> {
+    override fun read(buf: ByteBuffer): FfiVmInfo {
+        return FfiVmInfo(
+            FfiConverterString.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiVmInfo) = (
+            FfiConverterString.allocationSize(value.`runtimeType`) +
+            FfiConverterUInt.allocationSize(value.`contractsLoaded`) +
+            FfiConverterULong.allocationSize(value.`totalGasUsed`) +
+            FfiConverterBoolean.allocationSize(value.`memoryWired`)
+    )
+
+    override fun write(value: FfiVmInfo, buf: ByteBuffer) {
+            FfiConverterString.write(value.`runtimeType`, buf)
+            FfiConverterUInt.write(value.`contractsLoaded`, buf)
+            FfiConverterULong.write(value.`totalGasUsed`, buf)
+            FfiConverterBoolean.write(value.`memoryWired`, buf)
     }
 }
 
@@ -3296,6 +4764,62 @@ public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.Str
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterString.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeFfiPoll: FfiConverterRustBuffer<List<FfiPoll>> {
+    override fun read(buf: ByteBuffer): List<FfiPoll> {
+        val len = buf.getInt()
+        return List<FfiPoll>(len) {
+            FfiConverterTypeFfiPoll.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FfiPoll>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFfiPoll.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FfiPoll>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFfiPoll.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeFfiProposal: FfiConverterRustBuffer<List<FfiProposal>> {
+    override fun read(buf: ByteBuffer): List<FfiProposal> {
+        val len = buf.getInt()
+        return List<FfiProposal>(len) {
+            FfiConverterTypeFfiProposal.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FfiProposal>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFfiProposal.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FfiProposal>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFfiProposal.write(it, buf)
         }
     }
 }

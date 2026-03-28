@@ -6,6 +6,7 @@
 
 pub mod types;
 pub mod config;
+pub mod emission;
 pub mod error;
 pub mod crypto;
 

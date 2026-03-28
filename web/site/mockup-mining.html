@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { width: 360px; height: 780px; background: #0D1527; font-family: 'Segoe UI', system-ui, sans-serif; color: #FAF5EB; overflow: hidden; }
+
+.topbar { display: flex; align-items: center; padding: 12px 16px; gap: 10px; background: #0D1527; }
+.logo { width: 32px; height: 32px; }
+.logo svg { width: 100%; height: 100%; }
+.topbar-title { font-size: 18px; font-weight: 600; color: #FAF5EB; }
+
+.divider { height: 1px; background: rgba(245,166,35,0.12); margin: 0 16px; }
+
+.content { padding: 16px; }
+
+.mining-card {
+  background: linear-gradient(135deg, rgba(46,204,113,0.08), rgba(46,204,113,0.02));
+  border: 1px solid rgba(46,204,113,0.15);
+  border-radius: 16px;
+  padding: 28px 20px;
+  text-align: center;
+  margin-bottom: 16px;
+}
+.pulse-ring {
+  width: 80px; height: 80px; margin: 0 auto 16px;
+  position: relative; display: flex; align-items: center; justify-content: center;
+}
+.pulse-outer {
+  position: absolute; width: 80px; height: 80px; border-radius: 50%;
+  background: rgba(46,204,113,0.15); animation: pulse 1.5s ease-out infinite;
+}
+.pulse-inner {
+  width: 48px; height: 48px; border-radius: 50%; background: #2ECC71;
+  position: relative; z-index: 2;
+}
+@keyframes pulse { 0% { transform: scale(1); opacity: 0.4; } 100% { transform: scale(1.8); opacity: 0; } }
+.mining-label { font-size: 22px; font-weight: 700; color: #2ECC71; margin-bottom: 4px; }
+.mining-sub { font-size: 13px; color: rgba(250,245,235,0.5); margin-bottom: 16px; }
+.btn-stop {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 12px 28px; border-radius: 50px;
+  border: 2px solid #F5A623; background: transparent; color: #F5A623;
+  font-weight: 700; font-size: 14px;
+}
+.btn-stop-icon { color: #E74C3C; }
+
+.status-card {
+  background: #1A2744;
+  border-radius: 12px;
+  padding: 18px 16px;
+  margin-bottom: 12px;
+  border: 1px solid rgba(245,166,35,0.06);
+}
+.status-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.status-title { font-size: 15px; font-weight: 700; color: #F5A623; }
+.status-badge { font-size: 13px; font-weight: 700; color: #2ECC71; }
+
+.battery-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.battery-icon { font-size: 18px; color: #2ECC71; }
+.battery-label { flex: 1; font-size: 13px; color: rgba(250,245,235,0.7); }
+.battery-pct { font-size: 14px; font-weight: 700; color: #2ECC71; }
+.battery-bar { height: 4px; background: rgba(250,245,235,0.1); border-radius: 2px; margin-bottom: 8px; }
+.battery-fill { height: 100%; width: 100%; background: #F5A623; border-radius: 2px; }
+.plugged { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #2ECC71; }
+.plugged-icon { font-size: 16px; }
+
+.pol-item { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 13px; color: rgba(250,245,235,0.7); }
+.pol-check { color: #2ECC71; font-size: 16px; font-weight: 700; }
+.pol-days { font-size: 12px; color: rgba(250,245,235,0.4); margin-top: 4px; }
+
+.bottombar {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: #1A2744; display: flex; justify-content: space-around; padding: 10px 0 14px;
+  border-top: 1px solid rgba(245,166,35,0.08);
+}
+.tab { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 10px; color: rgba(250,245,235,0.5); }
+.tab-active { color: #F5A623; }
+.tab-icon { font-size: 20px; }
+.tab-indicator { width: 48px; height: 28px; background: rgba(245,166,35,0.12); border-radius: 14px; display: flex; align-items: center; justify-content: center; }
+</style>
+</head><body>
+
+<div class="topbar">
+  <div class="logo">
+    <svg viewBox="0 0 500 500">
+      <circle cx="250" cy="250" r="248" fill="none" stroke="#B8860B" stroke-width="5"/>
+      <circle cx="250" cy="250" r="230" fill="#F5A623"/>
+      <rect x="169.5" y="105.5" width="162" height="289" rx="25" fill="#1A2744"/>
+      <rect x="188.3" y="141.9" width="124.3" height="196" rx="7.5" fill="#F5A623"/>
+      <circle cx="249.9" cy="367.9" r="15.1" fill="#F5A623"/>
+      <line x1="222.2" y1="123" x2="278.8" y2="123" stroke="#F5A623" stroke-width="4.5" stroke-linecap="round"/>
+      <path d="M204.7,239.8h17.6l7.5-45.2l20.1,86.7l20.1-79.1l7.5,37.7h17.6" fill="none" stroke="#1A2744" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </div>
+  <span class="topbar-title">Mining</span>
+</div>
+<div class="divider"></div>
+
+<div class="content">
+  <div class="mining-card">
+    <div class="pulse-ring">
+      <div class="pulse-outer"></div>
+      <div class="pulse-inner"></div>
+    </div>
+    <div class="mining-label">Mining</div>
+    <div class="mining-sub">Earning GRAT at flat rate</div>
+    <div class="btn-stop"><span class="btn-stop-icon">&#9632;</span> Stop Mining</div>
+  </div>
+
+  <div class="status-card">
+    <div class="status-title">Power Status</div>
+    <div class="battery-row">
+      <span class="battery-icon">&#9889;</span>
+      <span class="battery-label">Battery</span>
+      <span class="battery-pct">100%</span>
+    </div>
+    <div class="battery-bar"><div class="battery-fill"></div></div>
+    <div class="plugged"><span class="plugged-icon">&#9879;</span> Connected to power</div>
+  </div>
+
+  <div class="status-card">
+    <div class="status-header">
+      <span class="status-title">Proof of Life</span>
+      <span class="status-badge">Valid</span>
+    </div>
+    <div class="pol-days">1 consecutive days</div>
+    <div class="pol-item"><span class="pol-check">&#10003;</span> 10+ unlock events</div>
+    <div class="pol-item"><span class="pol-check">&#10003;</span> Unlocks spread across 6+ hours</div>
+    <div class="pol-item"><span class="pol-check">&#10003;</span> Screen interaction sessions</div>
+    <div class="pol-item"><span class="pol-check">&#10003;</span> Orientation change detected</div>
+    <div class="pol-item"><span class="pol-check">&#10003;</span> Human-consistent motion</div>
+  </div>
+</div>
+
+<div class="bottombar">
+  <div class="tab"><span class="tab-icon">&#127975;</span><span>Wallet</span></div>
+  <div class="tab tab-active">
+    <div class="tab-indicator"><span class="tab-icon">&#9889;</span></div>
+    <span>Mining</span>
+  </div>
+  <div class="tab"><span class="tab-icon">&#128225;</span><span>Network</span></div>
+  <div class="tab"><span class="tab-icon">&#9997;</span><span>Governance</span></div>
+  <div class="tab"><span class="tab-icon">&#9881;</span><span>Settings</span></div>
+</div>
+
+</body></html>

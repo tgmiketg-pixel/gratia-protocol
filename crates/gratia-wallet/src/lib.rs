@@ -12,6 +12,7 @@
 //! suitable for use by the mobile app layer via UniFFI.
 
 pub mod keystore;
+pub mod nfc;
 pub mod transactions;
 pub mod recovery;
 
@@ -22,7 +23,7 @@ use tracing::{info, warn};
 use gratia_core::error::GratiaError;
 use gratia_core::types::{Address, Lux, Transaction, TransactionPayload};
 
-use crate::keystore::{Keystore, SoftwareKeystore};
+use crate::keystore::{FileKeystore, Keystore, SoftwareKeystore};
 use crate::recovery::{InheritanceConfig, RecoveryClaim, SeedPhrase};
 use crate::transactions::TransactionBuilder;
 
@@ -44,6 +45,9 @@ pub struct WalletManager<K: Keystore = SoftwareKeystore> {
     /// Cached balance in Lux. Updated by sync with the network.
     /// WHY: Placeholder — real balance queries go through gratia-state.
     balance: Lux,
+    /// Data directory for file-based persistence (balance, nonce).
+    /// None for in-memory only (SoftwareKeystore in tests).
+    data_dir: Option<String>,
     /// Transaction history (local cache).
     /// WHY: Placeholder — full history is stored in gratia-state / on-chain.
     history: Vec<TransactionRecord>,
@@ -89,11 +93,52 @@ impl WalletManager<SoftwareKeystore> {
             keystore: SoftwareKeystore::new(),
             nonce: 0,
             balance: 0,
+            data_dir: None,
             history: Vec::new(),
             active_recovery: None,
             inheritance: None,
         }
     }
+}
+
+impl WalletManager<FileKeystore> {
+    /// Create a WalletManager with file-backed persistence.
+    ///
+    /// WHY: On Android, the app's private data directory is sandboxed by the OS.
+    /// Persisting the Ed25519 key to a file in that directory means the wallet
+    /// address survives app restarts without requiring the secure enclave (which
+    /// is the production target but not yet implemented).
+    ///
+    /// If a key file already exists at `{data_dir}/wallet_key.bin`, it is loaded
+    /// automatically — the wallet is ready to use without calling `create_wallet()`.
+    pub fn with_file_keystore(data_dir: &str) -> Self {
+        let keystore = FileKeystore::new(data_dir);
+        // Load persisted balance if it exists
+        let balance = Self::load_balance(data_dir);
+        WalletManager {
+            keystore,
+            nonce: 0,
+            balance,
+            data_dir: Some(data_dir.to_string()),
+            history: Vec::new(),
+            active_recovery: None,
+            inheritance: None,
+        }
+    }
+
+    /// Load persisted balance from file.
+    fn load_balance(data_dir: &str) -> Lux {
+        let path = format!("{}/wallet_balance.bin", data_dir);
+        match std::fs::read(&path) {
+            Ok(bytes) if bytes.len() == 8 => {
+                let balance = u64::from_le_bytes(bytes.try_into().unwrap());
+                tracing::info!(balance_lux = balance, "Loaded persisted balance");
+                balance
+            }
+            _ => 0,
+        }
+    }
+
 }
 
 impl<K: Keystore> WalletManager<K> {
@@ -105,6 +150,7 @@ impl<K: Keystore> WalletManager<K> {
             keystore,
             nonce: 0,
             balance: 0,
+            data_dir: None,
             history: Vec::new(),
             active_recovery: None,
             inheritance: None,
@@ -145,6 +191,24 @@ impl<K: Keystore> WalletManager<K> {
     /// confirmed balance at the wallet's address.
     pub fn sync_balance(&mut self, confirmed_balance: Lux) {
         self.balance = confirmed_balance;
+        // WHY: Persist balance to disk so mining rewards survive app restarts.
+        // In production, the balance comes from on-chain state. For Phase 1,
+        // this file-based persistence prevents the frustrating UX of losing
+        // mined GRAT on every restart.
+        if self.data_dir.is_some() {
+            self.save_balance_to_file();
+        }
+    }
+
+    /// Save balance to file (called internally by sync_balance).
+    fn save_balance_to_file(&self) {
+        if let Some(ref dir) = self.data_dir {
+            let path = format!("{}/wallet_balance.bin", dir);
+            let bytes = self.balance.to_le_bytes();
+            if let Err(e) = std::fs::write(&path, bytes) {
+                tracing::warn!("Failed to persist balance: {}", e);
+            }
+        }
     }
 
     /// Update the nonce from network state.
@@ -188,13 +252,17 @@ impl<K: Keystore> WalletManager<K> {
         let hash_hex = hex::encode(&tx.hash.0);
         info!("transfer sent: {} -> {} ({} Lux)", hash_hex, to, amount);
 
+        // WHY: In Phase 1 (no consensus engine / no block production), transactions
+        // are confirmed immediately because there's no block to include them in.
+        // The balance has already been deducted locally. In Phase 2, this will
+        // revert to Pending and wait for block inclusion.
         self.history.push(TransactionRecord {
             hash: hash_hex,
             direction: TransactionDirection::Sent,
             amount,
             counterparty: Some(to),
             timestamp: tx.timestamp,
-            status: TransactionStatus::Pending,
+            status: TransactionStatus::Confirmed,
         });
 
         Ok(tx)
@@ -230,7 +298,7 @@ impl<K: Keystore> WalletManager<K> {
             amount,
             counterparty: None,
             timestamp: tx.timestamp,
-            status: TransactionStatus::Pending,
+            status: TransactionStatus::Confirmed,
         });
 
         Ok(tx)
@@ -262,7 +330,7 @@ impl<K: Keystore> WalletManager<K> {
             amount,
             counterparty: None,
             timestamp: tx.timestamp,
-            status: TransactionStatus::Pending,
+            status: TransactionStatus::Confirmed,
         });
 
         Ok(tx)
@@ -288,6 +356,35 @@ impl<K: Keystore> WalletManager<K> {
     /// Get the transaction history (local cache).
     pub fn history(&self) -> &[TransactionRecord] {
         &self.history
+    }
+
+    /// Record an incoming transfer received from the network.
+    ///
+    /// WHY: When a peer sends us GRAT via gossipsub, we credit the balance
+    /// via `sync_balance`, but we also need a history entry so the UI shows
+    /// "Received X GRAT" in the transaction list. Without this, the balance
+    /// goes up but the user sees no explanation.
+    pub fn record_incoming_transfer(
+        &mut self,
+        hash_hex: String,
+        from: Address,
+        amount: Lux,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    ) {
+        // WHY: Guard against duplicate history entries. The gossip layer
+        // deduplicates at the network level, but this is a belt-and-suspenders
+        // check in case the same tx reaches us through different code paths.
+        if self.history.iter().any(|r| r.hash == hash_hex) {
+            return;
+        }
+        self.history.push(TransactionRecord {
+            hash: hash_hex,
+            direction: TransactionDirection::Received,
+            amount,
+            counterparty: Some(from),
+            timestamp,
+            status: TransactionStatus::Confirmed,
+        });
     }
 
     // --- Recovery ---

@@ -585,8 +585,8 @@ mod tests {
 
         mgr.apply_slash(&result, now()).unwrap();
 
-        // 5% slash of 1,000,000 = 50,000. Remaining = 950,000.
-        assert_eq!(mgr.effective_stake(&node), 950_000);
+        // 10% slash of 1,000,000 = 100,000. Remaining = 900,000.
+        assert_eq!(mgr.effective_stake(&node), 900_000);
         assert_eq!(
             mgr.get_slashing_history(&node).unwrap().minor_slashes,
             1

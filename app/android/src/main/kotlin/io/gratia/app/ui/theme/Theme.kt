@@ -1,77 +1,97 @@
 package io.gratia.app.ui.theme
 
+import android.app.Activity
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 
 // ============================================================================
-// Gratia Brand Colors
+// Gratia Brand Colors — derived from Brand Identity Guide v1.0
+// Every color traces back to the logo SVG. No off-brand colors allowed.
 // ============================================================================
 
-// WHY: Primary teal/cyan conveys trust and technology. The warm gold accent
-// provides contrast and hints at the "earning" aspect of the app without
-// looking like a typical crypto/finance app.
+// --- Primary ---
+val DeepNavy = Color(0xFF1A2744)           // Primary dark — trust, confidence
+val AmberGold = Color(0xFFF5A623)          // Primary accent — value, warmth
 
-private val GratiaTeal = Color(0xFF00897B)          // Primary brand color
-private val GratiaTealLight = Color(0xFF4DB6AC)      // Lighter variant
-private val GratiaTealDark = Color(0xFF00695C)       // Darker variant
-private val GratiaGold = Color(0xFFFFA726)           // Accent / reward highlights
-private val GratiaGoldDark = Color(0xFFFF8F00)       // Accent in dark mode
+// --- Secondary: The Instrument Palette ---
+val DarkGoldenrod = Color(0xFFB8860B)      // Borders, rules
+val DarkAmber = Color(0xFFD4890F)          // Secondary accent
+val Golden = Color(0xFFE8A020)             // Highlights
+val AgedGold = Color(0xFF8B6914)           // Muted details
 
-// Surface and background tones
-private val DarkSurface = Color(0xFF121212)
-private val LightBackground = Color(0xFFFBFDF9)
-private val LightSurface = Color(0xFFFFFFFF)
+// --- Extended Palette ---
+val Midnight = Color(0xFF0D1527)           // Deep background (dark mode)
+val CharcoalNavy = Color(0xFF2A3A5C)       // Body text on light, secondary on dark
+val WarmWhite = Color(0xFFFAF5EB)          // Light background
+val OffWhite = Color(0xFFF0E8D8)           // Card background (light mode)
+val LightGold = Color(0xFFFDD888)          // Soft accent
+val PaleAmber = Color(0xFFFEF3D5)          // Tint background
 
-// Status colors
-private val ErrorRed = Color(0xFFCF6679)
-private val ErrorRedLight = Color(0xFFB00020)
+// --- Status ---
+val SignalGreen = Color(0xFF2ECC71)        // Active / success
+val AlertRed = Color(0xFFE74C3C)           // Error / warning
 
 // ============================================================================
 // Color Schemes
 // ============================================================================
 
 private val DarkColorScheme = darkColorScheme(
-    primary = GratiaTealLight,
-    onPrimary = Color.Black,
-    primaryContainer = GratiaTealDark,
-    onPrimaryContainer = GratiaTealLight,
-    secondary = GratiaGold,
-    onSecondary = Color.Black,
-    secondaryContainer = GratiaGoldDark,
-    onSecondaryContainer = Color.White,
-    tertiary = GratiaTealLight,
-    background = DarkSurface,
-    surface = DarkSurface,
-    error = ErrorRed,
-    onBackground = Color.White,
-    onSurface = Color.White,
-    onError = Color.Black,
+    primary = AmberGold,
+    onPrimary = DeepNavy,
+    primaryContainer = CharcoalNavy,
+    onPrimaryContainer = LightGold,
+    secondary = Golden,
+    onSecondary = Midnight,
+    secondaryContainer = DarkGoldenrod,
+    onSecondaryContainer = PaleAmber,
+    tertiary = LightGold,
+    onTertiary = DeepNavy,
+    background = Midnight,
+    surface = DeepNavy,
+    surfaceVariant = CharcoalNavy,
+    onBackground = WarmWhite,
+    onSurface = WarmWhite,
+    onSurfaceVariant = OffWhite,
+    error = AlertRed,
+    onError = Color.White,
+    errorContainer = Color(0xFF93000A),
+    onErrorContainer = Color(0xFFFFDAD6),
+    outline = AgedGold,
+    outlineVariant = CharcoalNavy,
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = GratiaTeal,
-    onPrimary = Color.White,
-    primaryContainer = Color(0xFFB2DFDB),
-    onPrimaryContainer = GratiaTealDark,
-    secondary = GratiaGoldDark,
-    onSecondary = Color.White,
-    secondaryContainer = Color(0xFFFFE0B2),
-    onSecondaryContainer = Color(0xFF5D4037),
-    tertiary = GratiaTealDark,
-    background = LightBackground,
-    surface = LightSurface,
-    error = ErrorRedLight,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
+    primary = DeepNavy,
+    onPrimary = WarmWhite,
+    primaryContainer = PaleAmber,
+    onPrimaryContainer = DeepNavy,
+    secondary = AmberGold,
+    onSecondary = DeepNavy,
+    secondaryContainer = LightGold,
+    onSecondaryContainer = DeepNavy,
+    tertiary = DarkGoldenrod,
+    onTertiary = Color.White,
+    background = WarmWhite,
+    surface = Color.White,
+    surfaceVariant = OffWhite,
+    onBackground = DeepNavy,
+    onSurface = DeepNavy,
+    onSurfaceVariant = CharcoalNavy,
+    error = AlertRed,
     onError = Color.White,
+    errorContainer = Color(0xFFFFDAD6),
+    onErrorContainer = Color(0xFF93000A),
+    outline = AgedGold,
+    outlineVariant = OffWhite,
 )
 
 // ============================================================================
@@ -81,26 +101,30 @@ private val LightColorScheme = lightColorScheme(
 /**
  * Gratia Material3 theme.
  *
- * Supports dynamic color on Android 12+ (Material You) with a fallback to
- * the Gratia brand color scheme on older devices.
+ * WHY: Dynamic color (Material You) is disabled by default. The Gratia brand
+ * identity guide mandates consistent navy/gold across all devices. The brand
+ * must be recognizable regardless of the user's wallpaper or system theme.
  */
 @Composable
 fun GratiaTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    // WHY: Dynamic color (Material You) is enabled by default on Android 12+.
-    // This makes the app feel native on Pixel and Samsung devices while still
-    // using our brand colors on older phones (our target includes 2018+ devices
-    // running Android 8.0 which don't support dynamic color).
-    dynamicColor: Boolean = true,
     content: @Composable () -> Unit,
 ) {
-    val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
+
+    // WHY: Tint the system bars to match the brand. Status bar uses the
+    // deepest navy so the app feels immersive from the top edge.
+    val view = LocalView.current
+    if (!view.isInEditMode) {
+        SideEffect {
+            val window = (view.context as Activity).window
+            window.statusBarColor = if (darkTheme) {
+                Midnight.toArgb()
+            } else {
+                DeepNavy.toArgb()
+            }
+            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = false
         }
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
     }
 
     MaterialTheme(

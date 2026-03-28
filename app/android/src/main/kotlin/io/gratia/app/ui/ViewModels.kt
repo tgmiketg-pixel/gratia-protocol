@@ -485,6 +485,15 @@ class MiningViewModel : ViewModel() {
 // Network UI state
 // ============================================================================
 
+data class MeshStatus(
+    val enabled: Boolean = false,
+    val bluetoothActive: Boolean = false,
+    val wifiDirectActive: Boolean = false,
+    val meshPeerCount: Int = 0,
+    val bridgePeerCount: Int = 0,
+    val pendingRelayCount: Int = 0,
+)
+
 data class NetworkUiState(
     val isNetworkRunning: Boolean = false,
     val peerCount: Int = 0,
@@ -494,6 +503,8 @@ data class NetworkUiState(
     val currentHeight: Long = 0,
     val isCommitteeMember: Boolean = false,
     val blocksProduced: Long = 0,
+    val meshStatus: MeshStatus = MeshStatus(),
+    val isMeshLoading: Boolean = false,
     val recentEvents: List<String> = emptyList(),
     val isLoading: Boolean = false,
     val errorMessage: String? = null,
@@ -552,6 +563,10 @@ class NetworkViewModel : ViewModel() {
     fun stopNetwork() {
         viewModelScope.launch(Dispatchers.IO) {
             pollingActive = false
+            try {
+                // WHY: Stop mesh first — it depends on the network layer for bridge relay.
+                io.gratia.app.bridge.GratiaCoreManager.stopMesh()
+            } catch (_: Exception) {}
             try {
                 io.gratia.app.bridge.GratiaCoreManager.stopNetwork()
                 io.gratia.app.bridge.GratiaCoreManager.stopConsensus()
@@ -612,6 +627,45 @@ class NetworkViewModel : ViewModel() {
         }
     }
 
+    // -- Mesh transport controls ------------------------------------------------
+
+    fun startMesh() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.value = _uiState.value.copy(isMeshLoading = true, errorMessage = null)
+            try {
+                io.gratia.app.bridge.GratiaCoreManager.startMesh()
+                val status = io.gratia.app.bridge.GratiaCoreManager.getMeshStatus()
+                _uiState.value = _uiState.value.copy(
+                    meshStatus = MeshStatus(
+                        enabled = status.enabled,
+                        bluetoothActive = status.bluetoothActive,
+                        wifiDirectActive = status.wifiDirectActive,
+                        meshPeerCount = status.meshPeerCount,
+                        bridgePeerCount = status.bridgePeerCount,
+                        pendingRelayCount = status.pendingRelayCount,
+                    ),
+                    isMeshLoading = false,
+                )
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    isMeshLoading = false,
+                    errorMessage = e.message,
+                )
+            }
+        }
+    }
+
+    fun stopMesh() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                io.gratia.app.bridge.GratiaCoreManager.stopMesh()
+                _uiState.value = _uiState.value.copy(meshStatus = MeshStatus())
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(errorMessage = e.message)
+            }
+        }
+    }
+
     fun clearError() {
         _uiState.value = _uiState.value.copy(errorMessage = null)
     }
@@ -648,6 +702,21 @@ class NetworkViewModel : ViewModel() {
                 isCommitteeMember = conStatus.isCommitteeMember,
                 blocksProduced = conStatus.blocksProduced,
             )
+
+            // Poll mesh status (if enabled)
+            try {
+                val meshStatus = io.gratia.app.bridge.GratiaCoreManager.getMeshStatus()
+                _uiState.value = _uiState.value.copy(
+                    meshStatus = MeshStatus(
+                        enabled = meshStatus.enabled,
+                        bluetoothActive = meshStatus.bluetoothActive,
+                        wifiDirectActive = meshStatus.wifiDirectActive,
+                        meshPeerCount = meshStatus.meshPeerCount,
+                        bridgePeerCount = meshStatus.bridgePeerCount,
+                        pendingRelayCount = meshStatus.pendingRelayCount,
+                    ),
+                )
+            } catch (_: Exception) {}
 
             // Poll network events
             val events = io.gratia.app.bridge.GratiaCoreManager.pollNetworkEvents()
@@ -689,6 +758,23 @@ class NetworkViewModel : ViewModel() {
 // Settings UI state
 // ============================================================================
 
+data class ShardInfoUi(
+    val shardId: Int = 0,
+    val shardCount: Int = 1,
+    val localValidators: Int = 0,
+    val crossShardValidators: Int = 0,
+    val shardHeight: Long = 0,
+    val isShardingActive: Boolean = false,
+    val crossShardQueueSize: Int = 0,
+)
+
+data class VmInfoUi(
+    val runtimeType: String = "wasmer",
+    val contractsLoaded: Int = 0,
+    val totalGasUsed: Long = 0,
+    val memoryWired: Boolean = false,
+)
+
 data class SettingsUiState(
     val stakeInfo: StakeInfo? = null,
     val isLoading: Boolean = true,
@@ -706,6 +792,8 @@ data class SettingsUiState(
     val showBeneficiaryDialog: Boolean = false,
     /** Exported seed phrase hex string, null when not yet exported. */
     val exportedSeedPhrase: String? = null,
+    val shardInfo: ShardInfoUi = ShardInfoUi(),
+    val vmInfo: VmInfoUi = VmInfoUi(),
 )
 
 enum class LocationGranularity(val label: String) {
@@ -726,18 +814,61 @@ class SettingsViewModel : ViewModel() {
     fun loadSettings() {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = _uiState.value.copy(isLoading = true)
-            delay(200)
-            _uiState.value = SettingsUiState(
-                stakeInfo = mockStakeInfo(),
+
+            // Fetch real data from the Rust core where available
+            val stakeInfo = try {
+                val s = GratiaCoreManager.getStakeInfo()
+                StakeInfo(
+                    nodeStakeLux = s.nodeStakeLux,
+                    overflowAmountLux = s.overflowAmountLux,
+                    totalCommittedLux = s.totalCommittedLux,
+                    stakedAtMillis = s.stakedAtMillis,
+                    meetsMinimum = s.meetsMinimum,
+                )
+            } catch (_: Exception) { mockStakeInfo() }
+
+            val nodeId = try {
+                GratiaCoreManager.getWalletInfo().address
+            } catch (_: Exception) { "grat:a1b2c3d4e5f6a1b2" }
+
+            val participationDays = try {
+                GratiaCoreManager.getProofOfLifeStatus().consecutiveDays
+            } catch (_: Exception) { 0L }
+
+            val shardInfoUi = try {
+                val si = GratiaCoreManager.getShardInfo()
+                val queueSize = try {
+                    GratiaCoreManager.getCrossShardQueueSize()
+                } catch (_: Exception) { 0 }
+                ShardInfoUi(
+                    shardId = si.shardId,
+                    shardCount = si.shardCount,
+                    localValidators = si.localValidators,
+                    crossShardValidators = si.crossShardValidators,
+                    shardHeight = si.shardHeight,
+                    isShardingActive = si.isShardingActive,
+                    crossShardQueueSize = queueSize,
+                )
+            } catch (_: Exception) { ShardInfoUi() }
+
+            val vmInfoUi = try {
+                val vi = GratiaCoreManager.getVmInfo()
+                VmInfoUi(
+                    runtimeType = vi.runtimeType,
+                    contractsLoaded = vi.contractsLoaded,
+                    totalGasUsed = vi.totalGasUsed,
+                    memoryWired = vi.memoryWired,
+                )
+            } catch (_: Exception) { VmInfoUi() }
+
+            _uiState.value = _uiState.value.copy(
+                stakeInfo = stakeInfo,
                 isLoading = false,
-                nodeId = "grat:a1b2c3d4e5f6a1b2",
-                appVersion = "0.1.0-alpha",
-                participationDays = 23,
-                locationGranularity = LocationGranularity.CITY,
-                cameraHashEnabled = false,
-                microphoneFingerprintEnabled = false,
-                inheritanceEnabled = false,
-                beneficiaryAddress = "",
+                nodeId = nodeId,
+                appVersion = "0.3.0-alpha",
+                participationDays = participationDays,
+                shardInfo = shardInfoUi,
+                vmInfo = vmInfoUi,
             )
         }
     }

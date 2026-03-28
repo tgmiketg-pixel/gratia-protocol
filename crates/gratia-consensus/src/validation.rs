@@ -6,7 +6,7 @@
 use gratia_core::crypto::{verify_signature, sha256};
 use gratia_core::error::GratiaError;
 use gratia_core::types::{
-    Block, BlockHeader, Lux, NodeId, Transaction, TransactionPayload,
+    Block, BlockHeader, Lux, Transaction, TransactionPayload,
 };
 
 use crate::committee::ValidatorCommittee;
@@ -61,6 +61,9 @@ pub struct ValidationContext {
     pub max_block_size: usize,
     /// Minimum transaction fee (from config).
     pub min_transaction_fee: Lux,
+    /// Timestamp of the previous block, used to enforce monotonicity.
+    /// `None` only for the genesis block (height 0).
+    pub previous_block_timestamp: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 // ============================================================================
@@ -319,6 +322,56 @@ pub fn validate_block_header(
         });
     }
 
+    // WHY: Timestamps must be monotonically increasing to prevent
+    // time-manipulation attacks where a producer backdates a block to
+    // gain an advantage in time-dependent logic (e.g., staking cooldowns,
+    // governance deadlines). We use >= (not >) to allow same-second blocks
+    // during rapid block production.
+    if let Some(prev_ts) = ctx.previous_block_timestamp {
+        if header.timestamp < prev_ts {
+            return Err(GratiaError::BlockValidationFailed {
+                reason: format!(
+                    "Block timestamp {} is before previous block timestamp {}",
+                    header.timestamp, prev_ts,
+                ),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+/// Validate that a block's committee parameters match the graduated scaling spec.
+///
+/// Ensures the committee size and finality threshold reported for a block are
+/// consistent with the tier that the given network size maps to. This prevents
+/// a producer from claiming a smaller committee (easier to capture) or a lower
+/// finality threshold (easier to forge) than the network size warrants.
+pub fn validate_committee_parameters(
+    committee_size: usize,
+    finality_threshold: usize,
+    network_size: u64,
+) -> Result<(), GratiaError> {
+    let expected_tier = crate::committee::tier_for_network_size(network_size);
+
+    if committee_size != expected_tier.committee_size {
+        return Err(GratiaError::BlockValidationFailed {
+            reason: format!(
+                "Committee size {} does not match expected {} for network size {}",
+                committee_size, expected_tier.committee_size, network_size,
+            ),
+        });
+    }
+
+    if finality_threshold != expected_tier.finality_threshold {
+        return Err(GratiaError::BlockValidationFailed {
+            reason: format!(
+                "Finality threshold {} does not match expected {} for committee size {}",
+                finality_threshold, expected_tier.finality_threshold, committee_size,
+            ),
+        });
+    }
+
     Ok(())
 }
 
@@ -379,7 +432,7 @@ mod tests {
     use super::*;
     use gratia_core::types::*;
     use gratia_core::crypto::Keypair;
-    use crate::committee::{self, EligibleNode, COMMITTEE_SIZE, SLOTS_PER_EPOCH};
+    use crate::committee::{self, EligibleNode};
     use crate::vrf::VrfPublicKey;
     use chrono::Utc;
 
@@ -420,6 +473,7 @@ mod tests {
                     presence_score: 60,
                     has_valid_pol: true,
                     meets_minimum_stake: true,
+                    pol_days: 90,
                 }
             })
             .collect();
@@ -580,6 +634,7 @@ mod tests {
             committee,
             max_block_size: MAX_BLOCK_SIZE,
             min_transaction_fee: MIN_TRANSACTION_FEE,
+            previous_block_timestamp: None,
         };
 
         assert!(validate_block_header(&header, &ctx).is_err());
@@ -609,6 +664,7 @@ mod tests {
             committee,
             max_block_size: MAX_BLOCK_SIZE,
             min_transaction_fee: MIN_TRANSACTION_FEE,
+            previous_block_timestamp: None,
         };
 
         assert!(validate_block_header(&header, &ctx).is_err());
@@ -637,6 +693,7 @@ mod tests {
             committee,
             max_block_size: MAX_BLOCK_SIZE,
             min_transaction_fee: MIN_TRANSACTION_FEE,
+            previous_block_timestamp: None,
         };
 
         assert!(validate_block_header(&header, &ctx).is_err());
@@ -666,6 +723,72 @@ mod tests {
             committee,
             max_block_size: MAX_BLOCK_SIZE,
             min_transaction_fee: MIN_TRANSACTION_FEE,
+            previous_block_timestamp: None,
+        };
+
+        assert!(validate_block_header(&header, &ctx).is_ok());
+    }
+
+    #[test]
+    fn test_validate_block_header_timestamp_not_monotonic() {
+        let committee = make_test_committee();
+        let producer = committee.members[0].node_id;
+
+        // Block timestamp is 10 seconds BEFORE the previous block
+        let previous_ts = Utc::now();
+        let header = BlockHeader {
+            height: 1,
+            timestamp: previous_ts - chrono::Duration::seconds(10),
+            parent_hash: BlockHash([0xAA; 32]),
+            transactions_root: [0; 32],
+            state_root: [0; 32],
+            attestations_root: [0; 32],
+            producer,
+            vrf_proof: vec![],
+            active_miners: 100,
+            geographic_diversity: 5,
+        };
+
+        let ctx = ValidationContext {
+            current_height: 1,
+            previous_block_hash: [0xAA; 32],
+            committee: committee.clone(),
+            max_block_size: MAX_BLOCK_SIZE,
+            min_transaction_fee: MIN_TRANSACTION_FEE,
+            previous_block_timestamp: Some(previous_ts),
+        };
+
+        let result = validate_block_header(&header, &ctx);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_block_header_timestamp_same_second_ok() {
+        let committee = make_test_committee();
+        let producer = committee.members[0].node_id;
+
+        // Same timestamp as previous block should be allowed (>=)
+        let ts = Utc::now();
+        let header = BlockHeader {
+            height: 1,
+            timestamp: ts,
+            parent_hash: BlockHash([0xAA; 32]),
+            transactions_root: [0; 32],
+            state_root: [0; 32],
+            attestations_root: [0; 32],
+            producer,
+            vrf_proof: vec![],
+            active_miners: 100,
+            geographic_diversity: 5,
+        };
+
+        let ctx = ValidationContext {
+            current_height: 1,
+            previous_block_hash: [0xAA; 32],
+            committee,
+            max_block_size: MAX_BLOCK_SIZE,
+            min_transaction_fee: MIN_TRANSACTION_FEE,
+            previous_block_timestamp: Some(ts),
         };
 
         assert!(validate_block_header(&header, &ctx).is_ok());
@@ -689,6 +812,25 @@ mod tests {
         };
         let tx = make_signed_transaction(&keypair, payload, MIN_TRANSACTION_FEE);
         assert!(validate_transaction(&tx, MIN_TRANSACTION_FEE).is_err());
+    }
+
+    #[test]
+    fn test_validate_committee_parameters_correct() {
+        // 100K network -> tier 7: committee=21, finality=14
+        assert!(validate_committee_parameters(21, 14, 100_000).is_ok());
+    }
+
+    #[test]
+    fn test_validate_committee_parameters_wrong_size() {
+        // 100K network expects 21, not 15
+        let err = validate_committee_parameters(15, 14, 100_000);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn test_validate_committee_parameters_small_network() {
+        // 50 nodes -> tier 1: committee=3, finality=2
+        assert!(validate_committee_parameters(3, 2, 50).is_ok());
     }
 
     #[test]

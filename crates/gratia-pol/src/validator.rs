@@ -119,9 +119,13 @@ impl PolValidator {
             // 7. Wi-Fi OR Bluetooth connectivity
             network_connectivity: data.distinct_wifi_networks >= 1
                 || data.distinct_bt_environments >= 1,
-            // 8a. Varying Bluetooth peer environments
-            bt_environment_variation: data.distinct_bt_environments
-                >= self.config.min_distinct_bt_environments,
+            // 8a. Varying Bluetooth peer environments (only when BT is used)
+            // WHY: Wi-Fi-only phones are first-class citizens per spec. The BT
+            // variation requirement only applies when the device actually reports
+            // BT peers. If distinct_bt_environments == 0, the device uses Wi-Fi
+            // for connectivity and this check passes.
+            bt_environment_variation: data.distinct_bt_environments == 0
+                || data.distinct_bt_environments >= self.config.min_distinct_bt_environments,
             // 8b. At least one charge cycle event
             charge_cycle: data.charge_cycle_event,
         };
@@ -414,21 +418,23 @@ mod tests {
         let result = validator.validate_daily_data(&data);
         assert!(!result.passed);
         assert!(!result.parameter_results.network_connectivity);
-        assert!(!result.parameter_results.bt_environment_variation);
+        // bt_environment_variation passes because 0 BT means Wi-Fi-only path
+        assert!(result.parameter_results.bt_environment_variation);
     }
 
     #[test]
     fn test_wifi_only_passes_connectivity() {
         let validator = PolValidator::new(default_config());
         let mut data = valid_day_data();
-        // Wi-Fi present but no BT environments — connectivity passes,
-        // but bt_environment_variation fails.
+        // Wi-Fi present but no BT environments — Wi-Fi-only phones are
+        // first-class citizens. Both connectivity and BT variation pass
+        // because BT variation is only required when BT peers are reported.
         data.distinct_wifi_networks = 2;
         data.distinct_bt_environments = 0;
         let result = validator.validate_daily_data(&data);
         assert!(result.parameter_results.network_connectivity);
-        assert!(!result.parameter_results.bt_environment_variation);
-        assert!(!result.passed);
+        assert!(result.parameter_results.bt_environment_variation);
+        assert!(result.passed);
     }
 
     #[test]

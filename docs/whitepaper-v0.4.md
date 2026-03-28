@@ -78,7 +78,7 @@ Gratia operates on two complementary proof mechanisms that mirror the natural rh
 
 **What:** The Gratia app runs silently in the background, collecting attestation data from the phone's normal operation. This process has zero noticeable impact on battery life, performance, or user experience. The user never needs to open the app for Proof of Life to accumulate.
 
-**How it works:** Proof of Life observes the natural patterns of daily phone usage and packages them into a cryptographic attestation that proves the device is a real phone, used by a real human, in a real location. The user installs the app, uses their phone normally for one day, and their first Proof of Life is complete. From that point forward, a valid Proof of Life must be maintained every day to remain eligible for mining.
+**How it works:** Proof of Life observes the natural patterns of daily phone usage and packages them into a cryptographic attestation that proves the device is a real phone, used by a real human, in a real location. The user installs the app, plugs in their phone, and begins mining immediately — no waiting period. From that point forward, the node must maintain valid Proof of Life every day to keep mining eligibility. The privilege to mine is granted instantly and maintained through ongoing honest participation.
 
 Proof of Life is the primary defense against phone farms, emulators, and all forms of fake participation. A phone sitting in a rack in a warehouse — no matter how sophisticated the software running on it — cannot produce a valid Proof of Life because it is not being carried, used, moved through the world, and interacted with by a real human. The specific parameters that constitute a valid Proof of Life are defined in Section 4.
 
@@ -169,7 +169,7 @@ The following scenarios produce an invalid Proof of Life:
 
 ### 4.5 Grace Period
 
-To accommodate unusual days in an honest user's life — a day spent in the hospital, a phone left at home accidentally, a day of extremely minimal usage — the protocol allows a one-day grace period. If a node fails to produce a valid Proof of Life on a single day, mining eligibility is preserved but flagged. If Proof of Life is invalid for two consecutive days, mining eligibility is paused. Eligibility resumes immediately upon the next valid Proof of Life day — no extended re-onboarding is required.
+Mining begins immediately upon installation — there is no onboarding delay. However, the privilege must be maintained. If a node fails to produce a valid Proof of Life on a single day, mining eligibility is preserved but flagged. If Proof of Life is invalid for two consecutive days, mining eligibility is paused. Eligibility resumes immediately upon the next valid Proof of Life day — no extended re-onboarding is required. This "mine now, keep the privilege" model means honest users are never waiting to earn, while fraudulent nodes are quickly detected and removed.
 
 ### 4.6 Privacy Architecture
 
@@ -202,15 +202,31 @@ Stops virtual and emulated nodes. The phone must be physically plugged into a po
 
 **Any two without the third** leaves a meaningful attack vector open. All three together create a system where the only efficient path to earning GRAT is to be a real person, with a real phone, with genuine economic commitment, using real electricity. In other words: honest participation.
 
-### 5.3 Slashing
+### 5.3 Progressive Slashing
 
-If a node is caught acting dishonestly — submitting invalid blocks, fabricating attestations, attempting to double-spend — it faces consequences across all three pillars:
+If a node is caught acting dishonestly — submitting invalid blocks, fabricating attestations, attempting to double-spend — it faces graduated consequences designed to protect honest users from catastrophic loss while making sustained cheating economically devastating.
 
-- **Staked tokens are slashed** (a percentage of the node's stake is burned or redistributed to the Network Security Pool). This is the immediate economic punishment.
-- **Proof of Life history is reset.** The node must accumulate a fresh day of valid Proof of Life before it can mine again. The node's historical reputation is damaged.
-- **Device hardware attestation is flagged.** The specific device's secure enclave identity is marked, making it harder (though not impossible, to allow for honest users who made genuine mistakes) to rejoin the network with the same physical device.
+**Offense Escalation (90-Day Rolling Window):**
 
-The multi-pillar slashing ensures that dishonest behavior is costly across economic, temporal, and physical dimensions simultaneously.
+| Offense | Stake Impact | Mining Impact |
+|---------|-------------|---------------|
+| 1st offense | None | 48-hour mining pause |
+| 2nd within 90 days | 10% of effective stake burned | Mining resumes after slash |
+| 3rd within 90 days | 50% of effective stake burned | 30-day mining lockout |
+| Proven fraud (any time) | 100% burned permanently | Permanent ban |
+
+The 90-day rolling window means a single bad day doesn't haunt a node forever. After 90 days of clean participation, the offense count resets. But proven fraud — where validator committee consensus confirms deliberate cheating — bypasses the escalation ladder entirely and results in immediate full slash.
+
+**Slash Distribution:**
+- For proven fraud: 70% of slashed stake is burned (deflationary), 30% is distributed to the validator committee members who confirmed the fraud
+- For all other offenses: 100% burned
+- Reporter cap: no single validator can earn more than their own stake from a single fraud report, preventing false-flagging incentives
+
+**Multi-Pillar Consequences:**
+Beyond the economic penalty, slashed nodes also face consequences across all three pillars:
+- **Proof of Life history reset** — the node must accumulate a fresh day of valid Proof of Life before mining can resume
+- **Device attestation flagged** — the device's secure enclave identity is marked, making it harder to rejoin with the same physical device
+- **Behavioral scrutiny increased** — slashed nodes face enhanced PoL verification for 90 days after reinstatement
 
 ---
 
@@ -259,6 +275,16 @@ Gratia uses a capped staking model that turns wealth concentration into a benefi
 - Individual consensus power is capped regardless of wealth.
 - The richer the whales, the more the small miners benefit.
 - Wealth concentration is structurally converted from a centralizing force into an equalizing one.
+
+**Minimum Stake Calculation:**
+
+The minimum stake is pegged to approximately 14 days of average mining rewards at the current network size, calculated as:
+
+`min_stake = (daily_budget / active_miners) × 14`
+
+This self-adjusting formula ensures the stake is always "two weeks of your own output" — cheap enough when the network is young to not block new participants, but meaningful enough when the network is mature to serve as a real deterrent. A phone farm operator running 100 phones must lock up 100× this amount, turning scale into a liability rather than an advantage.
+
+The per-node stake cap is set at 100× the minimum stake and scales automatically with it.
 
 ### 6.4 Fee Structure
 
@@ -658,6 +684,63 @@ Gratia takes a privacy-by-default approach to all data:
 - **Three-pillar redundancy:** The requirement for simultaneous Proof of Life, staking, and energy expenditure eliminates every known single-vector attack.
 - **Quantum resistance consideration:** The secure enclave's hardware-backed key storage provides a natural upgrade path to post-quantum cryptographic algorithms as they mature.
 
+### 12.3 Proof of Life Hardening
+
+The Proof of Life system faces five categories of spoofing attacks, ranked by sophistication:
+
+1. **Robotic phone farms** — mechanical rigs physically manipulating real phones at scale. Defeated by behavioral analysis detecting mechanical regularity and TEE attestation detecting non-standard hardware interaction.
+
+2. **Rooted phone sensor spoofing** — using Xposed/Magisk frameworks to hook sensor APIs and return fabricated data. Mitigated by TEE attestation (detects root) and cross-day behavioral consistency analysis (fabricated patterns are inconsistent over 30+ day windows).
+
+3. **Replay attacks** — recording legitimate sensor data and replaying it with variations. Countered by requiring live Bluetooth peer discovery (peers change daily and cannot be replayed), tying attestations to current block height, and cross-day consistency checks that detect patterns that are too similar day-to-day.
+
+4. **Human-assisted phone farming** — paying people to carry extra phones with minimal interaction. The hardest to detect because it involves real human motion. Mitigated by requiring behavioral richness (not just unlock counts, but genuine phone usage patterns) and screen-on time correlation.
+
+5. **ARM server emulators** — running Android on ARM cloud servers (AWS Graviton, Ampere) with injected sensor data. Detected by big.LITTLE scheduling fingerprinting (server chips have homogeneous cores), TEE attestation (server VMs fail StrongBox checks), and battery state verification (servers have no battery).
+
+Three defensive layers are deployed against these vectors:
+
+**TEE Attestation:** Android Play Integrity and iOS DeviceCheck cryptographically prove a device is real, unrooted, and running genuine firmware. While not hard-required (to support custom ROMs and phones without Google services), nodes without TEE attestation face significantly heightened behavioral scrutiny.
+
+**Cross-Day Behavioral Analysis:** Rather than validating each day independently, the protocol maintains a rolling 30-day behavioral fingerprint for each node. A real human has consistent but naturally varying patterns. The network sees a "behavioral consistency score" attested via zero-knowledge proof — never the underlying data.
+
+**Bluetooth Peer Graph Analysis:** A network-level defense that detects co-located phone farms by comparing hashed Bluetooth peer sets across nodes. If multiple nodes consistently share the same peer environment, they are flagged for enhanced verification.
+
+### 12.4 Staking as Security Amplifier
+
+Gratia's staking model is designed as a security mechanism, not an investment vehicle. The core principle: **stake determines how much you can lose, never how much you can earn.** Mining rewards remain flat per minute for every node regardless of stake size.
+
+Three mechanisms launch with the network:
+
+1. **Flat bond** — a fixed security deposit per phone, pegged to 14 days of average mining rewards. Phone farms pay this amount multiplied by every phone they operate, turning scale into a cost multiplier.
+
+2. **Progressive slashing** — graduated penalties that protect honest users while devastating attackers (see Section 5.3).
+
+3. **Fraud reporter incentives** — validators who detect and confirm fraud receive 30% of the slashed stake, creating an active incentive layer for network self-policing.
+
+As the network matures, additional mechanisms activate: mutual staking (trusted nodes vouching for newcomers, with shared slashing risk), geographic stake pooling (heightened scrutiny for regions with detected fraud clusters), and uptime stake decay (reduced stake requirements for long-term honest participants).
+
+### 12.5 Why Gratia Is Harder to Attack Than Any Existing Blockchain
+
+Every major blockchain's security reduces to a **capital problem.** Bitcoin requires mass-purchasing ASICs and electricity. Ethereum and Solana require mass-purchasing tokens. In every case, the attack scales linearly with money: spend more, get more attack power. A sufficiently funded entity — a nation-state, a hedge fund — can acquire all necessary resources through normal procurement channels. No humans in the loop. Bitcoin 51% attacks have already happened on smaller chains (Ethereum Classic in 2020, Bitcoin Gold in 2018) precisely because the attacker just needed to rent hashpower for a few hours.
+
+Gratia's security reduces to a **human logistics problem.** To attack the network, you don't need more money or more hardware — you need more *people.* Every node requires a living, breathing human carrying a real phone through a real day: unlocking it, interacting with the screen, moving through physical space, encountering different Bluetooth peers, and plugging it in at night. You cannot automate this. You cannot warehouse it. You cannot rent it by the hour.
+
+The practical implications are stark:
+
+| Dimension | Traditional Blockchain Attack | Gratia Attack |
+|-----------|------------------------------|---------------|
+| People required | 10-20 engineers | Tens of thousands of carriers |
+| Setup time | Hours to months | Months to years |
+| Can operate from one location | Yes | No — geographic distribution required |
+| Scales with money alone | Yes | No — money buys phones, not reliable humans |
+| Has been done before | Yes (multiple chains) | No equivalent exists |
+| Damage if successful | Steal funds, reverse transactions | Stall blocks (cannot steal or reverse) |
+
+At 100,000 honest nodes, reaching 33% network penetration — the threshold for disrupting consensus — requires managing roughly 50,000 phone carriers across multiple countries at an annual cost exceeding $60 million, with an ever-increasing detection risk from behavioral clustering, Bluetooth peer analysis, and geographic anomaly detection. Even then, the attacker can only intermittently stall block production. They cannot steal funds, reverse transactions, or override governance.
+
+The closest real-world analogues to this operation — click farms, survey mills — struggle to maintain 1,000-5,000 reliable participants with constant quality issues, high turnover, and frequent exposure. Nobody has ever covertly managed 50,000 distributed human operators. The attack is theoretically possible but practically absurd — and that is by design.
+
 ---
 
 ## 13. Wallet Security and Recovery
@@ -835,6 +918,8 @@ Unlike many token launches that depend entirely on speculative demand, GRAT has 
 ### 16.3 Early Miner Economics
 
 The emission schedule naturally rewards early participants. With fixed block rewards divided among a small number of initial nodes, early miners earn significantly more GRAT per mining session than later participants. This is not a bonus or a pre-mine — it is the natural mathematics of a fixed reward pool shared among fewer people. Early miners take the biggest risk (participating in an unproven network) and receive the biggest potential reward (high per-node token accumulation before the network scales).
+
+Critically, there is no onboarding delay. A new user downloads the app, plugs in their phone, and starts earning GRAT that same night. The first experience is reward, not waiting. This instant gratification creates immediate engagement — and the progressive trust system ensures that continued mining requires continued honest behavior. Users don't earn the right to mine; they mine immediately and keep the privilege by being real.
 
 ### 16.4 Geographic Launch Strategy
 

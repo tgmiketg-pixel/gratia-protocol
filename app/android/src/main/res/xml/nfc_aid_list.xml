@@ -1,0 +1,14 @@
+<host-apdu-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/nfc_service_desc"
+    android:requireDeviceUnlock="false">
+    <!-- WHY: requireDeviceUnlock="false" because tap-to-transact should work
+         even when the screen is on but phone is locked. The actual transaction
+         still requires biometric confirmation in the send dialog. -->
+    <aid-group android:category="other"
+        android:description="@string/nfc_aid_desc">
+        <!-- WHY: Custom AID F0475241544941 is "GRATIA" in ASCII with F0 prefix.
+             F0 prefix indicates a proprietary AID per ISO 7816-5, avoiding
+             collision with registered payment AIDs (A0 prefix). -->
+        <aid-filter android:name="F0475241544941" />
+    </aid-group>
+</host-apdu-service>

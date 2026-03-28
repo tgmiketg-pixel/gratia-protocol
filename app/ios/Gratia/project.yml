@@ -1,0 +1,66 @@
+# ============================================================================
+# Gratia iOS — XcodeGen project specification
+#
+# WHY XcodeGen: Xcode project files (.xcodeproj) are binary plists that cannot
+# be version-controlled reliably. XcodeGen generates the .xcodeproj from this
+# human-readable YAML file, eliminating merge conflicts and ensuring
+# reproducible builds.
+#
+# Usage: xcodegen generate
+# ============================================================================
+
+name: Gratia
+options:
+  bundleIdPrefix: io.gratia
+  deploymentTarget:
+    iOS: "16.0"
+  xcodeVersion: "15.0"
+  createIntermediateGroups: true
+  defaultConfig: Release
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    TARGETED_DEVICE_FAMILY: "1" # iPhone only
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    PRODUCT_BUNDLE_IDENTIFIER: "io.gratia.app"
+    PRODUCT_NAME: "Gratia"
+    # WHY: Enable library evolution for stable ABI with the Rust core framework.
+    BUILD_LIBRARY_FOR_DISTRIBUTION: false
+
+targets:
+  Gratia:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: Gratia
+        excludes:
+          - "**/*.md"
+    info:
+      path: Gratia/Info.plist
+    settings:
+      base:
+        INFOPLIST_FILE: Gratia/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Gratia/Gratia.entitlements
+        # WHY: Link the Rust core framework built by cargo + UniFFI.
+        # The framework is built separately and placed in this path.
+        # FRAMEWORK_SEARCH_PATHS: "$(PROJECT_DIR)/../../../target/aarch64-apple-ios/release"
+        # OTHER_LDFLAGS: "-framework GratiaCore"
+    entitlements:
+      path: Gratia/Gratia.entitlements
+    # Dependencies will include the UniFFI-generated Swift framework
+    # once the Rust core is cross-compiled for iOS:
+    # dependencies:
+    #   - framework: "../../target/aarch64-apple-ios/release/GratiaCore.xcframework"
+
+schemes:
+  Gratia:
+    build:
+      targets:
+        Gratia: all
+    run:
+      config: Debug
+    profile:
+      config: Release

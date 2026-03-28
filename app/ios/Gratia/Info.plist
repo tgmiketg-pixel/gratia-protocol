@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- App Identity -->
+	<key>CFBundleName</key>
+	<string>Gratia</string>
+	<key>CFBundleDisplayName</key>
+	<string>Gratia Wallet</string>
+	<key>CFBundleIdentifier</key>
+	<string>io.gratia.app</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleExecutable</key>
+	<string>Gratia</string>
+
+	<!-- Deployment Target -->
+	<key>MinimumOSVersion</key>
+	<string>16.0</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+
+	<!-- Launch Configuration -->
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+	</dict>
+
+	<!-- Supported Orientations -->
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+
+	<!-- ================================================================== -->
+	<!-- Privacy Usage Descriptions                                          -->
+	<!-- WHY: iOS requires human-readable explanations for every sensitive   -->
+	<!-- permission. These strings appear in the system permission dialogs.  -->
+	<!-- ================================================================== -->
+
+	<!-- Location: Required for PoL GPS parameter (at least one fix per day) -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Gratia uses your location to verify you are a real person using a real phone. Only one GPS fix per day is needed. Your exact location is never shared — only a zero-knowledge proof is generated on-device.</string>
+
+	<!-- Location Always: Enables background PoL GPS collection -->
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Gratia collects location in the background to maintain your daily Proof of Life attestation. This ensures you can earn mining rewards even when the app is not open. Your exact location never leaves your device.</string>
+
+	<!-- Bluetooth: Required for PoL peer environment detection -->
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Gratia scans for nearby Bluetooth devices to verify you are in a real, changing environment. Only anonymous device hashes are collected — no device names or data are accessed.</string>
+
+	<!-- Bluetooth Peripheral (legacy, pre-iOS 13) -->
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>Gratia uses Bluetooth to discover nearby devices for Proof of Life attestation.</string>
+
+	<!-- NFC: For tap-to-transact wallet address exchange -->
+	<key>NFCReaderUsageDescription</key>
+	<string>Gratia uses NFC to instantly exchange wallet addresses with nearby phones for tap-to-pay transactions.</string>
+
+	<!-- Motion: For accelerometer-based PoL motion detection -->
+	<key>NSMotionUsageDescription</key>
+	<string>Gratia uses motion data to detect that a real human is carrying and using this phone. Raw motion data never leaves your device — only a boolean "motion detected" flag is used.</string>
+
+	<!-- ================================================================== -->
+	<!-- Background Tasks                                                    -->
+	<!-- WHY: BGTaskScheduler requires task identifiers to be declared in    -->
+	<!-- Info.plist. These enable periodic PoL sensor collection and         -->
+	<!-- midnight day finalization even when the app is backgrounded.        -->
+	<!-- ================================================================== -->
+
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<!-- Periodic PoL sensor snapshot (~every 15 minutes) -->
+		<string>io.gratia.app.pol-refresh</string>
+		<!-- Day finalization (runs during charging, once per day) -->
+		<string>io.gratia.app.pol-day-finalization</string>
+	</array>
+
+	<!-- Background Modes -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<!-- Location updates in background (for significant changes) -->
+		<string>location</string>
+		<!-- Background fetch for periodic PoL snapshots -->
+		<string>fetch</string>
+		<!-- Background processing for day finalization -->
+		<string>processing</string>
+		<!-- Bluetooth communication for peer discovery -->
+		<string>bluetooth-central</string>
+	</array>
+
+	<!-- ================================================================== -->
+	<!-- NFC Tag Reading                                                     -->
+	<!-- WHY: Required for background NFC tag reading (iOS 11+).            -->
+	<!-- The AID matches the Android HCE service for cross-platform         -->
+	<!-- tap-to-transact compatibility.                                     -->
+	<!-- ================================================================== -->
+
+	<key>com.apple.developer.nfc.readersession.iso7816.select-identifiers</key>
+	<array>
+		<!-- Gratia custom AID: F0475241544941 ("GRATIA" in hex with F0 prefix) -->
+		<string>F0475241544941</string>
+	</array>
+
+	<!-- App Transport Security: Allow local network for block explorer -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+</dict>
+</plist>

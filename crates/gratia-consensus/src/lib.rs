@@ -13,6 +13,7 @@ pub mod vrf;
 pub mod committee;
 pub mod block_production;
 pub mod validation;
+pub mod sharded_consensus;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -27,8 +28,7 @@ use gratia_core::types::{
 
 use crate::block_production::{BlockProducer, PendingBlock, sign_block};
 use crate::committee::{
-    EligibleNode, ValidatorCommittee, COMMITTEE_SIZE, FINALITY_THRESHOLD,
-    SLOTS_PER_EPOCH,
+    EligibleNode, ValidatorCommittee,
 };
 use crate::validation::ValidationContext;
 use crate::vrf::VrfSecretKey;
@@ -81,6 +81,8 @@ pub struct ConsensusEngine {
     current_height: u64,
     /// Hash of the last finalized block.
     last_finalized_hash: BlockHash,
+    /// Timestamp of the last finalized block (for monotonicity validation).
+    last_finalized_timestamp: Option<DateTime<Utc>>,
     /// Recent finalized block hashes for fork detection.
     recent_block_hashes: Vec<BlockHash>,
     /// Pending block awaiting signatures (if this node is producing).
@@ -89,7 +91,13 @@ pub struct ConsensusEngine {
     state: ConsensusState,
     /// This node's Composite Presence Score.
     presence_score: u8,
-    /// Timestamp when the engine started.
+    /// Whether trust-based filtering is enabled for committee selection.
+    /// WHY: When true, the engine logs trust-tier statistics during committee
+    /// initialization (e.g., how many nodes are committee-eligible at 30+ days).
+    /// Can be disabled in test harnesses that don't need trust-tier awareness.
+    pub trust_aware: bool,
+    /// Timestamp when the engine started. Used for uptime tracking (Phase 2).
+    #[allow(dead_code)]
     started_at: DateTime<Utc>,
 }
 
@@ -110,10 +118,12 @@ impl ConsensusEngine {
             current_slot: 0,
             current_height: 0,
             last_finalized_hash: BlockHash::default(),
+            last_finalized_timestamp: None,
             recent_block_hashes: Vec::new(),
             pending_block: None,
             state: ConsensusState::Syncing,
             presence_score,
+            trust_aware: true,
             started_at: Utc::now(),
         }
     }
@@ -160,6 +170,23 @@ impl ConsensusEngine {
         epoch_number: u64,
         start_slot: u64,
     ) -> Result<(), GratiaError> {
+        // Log trust-tier breakdown when trust-aware mode is active.
+        // WHY: Operators need visibility into how many nodes in the pool
+        // actually meet the 30-day committee-eligibility threshold vs total
+        // submitted, to detect trust-tier distribution issues early.
+        if self.trust_aware {
+            let committee_eligible = eligible_nodes
+                .iter()
+                .filter(|n| n.is_committee_eligible())
+                .count();
+            info!(
+                total = eligible_nodes.len(),
+                committee_eligible = committee_eligible,
+                below_threshold = eligible_nodes.len() - committee_eligible,
+                "Trust-aware committee pool breakdown (30+ day threshold)",
+            );
+        }
+
         let committee = committee::select_committee(
             eligible_nodes,
             epoch_seed,
@@ -232,6 +259,12 @@ impl ConsensusEngine {
 
         let height = self.current_height + 1;
 
+        let committee = self.current_committee.as_ref().ok_or_else(|| {
+            GratiaError::BlockValidationFailed {
+                reason: "No active committee for block production".into(),
+            }
+        })?;
+
         let pending = self.block_producer.produce_block(
             transactions,
             attestations,
@@ -239,6 +272,7 @@ impl ConsensusEngine {
             height,
             state_root,
             &self.vrf_secret_key,
+            committee,
         )?;
 
         info!(
@@ -250,6 +284,14 @@ impl ConsensusEngine {
 
         self.pending_block = Some(pending);
         Ok(self.pending_block.as_ref().unwrap())
+    }
+
+    /// Get the finality threshold for the pending block (if any).
+    pub fn pending_finality_threshold(&self) -> usize {
+        self.pending_block
+            .as_ref()
+            .map(|p| p.finality_threshold)
+            .unwrap_or(0)
     }
 
     /// Add a committee member's signature to the pending block.
@@ -298,10 +340,11 @@ impl ConsensusEngine {
         })?;
 
         let block = pending.finalize()?;
-        let block_hash = block.header.hash();
+        let block_hash = block.header.hash()?;
 
         self.current_height = block.header.height;
         self.last_finalized_hash = block_hash;
+        self.last_finalized_timestamp = Some(block.header.timestamp);
         self.recent_block_hashes.push(block_hash);
 
         // Prune old hashes to bound memory usage
@@ -325,28 +368,89 @@ impl ConsensusEngine {
     ///
     /// Validates the block and, if valid, updates the chain state.
     pub fn process_incoming_block(&mut self, block: Block) -> Result<(), GratiaError> {
+        let incoming_height = block.header.height;
+
+        // WHY: In a multi-node demo where both phones produce blocks independently,
+        // chains can diverge. Rather than strict validation that rejects all out-of-
+        // sequence blocks, we handle common cases gracefully:
+        //
+        // 1. Block at expected height → full validation and accept
+        // 2. Block at or below our height → skip (we're ahead or already have it)
+        // 3. Block ahead of us → accept with relaxed validation (fast-forward sync)
+        //
+        // This makes the 2-phone demo work smoothly without a full sync protocol.
+
+        let expected_height = self.current_height + 1;
+
+        if incoming_height <= self.current_height {
+            // Already at or past this height — skip silently.
+            debug!(
+                incoming = incoming_height,
+                local = self.current_height,
+                "Skipping incoming block at or below our height",
+            );
+            return Ok(());
+        }
+
         let committee = self.current_committee.as_ref().ok_or_else(|| {
             GratiaError::BlockValidationFailed {
                 reason: "No active committee for validation".into(),
             }
         })?;
 
-        // Build validation context
-        let ctx = ValidationContext {
-            current_height: self.current_height + 1,
-            previous_block_hash: self.last_finalized_hash.0,
-            committee: committee.clone(),
-            max_block_size: validation::MAX_BLOCK_SIZE,
-            min_transaction_fee: validation::MIN_TRANSACTION_FEE,
-        };
-
-        // Validate the block
-        validation::validate_block(&block, &ctx)?;
+        if incoming_height == expected_height {
+            // Normal case: block at expected next height.
+            let ctx = ValidationContext {
+                current_height: expected_height,
+                previous_block_hash: self.last_finalized_hash.0,
+                committee: committee.clone(),
+                max_block_size: validation::MAX_BLOCK_SIZE,
+                min_transaction_fee: validation::MIN_TRANSACTION_FEE,
+                previous_block_timestamp: self.last_finalized_timestamp,
+            };
+            validation::validate_block(&block, &ctx)?;
+        } else {
+            // WHY: Block is ahead of us (height gap). In Phase 1 demo mode,
+            // accept with relaxed validation — just check producer is in
+            // committee, finality signatures exist, and size is OK. Skip
+            // strict height/parent hash checks. A full sync protocol (Phase 2)
+            // would request the intermediate blocks.
+            let block_bytes = bincode::serialize(&block)
+                .map_err(|e| GratiaError::SerializationError(e.to_string()))?;
+            if block_bytes.len() > validation::MAX_BLOCK_SIZE {
+                return Err(GratiaError::BlockValidationFailed {
+                    reason: "Block too large".into(),
+                });
+            }
+            if !committee.is_committee_member(&block.header.producer) {
+                return Err(GratiaError::BlockValidationFailed {
+                    reason: format!(
+                        "Block producer {} is not a committee member",
+                        block.header.producer,
+                    ),
+                });
+            }
+            let sig_count = block.validator_signatures.len();
+            if !committee.has_finality(sig_count) {
+                return Err(GratiaError::InsufficientSignatures {
+                    count: sig_count,
+                    required: crate::committee::FINALITY_THRESHOLD,
+                });
+            }
+            info!(
+                incoming = incoming_height,
+                local = self.current_height,
+                gap = incoming_height - self.current_height,
+                "Fast-forwarding to peer block (skipping {} heights)",
+                incoming_height - self.current_height,
+            );
+        }
 
         // Block is valid — update state
-        let block_hash = block.header.hash();
+        let block_hash = block.header.hash()?;
         self.current_height = block.header.height;
         self.last_finalized_hash = block_hash;
+        self.last_finalized_timestamp = Some(block.header.timestamp);
         self.recent_block_hashes.push(block_hash);
 
         if self.recent_block_hashes.len() > MAX_RECENT_BLOCKS {
@@ -414,6 +518,20 @@ impl ConsensusEngine {
             .update_network_stats(active_miners, geographic_diversity);
     }
 
+    /// Restore chain state from persistence.
+    /// WHY: On app restart, the chain height and tip hash are loaded from
+    /// file storage so the consensus engine continues from where it left off
+    /// instead of restarting from genesis.
+    pub fn restore_state(&mut self, height: u64, tip_hash: BlockHash) {
+        self.current_height = height;
+        self.last_finalized_hash = tip_hash;
+        info!(
+            height = height,
+            hash = %tip_hash,
+            "Consensus state restored from persistence"
+        );
+    }
+
     /// Stop the consensus engine.
     pub fn stop(&mut self) {
         info!("Consensus engine stopping");
@@ -449,7 +567,7 @@ impl ConsensusEngine {
             });
         }
 
-        Ok(sign_block(header, self.node_id, keypair))
+        sign_block(header, self.node_id, keypair)
     }
 }
 
@@ -460,7 +578,7 @@ impl ConsensusEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::committee::EligibleNode;
+    use crate::committee::{EligibleNode, COMMITTEE_SIZE, SLOTS_PER_EPOCH};
     use crate::vrf::VrfPublicKey;
 
     fn make_eligible_nodes(count: u8) -> Vec<EligibleNode> {
@@ -474,6 +592,7 @@ mod tests {
                     presence_score: 60,
                     has_valid_pol: true,
                     meets_minimum_stake: true,
+                    pol_days: 90,
                 }
             })
             .collect()
@@ -506,7 +625,8 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(engine.state(), ConsensusState::Active);
         assert!(engine.committee().is_some());
-        assert_eq!(engine.committee().unwrap().size(), COMMITTEE_SIZE);
+        // 25 eligible nodes → tier for 25 = committee of 3
+        assert_eq!(engine.committee().unwrap().size(), 3);
     }
 
     #[test]
@@ -649,6 +769,13 @@ mod tests {
 
         let new_epoch = engine.committee().unwrap().epoch.epoch_number;
         assert_eq!(new_epoch, initial_epoch + 1);
+    }
+
+    #[test]
+    fn test_engine_trust_aware_flag() {
+        let engine = make_engine(0);
+        // trust_aware should default to true per the progressive trust model
+        assert!(engine.trust_aware);
     }
 
     #[test]

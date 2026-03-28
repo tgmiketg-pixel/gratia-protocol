@@ -16,6 +16,8 @@ use std::collections::HashMap;
 use std::fmt;
 #[cfg(feature = "wasmer-runtime")]
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "wasmer-runtime")]
+use std::time::Instant;
 
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -316,6 +318,11 @@ struct WasmerHostState {
     aborted: bool,
     /// Error message captured when aborted is set.
     abort_reason: Option<String>,
+    /// Reference to the WASM instance's linear memory export.
+    /// WHY: Host functions that transfer data (storage_read/write, emit_event,
+    /// get_caller_address) need to read/write the WASM linear memory. This is
+    /// set after Instance::new() completes by extracting the "memory" export.
+    memory: Option<wasmer::Memory>,
 }
 
 /// Wasmer-based WASM runtime for production use.
@@ -328,6 +335,12 @@ pub struct WasmerRuntime {
     modules: HashMap<Address, wasmer::Module>,
     /// The wasmer store (owns all runtime state).
     store: wasmer::Store,
+    /// Bytecode sizes for each loaded contract, used for gas metering.
+    /// WHY: Per-instruction gas metering without bytecode instrumentation
+    /// uses a size-based heuristic: bytecode_size / 4 gas (approximating
+    /// ~1 gas per ARM instruction equivalent, since WASM instructions are
+    /// roughly 4 bytes on average).
+    bytecode_sizes: HashMap<Address, usize>,
 }
 
 #[cfg(feature = "wasmer-runtime")]
@@ -337,6 +350,7 @@ impl WasmerRuntime {
         WasmerRuntime {
             modules: HashMap::new(),
             store,
+            bytecode_sizes: HashMap::new(),
         }
     }
 
@@ -521,12 +535,10 @@ impl WasmerRuntime {
         );
 
         // -- get_caller_address() -> i32 --
-        // WHY: Returns a pointer offset into WASM memory where the 32-byte address
-        // is written. Returns 0 on failure. The contract must pre-allocate a
-        // buffer and pass its offset, but for simplicity this version writes to
-        // a fixed offset (0) and returns 32 (the length). Production would use
-        // a more sophisticated ABI. For now, returns the first byte as an i32
-        // identifier (sufficient for testing and initial integration).
+        // WHY: Writes the full 32-byte caller address to WASM linear memory at
+        // offset 0 and returns 32 (the length). The contract must reserve the
+        // first 32 bytes of memory for this purpose, or use a dedicated buffer.
+        // Returns 0 on failure (no memory or write error).
         let get_caller_address = Function::new_typed_with_env(
             store,
             func_env,
@@ -541,10 +553,20 @@ impl WasmerRuntime {
                     state.abort_reason = Some(e.to_string());
                     return 0;
                 }
-                // WHY: Return first 4 bytes of caller address as i32.
-                // Full address passing requires memory write (see storage_read).
                 let addr = state.host_env.get_caller_address();
-                i32::from_le_bytes([addr.0[0], addr.0[1], addr.0[2], addr.0[3]])
+                // Write the full 32-byte address to WASM memory at offset 0.
+                if let Some(ref mem) = state.memory {
+                    let view = mem.view(&env);
+                    if view.write(0u64, &addr.0).is_ok() {
+                        32 // Successfully wrote 32 bytes
+                    } else {
+                        0 // Memory write failed
+                    }
+                } else {
+                    // WHY: Fallback for modules without memory export — return
+                    // first 4 bytes as i32 for basic compatibility.
+                    i32::from_le_bytes([addr.0[0], addr.0[1], addr.0[2], addr.0[3]])
+                }
             },
         );
 
@@ -578,6 +600,8 @@ impl WasmerRuntime {
              key_ptr: i32,
              key_len: i32|
              -> i32 {
+                // WHY: Clone the Arc so the borrow on env is released, then
+                // use env as the store reference for memory views.
                 let state_arc = env.data().clone();
                 let mut state = state_arc.lock().unwrap();
                 if state.aborted {
@@ -592,21 +616,27 @@ impl WasmerRuntime {
                 if key_len != 32 {
                     return -1;
                 }
-                let key_ptr = key_ptr as u32 as usize;
-                // WHY: We need to read the key from WASM memory. The memory export
-                // is accessed via the store, but inside a host function we cannot
-                // easily get the instance's memory. We read from the FunctionEnvMut's
-                // view into memory. For now, storage operations work with the key
-                // bytes embedded in the call. In production, we would access the
-                // WASM linear memory through the instance export.
-                // Since we cannot access instance memory from within the host function
-                // closure directly in wasmer 4.x without storing a memory reference
-                // in the env, we handle this by having contracts pass key data via
-                // scalar parameters for simple cases.
-                // For full memory access, the memory is stored in the host state
-                // after instance creation (see execute_contract).
-                let _ = key_ptr; // Will be used when memory is available
-                -1 // Key not found (placeholder until memory wiring)
+                // Read the 32-byte key from WASM linear memory.
+                let memory = match state.memory.as_ref() {
+                    Some(m) => m.clone(),
+                    None => return -1,
+                };
+                let view = memory.view(&env);
+                let mut key_buf = [0u8; 32];
+                if view.read(key_ptr as u64, &mut key_buf).is_err() {
+                    return -1;
+                }
+                // Look up the key in contract storage.
+                if let Some(value) = state.host_env.storage_read(&key_buf) {
+                    let val = value.clone();
+                    // Write the value back into WASM memory at key_ptr + 32.
+                    if view.write((key_ptr as u64) + 32, &val).is_err() {
+                        return -1;
+                    }
+                    val.len() as i32
+                } else {
+                    -1 // Key not found
+                }
             },
         );
 
@@ -615,10 +645,10 @@ impl WasmerRuntime {
             store,
             func_env,
             |env: wasmer::FunctionEnvMut<Arc<Mutex<WasmerHostState>>>,
-             _key_ptr: i32,
-             _key_len: i32,
-             _val_ptr: i32,
-             _val_len: i32| {
+             key_ptr: i32,
+             key_len: i32,
+             val_ptr: i32,
+             val_len: i32| {
                 let state_arc = env.data().clone();
                 let mut state = state_arc.lock().unwrap();
                 if state.aborted {
@@ -629,8 +659,37 @@ impl WasmerRuntime {
                     state.abort_reason = Some(e.to_string());
                     return;
                 }
-                // WHY: Full implementation requires WASM memory access (same as storage_read).
-                // Storage write is charged but data transfer requires memory wiring.
+                // Validate key_len is exactly 32 bytes.
+                if key_len != 32 {
+                    state.aborted = true;
+                    state.abort_reason = Some("storage key must be 32 bytes".to_string());
+                    return;
+                }
+                let memory = match state.memory.as_ref() {
+                    Some(m) => m.clone(),
+                    None => {
+                        state.aborted = true;
+                        state.abort_reason = Some("WASM memory not available".to_string());
+                        return;
+                    }
+                };
+                let view = memory.view(&env);
+                // Read the 32-byte key from WASM memory.
+                let mut key_buf = [0u8; 32];
+                if view.read(key_ptr as u64, &mut key_buf).is_err() {
+                    state.aborted = true;
+                    state.abort_reason = Some("failed to read key from WASM memory".to_string());
+                    return;
+                }
+                // Read the value (val_len bytes) from WASM memory at val_ptr.
+                let mut val_buf = vec![0u8; val_len as usize];
+                if view.read(val_ptr as u64, &mut val_buf).is_err() {
+                    state.aborted = true;
+                    state.abort_reason = Some("failed to read value from WASM memory".to_string());
+                    return;
+                }
+                // Write the key-value pair to contract storage.
+                state.host_env.storage_write(key_buf, val_buf);
             },
         );
 
@@ -639,9 +698,9 @@ impl WasmerRuntime {
             store,
             func_env,
             |env: wasmer::FunctionEnvMut<Arc<Mutex<WasmerHostState>>>,
-             _topic_ptr: i32,
+             topic_ptr: i32,
              topic_len: i32,
-             _data_ptr: i32,
+             data_ptr: i32,
              data_len: i32| {
                 let state_arc = env.data().clone();
                 let mut state = state_arc.lock().unwrap();
@@ -654,15 +713,45 @@ impl WasmerRuntime {
                     state.abort_reason = Some(e.to_string());
                     return;
                 }
-                // WHY: Full event data extraction requires WASM memory access.
-                // For now we emit a placeholder event so the gas charging and
-                // event count tracking are exercised.
                 let contract_addr = state.contract_address;
-                state.host_env.emit_event(
-                    contract_addr,
-                    "event".to_string(),
-                    vec![],
-                );
+                // Read topic and data from WASM linear memory.
+                let memory = match state.memory.as_ref() {
+                    Some(m) => m.clone(),
+                    None => {
+                        // WHY: Fallback to placeholder if memory is not wired.
+                        // This can happen with very minimal WASM modules in tests.
+                        state.host_env.emit_event(
+                            contract_addr,
+                            "event".to_string(),
+                            vec![],
+                        );
+                        return;
+                    }
+                };
+                let view = memory.view(&env);
+                // Read the topic string from WASM memory.
+                let mut topic_buf = vec![0u8; topic_len as usize];
+                if view.read(topic_ptr as u64, &mut topic_buf).is_err() {
+                    state.host_env.emit_event(
+                        contract_addr,
+                        "event".to_string(),
+                        vec![],
+                    );
+                    return;
+                }
+                let topic = String::from_utf8(topic_buf)
+                    .unwrap_or_else(|_| "event".to_string());
+                // Read the data payload from WASM memory.
+                let mut data_buf = vec![0u8; data_len as usize];
+                if view.read(data_ptr as u64, &mut data_buf).is_err() {
+                    state.host_env.emit_event(
+                        contract_addr,
+                        topic,
+                        vec![],
+                    );
+                    return;
+                }
+                state.host_env.emit_event(contract_addr, topic, data_buf);
             },
         );
 
@@ -695,6 +784,7 @@ impl ContractRuntime for WasmerRuntime {
     ) -> Result<(), RuntimeError> {
         validate_bytecode(bytecode, config)?;
 
+        let bytecode_len = bytecode.len();
         let module = wasmer::Module::new(&self.store, bytecode).map_err(|e| {
             RuntimeError::CompilationFailed {
                 reason: e.to_string(),
@@ -702,10 +792,11 @@ impl ContractRuntime for WasmerRuntime {
         })?;
 
         self.modules.insert(contract_address, module);
+        self.bytecode_sizes.insert(contract_address, bytecode_len);
 
         tracing::debug!(
             address = %contract_address,
-            bytecode_size = bytecode.len(),
+            bytecode_size = bytecode_len,
             "Wasmer runtime compiled contract"
         );
 
@@ -741,6 +832,7 @@ impl ContractRuntime for WasmerRuntime {
             gas_meter: gas_meter.clone(),
             aborted: false,
             abort_reason: None,
+            memory: None,
         }));
 
         // Create the FunctionEnv for host function access.
@@ -755,6 +847,20 @@ impl ContractRuntime for WasmerRuntime {
                 reason: e.to_string(),
             }
         })?;
+
+        // Extract the WASM linear memory export and store it in the shared state.
+        // WHY: Host functions (storage_read/write, emit_event, get_caller_address)
+        // need access to the WASM instance's linear memory to transfer data.
+        // The memory must be stored AFTER instantiation because exports only
+        // exist on a live instance.
+        if let Ok(memory) = instance.exports.get_memory("memory") {
+            shared_state.lock().unwrap().memory = Some(memory.clone());
+        }
+
+        // Record the start time for execution time limit enforcement.
+        // WHY: GratiaVM enforces a 500ms max execution time to keep contract
+        // execution within a single block time (3-5s).
+        let execution_start = Instant::now();
 
         // Look up the exported function.
         let func = instance
@@ -811,18 +917,42 @@ impl ContractRuntime for WasmerRuntime {
 
         // Charge a per-instruction estimate for the executed WASM code.
         // WHY: Without full WASM gas metering middleware (which requires
-        // bytecode instrumentation), we approximate the cost based on the
-        // function call. This is a conservative flat charge. Production
-        // would inject gas metering opcodes during compilation.
-        let instruction_estimate: u64 = 1_000;
-        // Instruction estimate: ~1000 gas as baseline for a simple function call.
-        // Real metering would count actual WASM instructions executed.
+        // bytecode instrumentation), we approximate the cost using a
+        // bytecode-size heuristic: bytecode_size / 4 gas. This approximates
+        // ~1 gas per ARM instruction equivalent, since WASM instructions
+        // average roughly 4 bytes each. This is more accurate than a flat
+        // charge and scales with contract complexity. Minimum 100 gas to
+        // cover trivial modules.
+        let bytecode_size = self.bytecode_sizes
+            .get(contract_address)
+            .copied()
+            .unwrap_or(0);
+        let instruction_estimate: u64 = (bytecode_size as u64 / 4).max(100);
         if let Err(e) = gas_meter.charge(instruction_estimate) {
             return Ok(ExecutionOutcome {
                 return_value: ContractValue::Void,
                 gas_used: gas_meter.gas_used(),
                 success: false,
                 error: Some(format!("out of gas after execution: {}", e)),
+            });
+        }
+
+        // Check execution time limit.
+        // WHY: GratiaVM enforces a 500ms max execution time (configured in
+        // SandboxConfig) to keep contract execution within a single block
+        // time (3-5s). If the WASM call exceeded this limit, we mark it as
+        // failed even if the function returned successfully.
+        let elapsed_ms = execution_start.elapsed().as_millis() as u64;
+        // 500ms hard limit — matches SandboxConfig::default().max_execution_time_ms
+        if elapsed_ms > 500 {
+            return Ok(ExecutionOutcome {
+                return_value: ContractValue::Void,
+                gas_used: gas_meter.gas_used(),
+                success: false,
+                error: Some(format!(
+                    "execution time limit exceeded: {}ms > 500ms",
+                    elapsed_ms
+                )),
             });
         }
 
@@ -865,6 +995,7 @@ impl ContractRuntime for WasmerRuntime {
 
     fn unload_contract(&mut self, contract_address: &Address) {
         self.modules.remove(contract_address);
+        self.bytecode_sizes.remove(contract_address);
     }
 }
 
@@ -1382,9 +1513,10 @@ mod wasmer_tests {
             .unwrap();
         let gas_after = gas_meter.gas_used();
 
-        // WHY: Gas should include base_call charge (100) + instruction estimate (1000).
+        // WHY: Gas should include base_call charge (100) + instruction estimate
+        // (bytecode_size/4, min 100). For small test modules, minimum is 100.
         assert!(gas_after > gas_before);
-        assert!(gas_after >= 1100); // At least base_call + instruction estimate
+        assert!(gas_after >= 200); // At least base_call (100) + min instruction estimate (100)
     }
 
     #[test]
@@ -1442,8 +1574,8 @@ mod wasmer_tests {
             .execute_contract(&addr, "check_height", &[], &mut gas_meter, &mut env, &perms)
             .unwrap();
 
-        // Gas should include: base_call (100) + host get_block_height (110) + instruction (1000)
-        assert!(gas_meter.gas_used() >= 1210);
+        // Gas should include: base_call (100) + host get_block_height (110) + instruction (min 100)
+        assert!(gas_meter.gas_used() >= 310);
     }
 
     #[test]
@@ -1464,5 +1596,460 @@ mod wasmer_tests {
         let result =
             runtime.execute_contract(&addr, "anything", &[], &mut gas_meter, &mut env, &perms);
         assert!(matches!(result, Err(RuntimeError::FunctionNotFound { .. })));
+    }
+
+    /// Build a WASM module that exports memory and calls storage_write then storage_read.
+    ///
+    /// This module:
+    /// 1. Writes a 32-byte key at memory offset 0 (all 0xAA bytes)
+    /// 2. Writes an 8-byte value at memory offset 64 (all 0xBB bytes)
+    /// 3. Calls storage_write(key_ptr=0, key_len=32, val_ptr=64, val_len=8)
+    /// 4. Calls storage_read(key_ptr=0, key_len=32) — should write value at offset 32
+    /// 5. Returns the storage_read result (should be 8, the value length)
+    ///
+    /// WAT equivalent:
+    /// ```wat
+    /// (module
+    ///   (import "env" "storage_write" (func $sw (param i32 i32 i32 i32)))
+    ///   (import "env" "storage_read" (func $sr (param i32 i32) (result i32)))
+    ///   (memory (export "memory") 1)
+    ///   (data (i32.const 0) "\AA\AA\AA\AA\AA\AA\AA\AA\AA\AA\AA\AA\AA\AA\AA\AA\AA\AA\AA\AA\AA\AA\AA\AA\AA\AA\AA\AA\AA\AA\AA\AA")
+    ///   (data (i32.const 64) "\BB\BB\BB\BB\BB\BB\BB\BB")
+    ///   (func (export "test_storage") (result i32)
+    ///     i32.const 0    ;; key_ptr
+    ///     i32.const 32   ;; key_len
+    ///     i32.const 64   ;; val_ptr
+    ///     i32.const 8    ;; val_len
+    ///     call $sw
+    ///     i32.const 0    ;; key_ptr
+    ///     i32.const 32   ;; key_len
+    ///     call $sr))
+    /// ```
+    fn wasm_storage_test() -> Vec<u8> {
+        let mut w = Vec::new();
+
+        // Header
+        w.extend_from_slice(&[0x00, 0x61, 0x73, 0x6d]); // magic
+        w.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // version
+
+        // === Type section (id=1) ===
+        // 3 types:
+        //   type 0: (i32, i32, i32, i32) -> void  [storage_write]
+        //   type 1: (i32, i32) -> i32              [storage_read]
+        //   type 2: () -> i32                      [test_storage]
+        let type_payload: Vec<u8> = vec![
+            0x03, // 3 types
+            // type 0: (i32, i32, i32, i32) -> void
+            0x60, 0x04, 0x7f, 0x7f, 0x7f, 0x7f, 0x00,
+            // type 1: (i32, i32) -> i32
+            0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f,
+            // type 2: () -> i32
+            0x60, 0x00, 0x01, 0x7f,
+        ];
+        w.push(0x01); // section id
+        w.push(type_payload.len() as u8);
+        w.extend_from_slice(&type_payload);
+
+        // === Import section (id=2) ===
+        // 2 imports: env.storage_write (type 0), env.storage_read (type 1)
+        let mut import_payload = Vec::new();
+        import_payload.push(0x02); // 2 imports
+        // import 0: env.storage_write
+        import_payload.push(0x03); // module name len
+        import_payload.extend_from_slice(b"env");
+        import_payload.push(0x0d); // field name len = 13
+        import_payload.extend_from_slice(b"storage_write");
+        import_payload.push(0x00); // func
+        import_payload.push(0x00); // type index 0
+        // import 1: env.storage_read
+        import_payload.push(0x03);
+        import_payload.extend_from_slice(b"env");
+        import_payload.push(0x0c); // field name len = 12
+        import_payload.extend_from_slice(b"storage_read");
+        import_payload.push(0x00); // func
+        import_payload.push(0x01); // type index 1
+        w.push(0x02);
+        w.push(import_payload.len() as u8);
+        w.extend_from_slice(&import_payload);
+
+        // === Function section (id=3) ===
+        // 1 function: test_storage (type 2)
+        w.extend_from_slice(&[0x03, 0x02, 0x01, 0x02]);
+
+        // === Memory section (id=5) ===
+        // 1 memory, min 1 page, no max
+        w.extend_from_slice(&[0x05, 0x03, 0x01, 0x00, 0x01]);
+
+        // === Export section (id=7) ===
+        // 2 exports: "memory" (memory 0), "test_storage" (func 2)
+        let mut export_payload = Vec::new();
+        export_payload.push(0x02); // 2 exports
+        // export "memory"
+        export_payload.push(0x06); // name len
+        export_payload.extend_from_slice(b"memory");
+        export_payload.push(0x02); // memory export
+        export_payload.push(0x00); // memory index 0
+        // export "test_storage"
+        export_payload.push(0x0c); // name len = 12
+        export_payload.extend_from_slice(b"test_storage");
+        export_payload.push(0x00); // function export
+        export_payload.push(0x02); // function index 2 (after 2 imports)
+        w.push(0x07);
+        w.push(export_payload.len() as u8);
+        w.extend_from_slice(&export_payload);
+
+        // === Code section (id=10) ===
+        // test_storage function body:
+        //   i32.const 0, i32.const 32, i32.const 64, i32.const 8, call $0
+        //   i32.const 0, i32.const 32, call $1
+        //   end
+        let body: Vec<u8> = vec![
+            0x00, // 0 locals
+            0x41, 0x00, // i32.const 0 (key_ptr)
+            0x41, 0x20, // i32.const 32 (key_len)
+            0x41, 0xc0, 0x00, // i32.const 64 (val_ptr) — LEB128 of 64
+            0x41, 0x08, // i32.const 8 (val_len)
+            0x10, 0x00, // call $0 (storage_write, import index 0)
+            0x41, 0x00, // i32.const 0 (key_ptr)
+            0x41, 0x20, // i32.const 32 (key_len)
+            0x10, 0x01, // call $1 (storage_read, import index 1)
+            0x0b, // end
+        ];
+        let body_with_size = {
+            let mut v = Vec::new();
+            v.push(body.len() as u8); // body size
+            v.extend_from_slice(&body);
+            v
+        };
+        let mut code_payload = Vec::new();
+        code_payload.push(0x01); // 1 body
+        code_payload.extend_from_slice(&body_with_size);
+        w.push(0x0a);
+        w.push(code_payload.len() as u8);
+        w.extend_from_slice(&code_payload);
+
+        // === Data section (id=11) ===
+        // 2 data segments:
+        //   segment 0: offset 0, 32 bytes of 0xAA (the storage key)
+        //   segment 1: offset 64, 8 bytes of 0xBB (the storage value)
+        let mut data_payload = Vec::new();
+        data_payload.push(0x02); // 2 segments
+        // segment 0: memory 0, offset 0, 32 bytes of 0xAA
+        data_payload.push(0x00); // flags: active, memory 0
+        data_payload.extend_from_slice(&[0x41, 0x00, 0x0b]); // i32.const 0, end
+        data_payload.push(0x20); // 32 bytes
+        data_payload.extend_from_slice(&[0xAA; 32]);
+        // segment 1: memory 0, offset 64, 8 bytes of 0xBB
+        data_payload.push(0x00); // flags
+        data_payload.extend_from_slice(&[0x41, 0xc0, 0x00, 0x0b]); // i32.const 64, end
+        data_payload.push(0x08); // 8 bytes
+        data_payload.extend_from_slice(&[0xBB; 8]);
+        w.push(0x0b);
+        w.push(data_payload.len() as u8);
+        w.extend_from_slice(&data_payload);
+
+        w
+    }
+
+    /// Build a WASM module with memory that calls get_caller_address and
+    /// returns the first byte of the address written at memory offset 0.
+    ///
+    /// WAT:
+    /// ```wat
+    /// (module
+    ///   (import "env" "get_caller_address" (func $gca (result i32)))
+    ///   (memory (export "memory") 1)
+    ///   (func (export "check_caller") (result i32)
+    ///     call $gca        ;; writes 32 bytes to memory[0], returns 32
+    ///     drop
+    ///     i32.const 0
+    ///     i32.load8_u))    ;; load first byte from memory[0]
+    /// ```
+    fn wasm_get_caller_with_memory() -> Vec<u8> {
+        let mut w = Vec::new();
+
+        // Header
+        w.extend_from_slice(&[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
+
+        // Type section: 1 type () -> i32
+        w.extend_from_slice(&[0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f]);
+
+        // Import section: env.get_caller_address (type 0)
+        let mut imp = Vec::new();
+        imp.push(0x01); // 1 import
+        imp.push(0x03); // module name len
+        imp.extend_from_slice(b"env");
+        imp.push(0x12); // field name len = 18
+        imp.extend_from_slice(b"get_caller_address");
+        imp.push(0x00); // func
+        imp.push(0x00); // type 0
+        w.push(0x02);
+        w.push(imp.len() as u8);
+        w.extend_from_slice(&imp);
+
+        // Function section: 1 function (type 0)
+        w.extend_from_slice(&[0x03, 0x02, 0x01, 0x00]);
+
+        // Memory section: 1 page
+        w.extend_from_slice(&[0x05, 0x03, 0x01, 0x00, 0x01]);
+
+        // Export section: "memory" + "check_caller"
+        let mut exp = Vec::new();
+        exp.push(0x02); // 2 exports
+        exp.push(0x06); // "memory"
+        exp.extend_from_slice(b"memory");
+        exp.push(0x02); // memory
+        exp.push(0x00);
+        exp.push(0x0c); // "check_caller" len=12
+        exp.extend_from_slice(b"check_caller");
+        exp.push(0x00); // function
+        exp.push(0x01); // function index 1 (after 1 import)
+        w.push(0x07);
+        w.push(exp.len() as u8);
+        w.extend_from_slice(&exp);
+
+        // Code section
+        let body: Vec<u8> = vec![
+            0x00, // 0 locals
+            0x10, 0x00, // call $0 (get_caller_address)
+            0x1a, // drop (discard the return value of 32)
+            0x41, 0x00, // i32.const 0
+            0x2d, 0x00, 0x00, // i32.load8_u offset=0 align=0
+            0x0b, // end
+        ];
+        let mut code_payload = Vec::new();
+        code_payload.push(0x01); // 1 body
+        code_payload.push(body.len() as u8); // body size
+        code_payload.extend_from_slice(&body);
+        w.push(0x0a);
+        w.push(code_payload.len() as u8);
+        w.extend_from_slice(&code_payload);
+
+        w
+    }
+
+    #[test]
+    fn test_wasmer_storage_read_write_via_memory() {
+        let mut runtime = WasmerRuntime::new();
+        let addr = Address([2u8; 32]);
+        let bytecode = wasm_storage_test();
+
+        runtime
+            .load_contract(addr, &bytecode, &SandboxConfig::default())
+            .unwrap();
+
+        let mut gas_meter = GasMeter::new(1_000_000);
+        let mut env = make_test_env();
+        let perms = ContractPermissions::default();
+
+        let result = runtime
+            .execute_contract(&addr, "test_storage", &[], &mut gas_meter, &mut env, &perms)
+            .unwrap();
+
+        // WHY: The WASM module writes key [0xAA; 32] with value [0xBB; 8],
+        // then reads it back. storage_read should return 8 (the value length).
+        assert!(result.success, "execution failed: {:?}", result.error);
+        assert_eq!(result.return_value, ContractValue::I32(8));
+
+        // Verify the storage was actually written in the host environment.
+        let key = [0xAAu8; 32];
+        let stored = env.storage_read(&key);
+        assert!(stored.is_some(), "storage key not found after write");
+        assert_eq!(stored.unwrap(), &vec![0xBBu8; 8]);
+    }
+
+    #[test]
+    fn test_wasmer_get_caller_address_full_32_bytes() {
+        let mut runtime = WasmerRuntime::new();
+        let addr = Address([3u8; 32]);
+        let bytecode = wasm_get_caller_with_memory();
+
+        runtime
+            .load_contract(addr, &bytecode, &SandboxConfig::default())
+            .unwrap();
+
+        let mut gas_meter = GasMeter::new(1_000_000);
+        // WHY: Set caller address to [0x42; 32] so we can verify the first byte
+        // is 0x42 after get_caller_address writes the full 32 bytes to memory.
+        let mut env = HostEnvironment::new(1, 1700000000, Address([0x42u8; 32]), 1_000_000);
+        let perms = ContractPermissions::default();
+
+        let result = runtime
+            .execute_contract(&addr, "check_caller", &[], &mut gas_meter, &mut env, &perms)
+            .unwrap();
+
+        assert!(result.success, "execution failed: {:?}", result.error);
+        // The function loads the first byte from memory[0] after get_caller_address
+        // writes the full 32-byte address there. Should be 0x42.
+        assert_eq!(result.return_value, ContractValue::I32(0x42));
+    }
+
+    #[test]
+    fn test_wasmer_bytecode_size_gas_metering() {
+        // WHY: Verify that gas metering scales with bytecode size rather than
+        // using a flat estimate. A larger module should cost more gas.
+        let mut runtime = WasmerRuntime::new();
+        let addr1 = Address([1u8; 32]);
+        let addr2 = Address([2u8; 32]);
+
+        let small_bytecode = wasm_return_42();
+        let large_bytecode = wasm_storage_test();
+
+        runtime
+            .load_contract(addr1, &small_bytecode, &SandboxConfig::default())
+            .unwrap();
+        runtime
+            .load_contract(addr2, &large_bytecode, &SandboxConfig::default())
+            .unwrap();
+
+        let mut gas_small = GasMeter::new(1_000_000);
+        let mut gas_large = GasMeter::new(1_000_000);
+        let mut env1 = make_test_env();
+        let mut env2 = make_test_env();
+        let perms = ContractPermissions::default();
+
+        runtime
+            .execute_contract(&addr1, "get_value", &[], &mut gas_small, &mut env1, &perms)
+            .unwrap();
+        runtime
+            .execute_contract(&addr2, "test_storage", &[], &mut gas_large, &mut env2, &perms)
+            .unwrap();
+
+        // WHY: The storage test module is larger and calls host functions,
+        // so it should consume more gas than the simple return-42 module.
+        assert!(
+            gas_large.gas_used() > gas_small.gas_used(),
+            "larger module ({}) should cost more gas than smaller module ({})",
+            gas_large.gas_used(),
+            gas_small.gas_used()
+        );
+    }
+
+    #[test]
+    fn test_wasmer_storage_read_nonexistent_key() {
+        // WHY: Verify that reading a key that was never written returns -1.
+        // We build a WASM module that only calls storage_read (no write first).
+        // We reuse the storage test module but pre-clear storage so the key
+        // 0xAA..AA won't be found during the read.
+        //
+        // Actually, the storage_test module calls write then read, so both happen.
+        // Instead, we construct a simpler module that only reads.
+        let mut w = Vec::new();
+        w.extend_from_slice(&[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
+
+        // Type section: 1 type (i32, i32) -> i32
+        w.extend_from_slice(&[
+            0x01, 0x06, 0x01, 0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f,
+        ]);
+
+        // Import section: env.storage_read
+        let mut imp = Vec::new();
+        imp.push(0x01);
+        imp.push(0x03);
+        imp.extend_from_slice(b"env");
+        imp.push(0x0c);
+        imp.extend_from_slice(b"storage_read");
+        imp.push(0x00);
+        imp.push(0x00);
+        w.push(0x02);
+        w.push(imp.len() as u8);
+        w.extend_from_slice(&imp);
+
+        // Function section: 1 func, type 0 rewritten to () -> i32
+        // We need a separate type for the exported function: () -> i32
+        // Let's redo type section with 2 types.
+        // Actually, let me just rebuild properly.
+        let mut w = Vec::new();
+        w.extend_from_slice(&[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
+
+        // Type section: 2 types
+        let type_payload = vec![
+            0x02,
+            0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f, // type 0: (i32, i32) -> i32
+            0x60, 0x00, 0x01, 0x7f, // type 1: () -> i32
+        ];
+        w.push(0x01);
+        w.push(type_payload.len() as u8);
+        w.extend_from_slice(&type_payload);
+
+        // Import: env.storage_read (type 0)
+        let mut imp = Vec::new();
+        imp.push(0x01);
+        imp.push(0x03);
+        imp.extend_from_slice(b"env");
+        imp.push(0x0c);
+        imp.extend_from_slice(b"storage_read");
+        imp.push(0x00);
+        imp.push(0x00);
+        w.push(0x02);
+        w.push(imp.len() as u8);
+        w.extend_from_slice(&imp);
+
+        // Function section: 1 func (type 1)
+        w.extend_from_slice(&[0x03, 0x02, 0x01, 0x01]);
+
+        // Memory section: 1 page
+        w.extend_from_slice(&[0x05, 0x03, 0x01, 0x00, 0x01]);
+
+        // Export: "memory" and "read_only"
+        let mut exp = Vec::new();
+        exp.push(0x02);
+        exp.push(0x06);
+        exp.extend_from_slice(b"memory");
+        exp.push(0x02);
+        exp.push(0x00);
+        exp.push(0x09); // "read_only" len=9
+        exp.extend_from_slice(b"read_only");
+        exp.push(0x00);
+        exp.push(0x01); // func index 1
+        w.push(0x07);
+        w.push(exp.len() as u8);
+        w.extend_from_slice(&exp);
+
+        // Code section: call storage_read(0, 32) and return result
+        let body: Vec<u8> = vec![
+            0x00, // 0 locals
+            0x41, 0x00, // i32.const 0
+            0x41, 0x20, // i32.const 32
+            0x10, 0x00, // call $0 (storage_read)
+            0x0b, // end
+        ];
+        let mut code_payload = Vec::new();
+        code_payload.push(0x01);
+        code_payload.push(body.len() as u8);
+        code_payload.extend_from_slice(&body);
+        w.push(0x0a);
+        w.push(code_payload.len() as u8);
+        w.extend_from_slice(&code_payload);
+
+        // Data section: write 32 bytes of 0xCC at offset 0 (key)
+        let mut data_payload = Vec::new();
+        data_payload.push(0x01); // 1 segment
+        data_payload.push(0x00);
+        data_payload.extend_from_slice(&[0x41, 0x00, 0x0b]);
+        data_payload.push(0x20); // 32 bytes
+        data_payload.extend_from_slice(&[0xCC; 32]);
+        w.push(0x0b);
+        w.push(data_payload.len() as u8);
+        w.extend_from_slice(&data_payload);
+
+        let mut runtime = WasmerRuntime::new();
+        let addr = Address([4u8; 32]);
+
+        runtime
+            .load_contract(addr, &w, &SandboxConfig::default())
+            .unwrap();
+
+        let mut gas_meter = GasMeter::new(1_000_000);
+        let mut env = make_test_env();
+        let perms = ContractPermissions::default();
+
+        let result = runtime
+            .execute_contract(&addr, "read_only", &[], &mut gas_meter, &mut env, &perms)
+            .unwrap();
+
+        // Key 0xCC..CC was never written, so storage_read should return -1.
+        assert!(result.success, "execution failed: {:?}", result.error);
+        assert_eq!(result.return_value, ContractValue::I32(-1));
     }
 }

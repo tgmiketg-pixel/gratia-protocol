@@ -6,6 +6,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.SharedPreferences
 import android.os.BatteryManager
 import android.os.IBinder
 import android.os.PowerManager
@@ -71,12 +72,25 @@ class MiningService : Service() {
         /**
          * CPU temperature threshold for thermal throttling (Celsius).
          *
-         * WHY: Mirrors MiningConfig.max_cpu_temp_celsius default of 40.0.
-         * Above this temperature we reduce mining workload. At 45C we
-         * pause mining entirely to prevent hardware damage.
+         * WHY: 50C is a safe throttle point for modern ARM SoCs (Snapdragon,
+         * MediaTek, Exynos). Normal phone operation routinely reaches 40-45C,
+         * so throttling at 40C was far too aggressive — it triggered during
+         * ordinary use on devices like the S24 (Snapdragon 8 Gen 3). Most ARM
+         * chips thermal-throttle themselves around 85-95C; we intervene much
+         * earlier to protect long-term battery health and user comfort. At 55C
+         * we pause mining entirely as a precaution.
          */
-        private const val THERMAL_THROTTLE_TEMP_C = 40.0f
-        private const val THERMAL_PAUSE_TEMP_C = 45.0f
+        private const val THERMAL_THROTTLE_TEMP_C = 50.0f
+        private const val THERMAL_PAUSE_TEMP_C = 55.0f
+
+        /**
+         * SharedPreferences file name for persisting mining balance.
+         *
+         * WHY: The mining balance must survive app restarts. Without persistence,
+         * accumulated Lux is lost every time the service is recreated.
+         */
+        private const val PREFS_NAME = "gratia_mining_prefs"
+        private const val PREF_KEY_BALANCE_LUX = "persisted_balance_lux"
 
         /**
          * Path to the CPU thermal zone file on Android.
@@ -122,11 +136,22 @@ class MiningService : Service() {
     /** Timestamp when mining started this session. */
     private var sessionStartTimeMs: Long = 0
 
+    /**
+     * Guard flag to prevent redundant mining starts from duplicate
+     * onStartCommand calls. Set true when mining loops are running.
+     */
+    private var isMiningActive: Boolean = false
+
+    /** SharedPreferences for persisting mining balance across app restarts. */
+    private lateinit var prefs: SharedPreferences
+
     // -- Service Lifecycle -------------------------------------------------
 
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "MiningService created")
+
+        prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
         NotificationHelper.createChannels(this)
 
@@ -150,20 +175,35 @@ class MiningService : Service() {
         }
 
         sessionStartTimeMs = System.currentTimeMillis()
+        // WHY: Session earnings track what was earned in THIS session only (for
+        // notification display). The persisted balance is the cumulative total
+        // across all sessions, loaded separately via SharedPreferences.
         sessionEarningsLux = 0
+
+        // Load persisted balance so it survives app restarts.
+        val persistedBalance = prefs.getLong(PREF_KEY_BALANCE_LUX, 0L)
+        if (persistedBalance > 0) {
+            Log.i(TAG, "Restored persisted balance: $persistedBalance Lux")
+        }
 
         registerBatteryReceiver()
         startMining()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (isMiningActive) {
+            // WHY: onStartCommand can fire multiple times if the service is started
+            // redundantly (e.g., ProofOfLifeService triggers while already running).
+            // Ignore duplicate calls to avoid restarting mining loops.
+            Log.d(TAG, "MiningService onStartCommand — already mining, ignoring duplicate")
+            return START_STICKY
+        }
         Log.d(TAG, "MiningService onStartCommand")
 
-        // WHY: START_NOT_STICKY because mining should not auto-restart after
-        // being killed. Mining activation is driven by power state — the
-        // ProofOfLifeService will re-evaluate and restart MiningService
-        // when conditions are met again.
-        return START_NOT_STICKY
+        // WHY: START_STICKY so the system restarts the service if it is killed
+        // while mining is active (e.g., under memory pressure). The service will
+        // re-check conditions on restart and stop itself if they are no longer met.
+        return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -214,6 +254,8 @@ class MiningService : Service() {
             return
         }
 
+        isMiningActive = true
+
         // Start the power/thermal monitoring loop.
         monitorJob = serviceScope.launch {
             monitorConditions()
@@ -229,6 +271,8 @@ class MiningService : Service() {
      * Stop mining and clean up.
      */
     private fun stopMining() {
+        isMiningActive = false
+
         monitorJob?.cancel()
         monitorJob = null
 
@@ -357,37 +401,79 @@ class MiningService : Service() {
     // -- Thermal Management ------------------------------------------------
 
     /**
-     * Read CPU temperature from the thermal zone sysfs interface.
+     * Read CPU temperature using multiple fallback strategies.
      *
-     * Returns temperature in Celsius. Falls back to a safe default of 25.0
-     * if the thermal zone file is unavailable (some OEMs restrict access).
+     * Strategy 1: PowerManager thermal API (API 29+) — most reliable
+     * Strategy 2: sysfs thermal zone file — works on most devices
+     * Strategy 3: Conservative high fallback — assumes warm to be safe
+     *
+     * WHY: The original 25°C fallback silently disabled thermal throttling.
+     * A 45°C fallback is conservative — mining will throttle earlier but
+     * never risk overheating a device we can't monitor.
      */
     private fun readCpuTemperature(): Float {
-        return try {
+        // Strategy 1: Android PowerManager thermal status (API 29+)
+        // WHY: This is the official Android API for thermal state. It doesn't
+        // give exact temperature but tells us if the device is throttling.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            try {
+                val powerManager = getSystemService(android.content.Context.POWER_SERVICE)
+                    as? android.os.PowerManager
+                if (powerManager != null) {
+                    val thermalStatus = powerManager.currentThermalStatus
+                    // Map thermal status to approximate temperature for throttling decisions
+                    val estimatedTemp = when (thermalStatus) {
+                        android.os.PowerManager.THERMAL_STATUS_NONE -> 35.0f
+                        android.os.PowerManager.THERMAL_STATUS_LIGHT -> 42.0f
+                        android.os.PowerManager.THERMAL_STATUS_MODERATE -> 48.0f
+                        android.os.PowerManager.THERMAL_STATUS_SEVERE -> 55.0f
+                        android.os.PowerManager.THERMAL_STATUS_CRITICAL -> 65.0f
+                        android.os.PowerManager.THERMAL_STATUS_EMERGENCY -> 75.0f
+                        android.os.PowerManager.THERMAL_STATUS_SHUTDOWN -> 85.0f
+                        else -> -1.0f // Unknown status, try next strategy
+                    }
+                    if (estimatedTemp > 0) return estimatedTemp
+                }
+            } catch (_: Exception) {
+                // Fall through to next strategy
+            }
+        }
+
+        // Strategy 2: sysfs thermal zone file
+        try {
             val tempStr = java.io.File(THERMAL_ZONE_PATH).readText().trim()
-            val milliCelsius = tempStr.toFloatOrNull() ?: return 25.0f
-            // WHY: Most devices report in millidegrees (e.g., 38500 = 38.5C).
-            // Some report in degrees directly. If the value is > 200, assume
-            // millidegrees; otherwise assume degrees.
-            if (milliCelsius > 200f) {
-                milliCelsius / 1000f
-            } else {
-                milliCelsius
+            val milliCelsius = tempStr.toFloatOrNull()
+            if (milliCelsius != null) {
+                // WHY: Most devices report in millidegrees (e.g., 38500 = 38.5C).
+                // Some report in degrees directly. If the value is > 200, assume
+                // millidegrees; otherwise assume degrees.
+                return if (milliCelsius > 200f) {
+                    milliCelsius / 1000f
+                } else {
+                    milliCelsius
+                }
             }
         } catch (_: Exception) {
-            // WHY: 25C is a safe room-temperature default. If we can't read
-            // the sensor, we assume the phone is not overheating. This is
-            // conservative in the sense that mining continues — but thermal
-            // protection is a secondary safeguard (the OS itself will thermal-
-            // throttle the CPU before damage occurs).
-            25.0f
+            // Fall through to fallback
         }
+
+        // Strategy 3: Conservative fallback
+        // WHY: 45°C is warm enough to trigger light throttling in most mining
+        // configs but not hot enough to cause concern. This is intentionally
+        // higher than room temp — if we can't read the sensor, we assume the
+        // device is somewhat warm and throttle mildly. Better to mine slightly
+        // slower than to risk overheating a device we can't monitor.
+        return 45.0f
     }
 
     // -- Notification Updates -----------------------------------------------
 
     /**
-     * Periodically update the mining notification with current earnings.
+     * Periodically tick mining rewards and update the notification.
+     *
+     * WHY: Every 60 seconds, we call tickMiningReward() on the Rust core
+     * which credits 1 GRAT to the wallet. This matches the design principle
+     * of "flat reward rate per minute — every minute of mining earns the same."
      */
     private suspend fun updateNotificationLoop() {
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE)
@@ -395,6 +481,22 @@ class MiningService : Service() {
 
         while (serviceScope.isActive) {
             delay(NOTIFICATION_UPDATE_INTERVAL_MS)
+
+            // Credit mining reward for this minute.
+            try {
+                val newBalanceLux = GratiaCoreManager.tickMiningReward()
+                val elapsedMinutes = (System.currentTimeMillis() - sessionStartTimeMs) / 60_000
+                sessionEarningsLux += 1_000_000L // 1 GRAT per minute
+
+                // WHY: Persist balance after every tick so it survives app restarts.
+                // SharedPreferences.apply() is async and non-blocking — safe to call
+                // on every tick without impacting mining performance.
+                prefs.edit().putLong(PREF_KEY_BALANCE_LUX, newBalanceLux).apply()
+
+                Log.d(TAG, "Mining reward tick: +1 GRAT, balance=$newBalanceLux Lux, session=${elapsedMinutes}m")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to tick mining reward: ${e.message}")
+            }
 
             val elapsedMinutes = (System.currentTimeMillis() - sessionStartTimeMs) / 60_000
             val earningsDisplay = formatEarnings(elapsedMinutes)

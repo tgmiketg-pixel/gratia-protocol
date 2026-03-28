@@ -14,11 +14,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -101,11 +103,17 @@ fun NetworkScreen(
                 }
             }
 
-            // WHY: Manual peer connection card removed. mDNS handles peer
-            // discovery automatically on the same Wi-Fi. Manual multiaddr
-            // input will return when bootstrap peers are added for cross-
-            // network connectivity (Phase 3). The connectPeer() bridge
-            // method is preserved for future use.
+            // Mesh transport card (Phase 3 — Bluetooth + Wi-Fi Direct)
+            if (state.isNetworkRunning) {
+                item {
+                    MeshTransportCard(
+                        meshStatus = state.meshStatus,
+                        isLoading = state.isMeshLoading,
+                        onStart = { viewModel.startMesh() },
+                        onStop = { viewModel.stopMesh() },
+                    )
+                }
+            }
 
             // Error message
             if (state.errorMessage != null) {
@@ -369,6 +377,131 @@ private fun StatColumn(label: String, value: String) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
         )
+    }
+}
+
+// ============================================================================
+// Mesh Transport Card (Phase 3)
+// ============================================================================
+
+@Composable
+private fun MeshTransportCard(
+    meshStatus: MeshStatus,
+    isLoading: Boolean,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Mesh Transport",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = if (meshStatus.enabled) "Active" else "Inactive",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (meshStatus.enabled) SignalGreen else MaterialTheme.colorScheme.outline,
+                )
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Text(
+                text = "Bluetooth LE + Wi-Fi Direct for offline peer-to-peer connectivity.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            )
+
+            if (meshStatus.enabled) {
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Transport indicators
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Bluetooth,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = if (meshStatus.bluetoothActive) SignalGreen
+                                   else MaterialTheme.colorScheme.outline,
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "BLE",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (meshStatus.bluetoothActive) SignalGreen
+                                    else MaterialTheme.colorScheme.outline,
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Wifi,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = if (meshStatus.wifiDirectActive) SignalGreen
+                                   else MaterialTheme.colorScheme.outline,
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Wi-Fi Direct",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (meshStatus.wifiDirectActive) SignalGreen
+                                    else MaterialTheme.colorScheme.outline,
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                Divider()
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Peer stats
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                ) {
+                    StatColumn("Mesh Peers", "${meshStatus.meshPeerCount}")
+                    StatColumn("Bridge Peers", "${meshStatus.bridgePeerCount}")
+                    StatColumn("Pending Relay", "${meshStatus.pendingRelayCount}")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            if (meshStatus.enabled) {
+                OutlinedButton(
+                    onClick = onStop,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error,
+                    ),
+                ) {
+                    Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Stop Mesh")
+                }
+            } else {
+                Button(
+                    onClick = onStart,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !isLoading,
+                ) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(if (isLoading) "Starting..." else "Start Mesh")
+                }
+            }
+        }
     }
 }
 

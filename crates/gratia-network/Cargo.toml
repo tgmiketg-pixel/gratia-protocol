@@ -14,3 +14,4 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 libp2p = { workspace = true }
 bytes = { workspace = true }
+sha2 = { workspace = true }
