@@ -3267,14 +3267,12 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                                 ));
                             }
 
-                            // WHY: Persist on-chain state to disk every 5 blocks.
-                            // Every block (~4 seconds) causes excessive flash writes.
-                            // Every 5 blocks (~20 seconds) keeps state loss to under
-                            // a minute in the worst case while being gentle on flash.
-                            // During testnet with 2-3 phones, losing 5 blocks is trivial
-                            // to re-sync. In production with RocksDB, this becomes a
-                            // WAL flush instead of a full serialization.
-                            if finalized_height % 5 == 0 {
+                            // WHY: Persist on-chain state every block so the on-chain
+                            // balance always matches the wallet display. Prevents
+                            // transaction rejections from stale state. Flash wear is
+                            // minimal (~1KB every 4 seconds). In production with
+                            // RocksDB, this becomes a WAL flush.
+                            {
                                 if let Some(ref store) = guard.state_store {
                                     let state_path = format!("{}/chain_state.db",
                                         guard.chain_persistence.as_ref()
