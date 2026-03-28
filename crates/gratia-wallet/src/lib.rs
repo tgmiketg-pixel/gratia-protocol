@@ -185,6 +185,16 @@ impl<K: Keystore> WalletManager<K> {
         self.balance
     }
 
+    /// Get the current transaction nonce.
+    pub fn nonce(&self) -> u64 {
+        self.nonce
+    }
+
+    /// Set the nonce from on-chain state (used to sync after restart).
+    pub fn set_nonce(&mut self, nonce: u64) {
+        self.nonce = nonce;
+    }
+
     /// Update the cached balance from network state.
     ///
     /// Placeholder — in production, this queries gratia-state for the

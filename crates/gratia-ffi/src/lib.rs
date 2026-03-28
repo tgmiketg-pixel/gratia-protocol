@@ -872,6 +872,18 @@ impl GratiaNode {
         // network congestion and transaction size.
         let fee: u64 = 1000; // Placeholder fee — ~0.001 GRAT
 
+        // WHY: Sync the wallet nonce from on-chain state before sending.
+        // After an app restart, the wallet's local nonce resets to 0 but
+        // the on-chain nonce may be higher from previous transactions.
+        // Using a stale nonce causes the transaction to be rejected.
+        if let (Some(ref sm), Ok(our_addr)) = (&inner.state_manager, inner.wallet.address()) {
+            let acct = sm.get_account(&our_addr).unwrap_or_default();
+            if acct.nonce > inner.wallet.nonce() {
+                inner.wallet.set_nonce(acct.nonce);
+                rust_log(&format!("Nonce synced from on-chain state: {}", acct.nonce));
+            }
+        }
+
         let tx = inner.wallet.send_transfer(recipient, amount, fee)?;
         let hash_hex = hex::encode(tx.hash.0);
 
