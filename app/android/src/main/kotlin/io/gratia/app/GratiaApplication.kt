@@ -129,44 +129,26 @@ class GratiaApplication : Application() {
             }
             Log.i(TAG, "P2P network status — listening on: ${status?.listenAddress ?: "unknown"}, peers: ${status?.peerCount ?: 0}")
 
-            // WHY: Staged startup sequence. Each component waits for the
-            // previous one to stabilize before starting:
-            //
-            //   t=0s   Network starts (above) — UDP listener + mDNS begin
-            //   t=10s  Explorer API — serves chain data, doesn't need peers
-            //   t=10s  GratiaVM — deploys demo contracts, doesn't need peers
-            //   t=15s  Consensus — by now mDNS has discovered peers (1-2s),
-            //          gossipsub mesh has formed (~10s heartbeat on mobile),
-            //          and NodeAnnouncements have propagated. Starting consensus
-            //          here means the committee is built with real peer data
-            //          instead of only synthetic padding nodes.
-            //
-            // WHY 15 seconds for consensus: mDNS discovery takes 1-2s, but the
-            // gossipsub mesh needs at least one heartbeat cycle (configured at
-            // 30s, but initial subscription propagation is faster). 15s gives
-            // enough time for peer discovery + gossip subscription + node
-            // announcement exchange, while still feeling responsive to the user.
+            // WHY: Start everything quickly. The bootstrap node is a known
+            // address so peer discovery is near-instant (no mDNS needed).
+            // A 2-second delay gives the network listener time to bind
+            // before consensus tries to use it.
             Thread {
-                Thread.sleep(10_000)
+                Thread.sleep(2_000)
 
-                // Explorer API — lightweight, no peer dependency
+                // Explorer API + GratiaVM — no peer dependency
                 try {
                     val url = GratiaCoreManager.startExplorerApi(8080)
                     Log.i(TAG, "Explorer API started: $url")
                 } catch (e: Exception) {
                     Log.w(TAG, "Explorer API start failed: ${e.message}")
                 }
-
-                // GratiaVM — deploys demo contracts
                 try {
                     val contracts = GratiaCoreManager.initVm()
                     Log.i(TAG, "GratiaVM initialized: ${contracts.size} contracts deployed")
                 } catch (e: Exception) {
                     Log.w(TAG, "GratiaVM init failed: ${e.message}")
                 }
-
-                // Wait for gossipsub mesh to form before starting consensus
-                Thread.sleep(5_000)
 
                 try {
                     val consensusStatus = GratiaCoreManager.startConsensus()
