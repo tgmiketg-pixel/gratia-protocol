@@ -218,7 +218,25 @@ private fun WalletContent(
     onSendClick: () -> Unit,
     onReceiveClick: () -> Unit,
 ) {
-    val wallet = state.walletInfo ?: return
+    val wallet = state.walletInfo ?: run {
+        // WHY: On fresh install the wallet info may be null briefly while the
+        // Rust core initialises key generation. Show a loading hint instead of
+        // a blank screen so the user knows the app is working.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 48.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "Loading wallet...",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                textAlign = TextAlign.Center,
+            )
+        }
+        return
+    }
 
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
@@ -536,8 +554,11 @@ private fun SendDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    // Validate address — must be "grat:" followed by exactly 64 hex chars
-                    if (!toAddress.matches(Regex("grat:[0-9a-fA-F]{64}"))) {
+                    // Validate address — must be "grat:" followed by exactly 64 lowercase hex chars.
+                    // WHY: Gratia addresses are derived from Ed25519 public key hashes and are
+                    // always lowercase. Accepting uppercase would allow ambiguous representations
+                    // of the same address, which could cause user confusion and checksum issues.
+                    if (!toAddress.matches(Regex("grat:[0-9a-f]{64}"))) {
                         addressError = "Invalid address format"
                         return@Button
                     }

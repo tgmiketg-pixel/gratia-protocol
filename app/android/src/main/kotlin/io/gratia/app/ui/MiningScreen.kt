@@ -172,11 +172,9 @@ private fun MiningContent(
             }
         }
 
-        // Presence Score (only show if above threshold)
-        if (mining.presenceScore > 0) {
-            item {
-                PresenceScoreCard(mining.presenceScore)
-            }
+        // Presence Score — always visible so users know the metric exists
+        item {
+            PresenceScoreCard(mining.presenceScore)
         }
 
         // Earnings summary
@@ -531,12 +529,21 @@ private fun PresenceScoreCard(score: Int) {
             )
             Spacer(modifier = Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.Bottom) {
-                Text(
-                    text = "$score",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary,
-                )
+                if (score == 0) {
+                    Text(
+                        text = "Not yet calculated",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    )
+                } else {
+                    Text(
+                        text = "$score",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
                 Text(
                     text = " / 100",
                     style = MaterialTheme.typography.bodyMedium,

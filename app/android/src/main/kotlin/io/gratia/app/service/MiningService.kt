@@ -55,19 +55,21 @@ class MiningService : Service() {
         /**
          * How often to check power state and thermal conditions (milliseconds).
          *
-         * WHY: 30 seconds balances responsiveness (stop mining quickly when
-         * unplugged) against battery/CPU overhead of the check itself.
-         * Matches the Rust-side power_check_interval_secs = 30.
+         * WHY: 10 seconds ensures mining stops promptly when conditions change
+         * (e.g., battery drops below 80%). The broadcast receiver handles
+         * instant unplug detection, but gradual battery drain needs polling.
+         * 30 seconds was too slow — users could mine for up to 30s below 80%.
          */
-        private const val POWER_CHECK_INTERVAL_MS = 30_000L
+        private const val POWER_CHECK_INTERVAL_MS = 10_000L
 
         /**
          * How often to update the mining notification with earnings info (ms).
          *
-         * WHY: 60 seconds matches the flat per-minute reward rate. Updating
-         * more frequently would show fractional earnings which is confusing.
+         * WHY: 15 seconds keeps the notification visually responsive so users
+         * can see mining is actively running. The reward tick still happens
+         * once per minute, but elapsed time and status update more frequently.
          */
-        private const val NOTIFICATION_UPDATE_INTERVAL_MS = 60_000L
+        private const val NOTIFICATION_UPDATE_INTERVAL_MS = 15_000L
 
         /**
          * CPU temperature threshold for thermal throttling (Celsius).
@@ -169,19 +171,23 @@ class MiningService : Service() {
             PowerManager.PARTIAL_WAKE_LOCK,
             "gratia:mining"
         ).apply {
-            // WHY: No timeout — mining runs until conditions change.
-            // The service handles its own shutdown cleanly.
-            acquire()
+            // WHY: 2-hour timeout as a safety net to prevent battery drain if
+            // the service crashes without proper cleanup. The monitorConditions
+            // loop will re-acquire the lock periodically during normal operation.
+            // Without a timeout, a leaked wake lock could drain the battery
+            // completely if onDestroy() is never called.
+            acquire(2 * 60 * 60 * 1000L)
         }
 
         sessionStartTimeMs = System.currentTimeMillis()
-        // WHY: Session earnings track what was earned in THIS session only (for
-        // notification display). The persisted balance is the cumulative total
-        // across all sessions, loaded separately via SharedPreferences.
-        sessionEarningsLux = 0
 
-        // Load persisted balance so it survives app restarts.
+        // WHY: Initialize session earnings from the persisted balance so the
+        // notification and UI show the cumulative total across restarts, not
+        // just what was earned since the last service creation. Without this,
+        // every service restart (e.g., from START_STICKY after OOM kill) would
+        // reset the displayed earnings to zero, confusing users.
         val persistedBalance = prefs.getLong(PREF_KEY_BALANCE_LUX, 0L)
+        sessionEarningsLux = persistedBalance
         if (persistedBalance > 0) {
             Log.i(TAG, "Restored persisted balance: $persistedBalance Lux")
         }

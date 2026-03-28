@@ -12,6 +12,7 @@ import androidx.work.WorkManager
 import io.gratia.app.BuildConfig
 import io.gratia.app.bridge.GratiaCoreManager
 import io.gratia.app.bridge.GratiaBridgeException
+import io.gratia.app.bridge.NetworkStatus
 import io.gratia.app.service.ProofOfLifeService
 import io.gratia.app.worker.PolHeartbeatWorker
 import java.util.concurrent.TimeUnit
@@ -33,6 +34,11 @@ class GratiaApplication : Application() {
         const val CHANNEL_POL = "gratia_proof_of_life"
         const val CHANNEL_MINING = "gratia_mining"
     }
+
+    // WHY: Tracks whether wallet initialization succeeded. Network and consensus
+    // must not start without a wallet because the consensus engine needs a signing
+    // key derived from the wallet for VRF block producer selection.
+    private var walletReady = false
 
     override fun onCreate() {
         super.onCreate()
@@ -80,8 +86,8 @@ class GratiaApplication : Application() {
      * Wi-Fi never discover each other and no gossip or consensus traffic flows.
      * Started at app launch so the node is reachable as early as possible.
      *
-     * Uses port 0 so the OS assigns an available UDP port — avoids conflicts
-     * when multiple Gratia instances run on the same LAN during testing.
+     * Tries port 9000 first for demo connectivity, then falls back through
+     * 9001-9010 if the port is already bound.
      */
     private fun startP2PNetwork() {
         if (!GratiaCoreManager.isInitialized) {
@@ -89,12 +95,38 @@ class GratiaApplication : Application() {
             return
         }
 
+        if (!walletReady) {
+            Log.w(TAG, "Skipping P2P network start — no wallet available")
+            return
+        }
+
         try {
-            // WHY: Fixed port 9000 for the demo so phones can connect to each other
-            // at a known address. Each phone has a different IP on the LAN so port
-            // collisions don't occur. In production, use port 0 (OS-assigned).
-            val status = GratiaCoreManager.startNetwork(listenPort = 9000)
-            Log.i(TAG, "P2P network started — listening on: ${status.listenAddress ?: "unknown"}, peers: ${status.peerCount}")
+            // WHY: Try port 9000 first for the demo so phones can connect to each
+            // other at a known address. If 9000 is already bound (e.g., network
+            // already running or another process), try ports 9001-9010 before
+            // giving up. In production, use port 0 (OS-assigned).
+            val BASE_PORT = 9000
+            // WHY: 11 attempts (9000-9010) covers common scenarios like a stale
+            // process holding the port or multiple Gratia instances during testing.
+            val MAX_PORT_ATTEMPTS = 11
+            var status: NetworkStatus? = null
+            for (port in BASE_PORT until BASE_PORT + MAX_PORT_ATTEMPTS) {
+                try {
+                    status = GratiaCoreManager.startNetwork(listenPort = port)
+                    Log.i(TAG, "P2P network started on port $port")
+                    break
+                } catch (e: Exception) {
+                    if (port < BASE_PORT + MAX_PORT_ATTEMPTS - 1) {
+                        Log.w(TAG, "Port $port unavailable, trying ${port + 1}: ${e.message}")
+                    } else {
+                        Log.e(TAG, "All ports $BASE_PORT-${port} failed, network may already be running: ${e.message}")
+                    }
+                }
+            }
+            if (status == null) {
+                Log.w(TAG, "P2P network start failed on all ports — network may already be running, continuing with staged startup")
+            }
+            Log.i(TAG, "P2P network status — listening on: ${status?.listenAddress ?: "unknown"}, peers: ${status?.peerCount ?: 0}")
 
             // WHY: Staged startup sequence. Each component waits for the
             // previous one to stabilize before starting:
@@ -249,36 +281,27 @@ class GratiaApplication : Application() {
             //
             // WHY: FileKeystore now auto-loads the key from disk if it exists, so
             // getWalletInfo() succeeding means we already have a wallet. We only
-            // call createWallet() when no key file was found.
+            // call createWallet() when no key file was found. If both fail,
+            // network and consensus cannot function — so we abort startup.
             try {
                 val info = GratiaCoreManager.getWalletInfo()
                 Log.i(TAG, "Wallet loaded from file: ${info.address}")
+                walletReady = true
             } catch (e: Exception) {
                 // No existing wallet — create a new one
                 try {
                     val address = GratiaCoreManager.createWallet()
                     Log.i(TAG, "Wallet created: $address")
+                    walletReady = true
                 } catch (e2: Exception) {
-                    Log.e(TAG, "Failed to create wallet: ${e2.message}")
+                    Log.e(TAG, "FATAL: Failed to create wallet AND no existing wallet found. " +
+                        "Network and consensus will NOT start. Error: ${e2.message}", e2)
                 }
             }
-            // WHY: Auto-start networking and consensus on launch so the user
-            // never has to manually navigate to the Network tab. This matches
-            // the "install, plug in, mine" zero-delay onboarding design.
-            // Network connects to the bootstrap node, consensus starts
-            // producing/validating blocks immediately.
-            try {
-                GratiaCoreManager.startNetwork(9000)
-                Log.i(TAG, "Network auto-started on port 9000")
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to auto-start network: ${e.message}")
-            }
 
-            try {
-                GratiaCoreManager.startConsensus()
-                Log.i(TAG, "Consensus auto-started")
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to auto-start consensus: ${e.message}")
+            if (!walletReady) {
+                Log.e(TAG, "FATAL: No wallet available — skipping network/consensus startup")
+                return
             }
 
         } catch (e: Exception) {

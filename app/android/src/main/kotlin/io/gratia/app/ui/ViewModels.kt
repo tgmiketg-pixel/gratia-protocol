@@ -539,6 +539,28 @@ class NetworkViewModel : ViewModel() {
         }
     }
 
+    /** Called from the composable LaunchedEffect to ensure periodic UI refresh. */
+    fun refresh() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val status = io.gratia.app.bridge.GratiaCoreManager.getNetworkStatus()
+                _uiState.value = _uiState.value.copy(
+                    isNetworkRunning = status.isRunning,
+                    peerCount = status.peerCount,
+                    listenAddress = status.listenAddress,
+                )
+                val conStatus = io.gratia.app.bridge.GratiaCoreManager.getConsensusStatus()
+                _uiState.value = _uiState.value.copy(
+                    consensusState = conStatus.state,
+                    currentSlot = conStatus.currentSlot,
+                    currentHeight = conStatus.currentHeight,
+                    isCommitteeMember = conStatus.isCommitteeMember,
+                    blocksProduced = conStatus.blocksProduced,
+                )
+            } catch (_: Exception) {}
+        }
+    }
+
     fun startNetwork() {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)

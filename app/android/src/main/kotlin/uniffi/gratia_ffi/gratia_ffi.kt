@@ -810,6 +810,8 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -890,6 +892,8 @@ internal interface UniffiLib : Library {
     fun uniffi_gratia_ffi_fn_method_gratianode_poll_network_events(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_request_sync(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_reset_for_genesis(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_send_transfer(`ptr`: Pointer,`to`: RustBuffer.ByValue,`amount`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1097,6 +1101,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_request_sync(
     ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_reset_for_genesis(
+    ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_send_transfer(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_stake(
@@ -1172,7 +1178,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_create_wallet() != 41645.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_enable_debug_bypass() != 32320.toShort()) {
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_enable_debug_bypass() != 53967.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_export_seed_phrase() != 28164.toShort()) {
@@ -1236,6 +1242,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_request_sync() != 53273.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_reset_for_genesis() != 31706.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_send_transfer() != 18482.toShort()) {
@@ -1819,8 +1828,8 @@ public interface GratiaNodeInterface {
      * Enable debug bypass for PoL and staking checks.
      * WHY: During development and device testing, a full 24-hour PoL window
      * is impractical. This lets us test the mining and transaction flow
-     * immediately. Only compiles in debug builds — release builds exclude
-     * this method entirely so it cannot be called.
+     * immediately. In release builds this is a no-op — the bypass flag is
+     * silently ignored so it cannot weaken production security.
      */
     fun `enableDebugBypass`()
     
@@ -1998,6 +2007,16 @@ public interface GratiaNodeInterface {
      * Returns the current sync state.
      */
     fun `requestSync`(): kotlin.String
+    
+    /**
+     * Reset chain state for a fresh genesis. Deletes chain_state.bin,
+     * chain_state.db, and pol_state.bin. Wallet keys are preserved.
+     * WHY: When transitioning from testnet to mainnet, the chain must
+     * start fresh at block 0. The wallet (Ed25519 keypair) survives so
+     * the user keeps their identity. All balances, blocks, and PoL
+     * history are wiped — everyone starts equal at genesis.
+     */
+    fun `resetForGenesis`(): kotlin.String
     
     /**
      * Send a GRAT transfer to another address.
@@ -2402,8 +2421,8 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
      * Enable debug bypass for PoL and staking checks.
      * WHY: During development and device testing, a full 24-hour PoL window
      * is impractical. This lets us test the mining and transaction flow
-     * immediately. Only compiles in debug builds — release builds exclude
-     * this method entirely so it cannot be called.
+     * immediately. In release builds this is a no-op — the bypass flag is
+     * silently ignored so it cannot weaken production security.
      */
     @Throws(FfiException::class)override fun `enableDebugBypass`()
         = 
@@ -2815,6 +2834,27 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
     callWithPointer {
     uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_request_sync(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Reset chain state for a fresh genesis. Deletes chain_state.bin,
+     * chain_state.db, and pol_state.bin. Wallet keys are preserved.
+     * WHY: When transitioning from testnet to mainnet, the chain must
+     * start fresh at block 0. The wallet (Ed25519 keypair) survives so
+     * the user keeps their identity. All balances, blocks, and PoL
+     * history are wiped — everyone starts equal at genesis.
+     */
+    @Throws(FfiException::class)override fun `resetForGenesis`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_reset_for_genesis(
         it, _status)
 }
     }

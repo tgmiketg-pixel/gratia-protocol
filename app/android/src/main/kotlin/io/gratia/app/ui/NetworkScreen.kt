@@ -36,6 +36,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import io.gratia.app.GratiaLogo
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,6 +58,17 @@ fun NetworkScreen(
     viewModel: NetworkViewModel = viewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+
+    // WHY: Poll network status, peer count, and block height every 5 seconds
+    // so the UI stays current even if the ViewModel's internal polling stalls
+    // (e.g. after process death / recreation). This mirrors the polling pattern
+    // used by WalletScreen and MiningScreen through their ViewModels.
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(5000)
+            viewModel.refresh()
+        }
+    }
 
     Scaffold(
         topBar = {

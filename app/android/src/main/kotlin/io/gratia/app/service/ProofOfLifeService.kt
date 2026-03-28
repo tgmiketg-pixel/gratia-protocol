@@ -132,10 +132,13 @@ class ProofOfLifeService : Service(), SensorEventListener {
             PowerManager.PARTIAL_WAKE_LOCK,
             "gratia:proof_of_life"
         ).apply {
-            // WHY: 10-minute timeout as a safety net. The lock is re-acquired
+            // WHY: 60-minute timeout as a safety net. The lock is re-acquired
             // on each sensor event. This prevents a leaked wake lock from
             // draining the battery if the service crashes without cleanup.
-            acquire(10 * 60 * 1000L)
+            // 10 minutes was too short — sensor callbacks can be infrequent
+            // (e.g., GPS at 30-min intervals) and the lock would expire
+            // between events, causing missed data in doze mode.
+            acquire(60 * 60 * 1000L)
         }
 
         // Start sensor collection.
@@ -240,7 +243,11 @@ class ProofOfLifeService : Service(), SensorEventListener {
                 // any existing pending restart rather than creating duplicates.
                 1,
                 restartIntent,
-                PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
+                // WHY: FLAG_UPDATE_CURRENT instead of FLAG_ONE_SHOT so the alarm
+                // can be re-scheduled on subsequent swipe-away events. FLAG_ONE_SHOT
+                // caused the PendingIntent to be consumed after the first restart,
+                // preventing the service from restarting on later kills.
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
             val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
@@ -612,6 +619,10 @@ class ProofOfLifeService : Service(), SensorEventListener {
     private fun startMidnightRolloverLoop() {
         serviceScope.launch {
             while (true) {
+                // WHY: Recalculate delay on EACH iteration instead of once before
+                // the sleep. If the coroutine resumes late (e.g., doze mode delayed
+                // wakeup), using a stale pre-calculated delay would cause the next
+                // finalization to fire at the wrong time or immediately.
                 val now = System.currentTimeMillis()
                 val calendar = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
                     timeInMillis = now
