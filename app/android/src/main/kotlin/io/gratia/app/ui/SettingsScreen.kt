@@ -127,6 +127,7 @@ fun SettingsScreen(
                 title = "Stake GRAT",
                 description = "Enter the amount to stake. Stakes above the per-node cap (1,000 GRAT) overflow to the Network Security Pool.",
                 actionLabel = "Stake",
+                maxAmountLux = state.balanceLux,
                 onAction = { viewModel.stake(it) },
                 onDismiss = { viewModel.hideStakeDialog() },
             )
@@ -138,6 +139,7 @@ fun SettingsScreen(
                 title = "Unstake GRAT",
                 description = "Enter the amount to unstake. Overflow stake is removed first. Subject to cooldown period.",
                 actionLabel = "Unstake",
+                maxAmountLux = state.stakeInfo?.totalCommittedLux ?: 0L,
                 onAction = { viewModel.unstake(it) },
                 onDismiss = { viewModel.hideUnstakeDialog() },
             )
@@ -877,11 +879,13 @@ private fun AmountDialog(
     title: String,
     description: String,
     actionLabel: String,
+    maxAmountLux: Long = 0L,
     onAction: (amountLux: Long) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var amountText by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    val maxGrat = maxAmountLux.toDouble() / 1_000_000.0
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -905,8 +909,36 @@ private fun AmountDialog(
                     isError = error != null,
                     supportingText = error?.let { { Text(it) } },
                     singleLine = true,
+                    trailingIcon = {
+                        if (maxAmountLux > 0) {
+                            TextButton(
+                                onClick = {
+                                    amountText = if (maxGrat == maxGrat.toLong().toDouble()) {
+                                        maxGrat.toLong().toString()
+                                    } else {
+                                        String.format("%.6f", maxGrat)
+                                            .trimEnd('0').trimEnd('.')
+                                    }
+                                    error = null
+                                },
+                            ) {
+                                Text(
+                                    "MAX",
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (maxAmountLux > 0) {
+                    Text(
+                        text = "Available: ${formatGrat(maxAmountLux)} GRAT",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    )
+                }
             }
         },
         confirmButton = {

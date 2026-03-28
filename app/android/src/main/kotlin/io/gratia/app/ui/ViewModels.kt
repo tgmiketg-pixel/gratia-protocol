@@ -777,6 +777,7 @@ data class VmInfoUi(
 
 data class SettingsUiState(
     val stakeInfo: StakeInfo? = null,
+    val balanceLux: Long = 0,
     val isLoading: Boolean = true,
     val nodeId: String = "",
     val appVersion: String = "0.1.0-alpha",
@@ -827,6 +828,10 @@ class SettingsViewModel : ViewModel() {
                 )
             } catch (_: Exception) { mockStakeInfo() }
 
+            val balanceLux = try {
+                GratiaCoreManager.getWalletInfo().balanceLux
+            } catch (_: Exception) { 0L }
+
             val nodeId = try {
                 GratiaCoreManager.getWalletInfo().address
             } catch (_: Exception) { "grat:a1b2c3d4e5f6a1b2" }
@@ -863,6 +868,7 @@ class SettingsViewModel : ViewModel() {
 
             _uiState.value = _uiState.value.copy(
                 stakeInfo = stakeInfo,
+                balanceLux = balanceLux,
                 isLoading = false,
                 nodeId = nodeId,
                 appVersion = "0.3.0-alpha",
