@@ -838,6 +838,8 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -902,6 +904,8 @@ internal interface UniffiLib : Library {
     fun uniffi_gratia_ffi_fn_method_gratianode_get_shard_info(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_stake_info(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_get_sync_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_transaction_history(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1137,6 +1141,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_stake_info(
     ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_get_sync_status(
+    ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_transaction_history(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_vm_info(
@@ -1296,6 +1302,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_stake_info() != 60972.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_sync_status() != 22963.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_transaction_history() != 43027.toShort()) {
@@ -2054,6 +2063,14 @@ public interface GratiaNodeInterface {
      * Get current staking information for this node.
      */
     fun `getStakeInfo`(): FfiStakeInfo
+    
+    /**
+     * Get detailed sync status from the consensus-level sync protocol.
+     *
+     * Returns structured sync state for the mobile UI including progress
+     * percentage, current height, and target height.
+     */
+    fun `getSyncStatus`(): FfiSyncStatus
     
     /**
      * Get the transaction history for this wallet.
@@ -2863,6 +2880,25 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
     callWithPointer {
     uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_get_stake_info(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Get detailed sync status from the consensus-level sync protocol.
+     *
+     * Returns structured sync state for the mobile UI including progress
+     * percentage, current height, and target height.
+     */
+    @Throws(FfiException::class)override fun `getSyncStatus`(): FfiSyncStatus {
+            return FfiConverterTypeFfiSyncStatus.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_get_sync_status(
         it, _status)
 }
     }
@@ -4516,6 +4552,63 @@ public object FfiConverterTypeFfiStakeInfo: FfiConverterRustBuffer<FfiStakeInfo>
             FfiConverterULong.write(value.`totalCommittedLux`, buf)
             FfiConverterLong.write(value.`stakedAtMillis`, buf)
             FfiConverterBoolean.write(value.`meetsMinimum`, buf)
+    }
+}
+
+
+
+/**
+ * Sync status for the mobile UI.
+ * WHY: Exposes the consensus-level sync state machine so the app can show
+ * a progress bar during initial sync or when catching up after going offline.
+ */
+data class FfiSyncStatus (
+    /**
+     * Current sync state: "idle", "syncing", or "synced".
+     */
+    var `state`: kotlin.String, 
+    /**
+     * Local chain height (what we have applied).
+     */
+    var `currentHeight`: kotlin.ULong, 
+    /**
+     * Target height we are syncing toward.
+     */
+    var `targetHeight`: kotlin.ULong, 
+    /**
+     * Sync progress as a percentage (0-100).
+     */
+    var `progressPercent`: kotlin.UByte
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiSyncStatus: FfiConverterRustBuffer<FfiSyncStatus> {
+    override fun read(buf: ByteBuffer): FfiSyncStatus {
+        return FfiSyncStatus(
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterUByte.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiSyncStatus) = (
+            FfiConverterString.allocationSize(value.`state`) +
+            FfiConverterULong.allocationSize(value.`currentHeight`) +
+            FfiConverterULong.allocationSize(value.`targetHeight`) +
+            FfiConverterUByte.allocationSize(value.`progressPercent`)
+    )
+
+    override fun write(value: FfiSyncStatus, buf: ByteBuffer) {
+            FfiConverterString.write(value.`state`, buf)
+            FfiConverterULong.write(value.`currentHeight`, buf)
+            FfiConverterULong.write(value.`targetHeight`, buf)
+            FfiConverterUByte.write(value.`progressPercent`, buf)
     }
 }
 

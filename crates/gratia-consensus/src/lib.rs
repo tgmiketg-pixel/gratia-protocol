@@ -367,6 +367,41 @@ impl ConsensusEngine {
         Ok(block)
     }
 
+    /// Force-finalize the pending block even without reaching signature threshold.
+    ///
+    /// WHY: During bootstrap or BFT timeout, we can't wait forever for
+    /// signatures that may never come. This keeps the chain moving.
+    pub fn force_finalize_pending_block(&mut self) -> Result<Block, GratiaError> {
+        let pending = self.pending_block.take().ok_or_else(|| {
+            GratiaError::BlockValidationFailed {
+                reason: "No pending block to finalize".into(),
+            }
+        })?;
+
+        let block = pending.force_finalize()?;
+        let block_hash = block.header.hash()?;
+
+        self.current_height = block.header.height;
+        self.last_finalized_hash = block_hash;
+        self.last_finalized_timestamp = Some(block.header.timestamp);
+        self.recent_block_hashes.push(block_hash);
+
+        if self.recent_block_hashes.len() > MAX_RECENT_BLOCKS {
+            let drain_count = self.recent_block_hashes.len() - MAX_RECENT_BLOCKS;
+            self.recent_block_hashes.drain(..drain_count);
+        }
+
+        self.state = ConsensusState::Active;
+
+        warn!(
+            height = self.current_height,
+            hash = %block_hash,
+            "Block force-finalized (weak finality)",
+        );
+
+        Ok(block)
+    }
+
     /// Process an incoming block from the network.
     ///
     /// Validates the block and, if valid, updates the chain state.

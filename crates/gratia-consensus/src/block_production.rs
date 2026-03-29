@@ -78,6 +78,23 @@ impl PendingBlock {
         self.block.validator_signatures = self.signatures;
         Ok(self.block)
     }
+
+    /// Force-finalize a block even if the signature threshold isn't met.
+    ///
+    /// WHY: During bootstrap (1-2 nodes) or BFT timeout, the network can't
+    /// collect enough signatures. Rather than stalling the chain entirely,
+    /// we finalize with whatever signatures exist. The block has weaker
+    /// finality guarantees but the chain keeps producing. As more nodes
+    /// join, the graduated scaling increases the threshold automatically.
+    pub fn force_finalize(mut self) -> Result<Block, GratiaError> {
+        if self.signatures.is_empty() {
+            return Err(GratiaError::BlockValidationFailed {
+                reason: "Cannot finalize block with zero signatures".into(),
+            });
+        }
+        self.block.validator_signatures = self.signatures;
+        Ok(self.block)
+    }
 }
 
 // ============================================================================

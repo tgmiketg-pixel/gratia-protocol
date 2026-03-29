@@ -3905,8 +3905,11 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                             ));
                         }
 
-                        // Finalize the pending block.
-                        match guard.consensus.as_mut().unwrap().finalize_pending_block() {
+                        // WHY: Use force_finalize to bypass threshold check on timeout.
+                        // Normal finalize requires threshold signatures, but during
+                        // bootstrap or when peers are slow, we force-finalize with
+                        // whatever we have to keep the chain moving.
+                        match guard.consensus.as_mut().unwrap().force_finalize_pending_block() {
                             Ok(finalized_block) => {
                                 let finalized_height = finalized_block.header.height;
                                 let new_chain_height = guard.consensus.as_ref().map(|e| e.current_height()).unwrap_or(0);
