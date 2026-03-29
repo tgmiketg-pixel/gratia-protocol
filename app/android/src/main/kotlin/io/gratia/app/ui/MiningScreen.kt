@@ -168,6 +168,19 @@ private fun MiningContent(
             MiningStateCard(mining, onStartMining, onStopMining)
         }
 
+        // Consensus & network status
+        item {
+            ConsensusInfoCard(
+                peerCount = state.peerCount,
+                blockHeight = state.blockHeight,
+                currentSlot = state.currentSlot,
+                isCommitteeMember = state.isCommitteeMember,
+                blocksProduced = state.blocksProduced,
+                syncStatus = state.syncStatus,
+                isNetworkRunning = state.isNetworkRunning,
+            )
+        }
+
         // Battery and power status
         item {
             BatteryStatusCard(mining)
@@ -554,6 +567,109 @@ private fun miningStateDescription(status: MiningStatus): String = when (status.
     "throttled" -> "CPU temperature too high — workload reduced"
     "pending_activation" -> "Waiting for mining conditions to be met"
     else -> ""
+}
+
+// ============================================================================
+// Consensus & Network Info Card
+// ============================================================================
+
+@Composable
+private fun ConsensusInfoCard(
+    peerCount: Int,
+    blockHeight: Long,
+    currentSlot: Long,
+    isCommitteeMember: Boolean,
+    blocksProduced: Long,
+    syncStatus: String,
+    isNetworkRunning: Boolean,
+) {
+    val statusColor = if (isNetworkRunning) SignalGreen else MaterialTheme.colorScheme.outline
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        ),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .padding(end = 0.dp),
+                ) {
+                    Canvas(modifier = Modifier.size(10.dp)) {
+                        drawCircle(color = statusColor)
+                    }
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Network & Consensus",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Stats grid: 3 columns x 2 rows
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+            ) {
+                StatItem(value = "$peerCount", label = "Peers")
+                StatItem(value = "$blockHeight", label = "Block Height")
+                StatItem(value = "$currentSlot", label = "Slot")
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+            ) {
+                StatItem(value = "$blocksProduced", label = "Blocks Produced")
+                StatItem(
+                    value = if (isCommitteeMember) "Yes" else "No",
+                    label = "Committee",
+                    valueColor = if (isCommitteeMember) SignalGreen else MaterialTheme.colorScheme.outline,
+                )
+                StatItem(
+                    value = syncStatus.replaceFirstChar { it.uppercase() },
+                    label = "Sync",
+                    valueColor = when {
+                        syncStatus == "synced" -> SignalGreen
+                        syncStatus.startsWith("syncing") -> AmberGold
+                        syncStatus.startsWith("behind") -> Color(0xFFE57373)
+                        else -> MaterialTheme.colorScheme.outline
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatItem(
+    value: String,
+    label: String,
+    valueColor: Color = MaterialTheme.colorScheme.onSurface,
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = value,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = valueColor,
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+        )
+    }
 }
 
 // ============================================================================

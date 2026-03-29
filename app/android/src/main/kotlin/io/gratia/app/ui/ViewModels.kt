@@ -386,6 +386,14 @@ data class MiningUiState(
     val showStakeDialog: Boolean = false,
     val showUnstakeDialog: Boolean = false,
     val stakeError: String? = null,
+    // Consensus & network info (folded from NetworkScreen)
+    val peerCount: Int = 0,
+    val blockHeight: Long = 0L,
+    val currentSlot: Long = 0L,
+    val isCommitteeMember: Boolean = false,
+    val blocksProduced: Long = 0L,
+    val syncStatus: String = "unknown",
+    val isNetworkRunning: Boolean = false,
 )
 
 class MiningViewModel : ViewModel() {
@@ -416,10 +424,10 @@ class MiningViewModel : ViewModel() {
             val pol = bridge.getProofOfLifeStatus()
             val stake = bridge.getStakeInfo()
             val walletBalance = try { bridge.getWalletInfo().balanceLux } catch (_: Exception) { 0L }
-            val consensusActive = try {
-                val cs = bridge.getConsensusStatus()
-                cs.state != "stopped"
-            } catch (_: Exception) { false }
+            val consensus = try { bridge.getConsensusStatus() } catch (_: Exception) { null }
+            val consensusActive = consensus != null && consensus.state != "stopped"
+            val network = try { bridge.getNetworkStatus() } catch (_: Exception) { null }
+            val syncStatus = try { bridge.requestSync() } catch (_: Exception) { "unknown" }
             _uiState.value = _uiState.value.copy(
                 miningStatus = MiningStatus(
                     state = mining.state,
@@ -443,6 +451,13 @@ class MiningViewModel : ViewModel() {
                     stakedAtMillis = stake.stakedAtMillis,
                     meetsMinimum = stake.meetsMinimum,
                 ),
+                peerCount = network?.peerCount ?: 0,
+                blockHeight = consensus?.currentHeight ?: 0L,
+                currentSlot = consensus?.currentSlot ?: 0L,
+                isCommitteeMember = consensus?.isCommitteeMember ?: false,
+                blocksProduced = consensus?.blocksProduced ?: 0L,
+                syncStatus = syncStatus,
+                isNetworkRunning = network?.isRunning ?: false,
             )
         } catch (e: Exception) {
             android.util.Log.w("MiningVM", "Quiet refresh failed: ${e.message}")
@@ -458,10 +473,10 @@ class MiningViewModel : ViewModel() {
                 val pol = bridge.getProofOfLifeStatus()
                 val stake = bridge.getStakeInfo()
                 val walletBalance = try { bridge.getWalletInfo().balanceLux } catch (_: Exception) { 0L }
-                val consensusActive = try {
-                    val cs = bridge.getConsensusStatus()
-                    cs.state != "stopped"
-                } catch (_: Exception) { false }
+                val consensus = try { bridge.getConsensusStatus() } catch (_: Exception) { null }
+                val consensusActive = consensus != null && consensus.state != "stopped"
+                val network = try { bridge.getNetworkStatus() } catch (_: Exception) { null }
+                val syncStatus = try { bridge.requestSync() } catch (_: Exception) { "unknown" }
                 _uiState.value = MiningUiState(
                     miningStatus = MiningStatus(
                         state = mining.state,
@@ -489,6 +504,13 @@ class MiningViewModel : ViewModel() {
                     earningsToday = 0L,
                     earningsThisWeek = 0L,
                     earningsTotal = 0L,
+                    peerCount = network?.peerCount ?: 0,
+                    blockHeight = consensus?.currentHeight ?: 0L,
+                    currentSlot = consensus?.currentSlot ?: 0L,
+                    isCommitteeMember = consensus?.isCommitteeMember ?: false,
+                    blocksProduced = consensus?.blocksProduced ?: 0L,
+                    syncStatus = syncStatus,
+                    isNetworkRunning = network?.isRunning ?: false,
                 )
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(isLoading = false)
