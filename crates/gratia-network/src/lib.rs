@@ -48,7 +48,7 @@ use crate::discovery::PeerDiscovery;
 use crate::error::NetworkError;
 use crate::gossip::{GossipHandler, GossipMessage, NodeAnnouncement, ValidatorSignatureMessage, ALL_TOPICS};
 use crate::mesh::MeshTransport;
-use crate::sync::{SyncManager, SyncPayload, SyncProtocolMessage, SyncRequest, SyncState, CHAIN_TIP_POLL_INTERVAL_SECS};
+use crate::sync::{SyncManager, SyncPayload, SyncProtocolMessage, SyncRequest, SyncResponse, SyncState, CHAIN_TIP_POLL_INTERVAL_SECS};
 use crate::transport::{ConnectionManager, TransportConfig};
 
 // ============================================================================
@@ -181,6 +181,11 @@ struct GratiaBehaviour {
     /// WHY: Essential for the Phase 1 demo where phones need to find each other
     /// on the same local network without a bootstrap server.
     mdns: mdns::tokio::Behaviour,
+    /// Point-to-point sync protocol for block synchronization.
+    /// WHY: Replaces the gossipsub-wrapped sync messages (v1) with direct
+    /// peer-to-peer request-response. Bandwidth scales O(syncing peers) not
+    /// O(total nodes). 50x savings at 100 nodes.
+    sync_rr: libp2p::request_response::Behaviour<sync_protocol::SyncCodec>,
 }
 
 // ============================================================================
@@ -368,10 +373,17 @@ impl NetworkManager {
                     key.public().to_peer_id(),
                 )?;
 
+                // WHY: Point-to-point sync protocol for efficient block downloads.
+                // Peers request blocks directly from each other instead of
+                // broadcasting over gossipsub. Gossipsub sync (v1) is kept
+                // for backward compatibility during testnet rollout.
+                let sync_rr = sync_protocol::sync_behaviour();
+
                 Ok(GratiaBehaviour {
                     gossipsub,
                     identify,
                     mdns,
+                    sync_rr,
                 })
             })
             .map_err(|e| NetworkError::Transport(e.to_string()))?
@@ -940,6 +952,85 @@ async fn run_swarm_event_loop(
                         );
                     }
 
+                    // ── Sync request-response protocol events ──────────────
+                    // WHY: Handle direct peer-to-peer sync requests (v2 protocol).
+                    // Inbound: a peer asks us for blocks → we serve them.
+                    // Outbound: we get blocks back from a peer we requested.
+
+                    SwarmEvent::Behaviour(GratiaBehaviourEvent::SyncRr(
+                        libp2p::request_response::Event::Message { peer, message, .. }
+                    )) => {
+                        match message {
+                            libp2p::request_response::Message::Request {
+                                request, channel, ..
+                            } => {
+                                // Inbound sync request — serve blocks from local state
+                                tracing::debug!(%peer, ?request, "Sync v2: inbound request");
+                                let response = sync_manager.handle_sync_request(
+                                    &request,
+                                    |from, to| {
+                                        let blocks = block_provider.get_blocks(from, to);
+                                        if blocks.is_empty() { None } else { Some(blocks) }
+                                    },
+                                );
+                                if let Err(e) = swarm.behaviour_mut().sync_rr
+                                    .send_response(channel, response)
+                                {
+                                    tracing::debug!(%peer, "Failed to send sync v2 response: {:?}", e);
+                                }
+                            }
+                            libp2p::request_response::Message::Response {
+                                response, ..
+                            } => {
+                                // Outbound response — blocks from a peer we requested
+                                tracing::debug!(%peer, "Sync v2: received response");
+                                match response {
+                                    SyncResponse::Blocks(blocks) => {
+                                        match sync_manager.handle_blocks_response(&peer, blocks) {
+                                            Ok(validated_blocks) => {
+                                                for block in validated_blocks {
+                                                    let _ = event_tx.send(
+                                                        NetworkEvent::BlockReceived(Box::new(block))
+                                                    ).await;
+                                                }
+                                            }
+                                            Err(e) => {
+                                                tracing::warn!(%peer, "Sync v2 blocks rejected: {}", e);
+                                            }
+                                        }
+                                    }
+                                    SyncResponse::ChainTip { height, hash } => {
+                                        sync_manager.update_peer_state(peer, height, hash);
+                                    }
+                                    SyncResponse::Headers(_) => {
+                                        tracing::debug!(%peer, "Sync v2: headers response (not yet used)");
+                                    }
+                                    SyncResponse::Error(msg) => {
+                                        tracing::warn!(%peer, "Sync v2 peer error: {}", msg);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    SwarmEvent::Behaviour(GratiaBehaviourEvent::SyncRr(
+                        libp2p::request_response::Event::OutboundFailure { peer, error, .. }
+                    )) => {
+                        tracing::debug!(%peer, ?error, "Sync v2: outbound request failed");
+                    }
+
+                    SwarmEvent::Behaviour(GratiaBehaviourEvent::SyncRr(
+                        libp2p::request_response::Event::InboundFailure { peer, error, .. }
+                    )) => {
+                        tracing::debug!(%peer, ?error, "Sync v2: inbound handler failed");
+                    }
+
+                    SwarmEvent::Behaviour(GratiaBehaviourEvent::SyncRr(
+                        libp2p::request_response::Event::ResponseSent { peer, .. }
+                    )) => {
+                        tracing::trace!(%peer, "Sync v2: response sent");
+                    }
+
                     // New connection established
                     SwarmEvent::ConnectionEstablished {
                         peer_id,
@@ -996,23 +1087,17 @@ async fn run_swarm_event_loop(
 
             // ── Periodic chain tip poll ──────────────────────────────────
             _ = chain_tip_interval.tick() => {
-                // WHY: Broadcast a GetChainTip request to all peers so we can
-                // detect if we're behind. The empty target field means all peers
-                // should respond.
-                let msg = SyncProtocolMessage {
-                    source: local_peer_bytes.clone(),
-                    target: vec![], // broadcast
-                    payload: SyncPayload::Request(SyncRequest::GetChainTip),
-                };
-                if let Ok(data) = msg.to_bytes() {
-                    let topic = gossipsub::IdentTopic::new(gossip::TOPIC_SYNC);
-                    if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic, data) {
-                        tracing::debug!("Failed to publish chain tip poll: {}", e);
-                    }
+                // WHY: Send GetChainTip to each connected peer via request-response (v2).
+                // Each peer responds with their current height and tip hash, which
+                // the sync manager uses to determine if we're behind.
+                let connected_peers: Vec<PeerId> = swarm.connected_peers().cloned().collect();
+                for peer in &connected_peers {
+                    swarm.behaviour_mut().sync_rr
+                        .send_request(peer, SyncRequest::GetChainTip);
                 }
 
                 // WHY: After polling, check if SyncManager has pending work.
-                // If we're behind, generate and send a block request.
+                // If we're behind, generate and send block requests (parallel).
                 try_send_next_sync_request(
                     &mut sync_manager,
                     &local_peer_bytes,
@@ -1339,23 +1424,15 @@ async fn handle_sync_message(
 /// periodic chain tip poll, RequestSync command, and after receiving blocks.
 fn try_send_next_sync_request(
     sync_manager: &mut SyncManager,
-    local_peer_bytes: &[u8],
+    _local_peer_bytes: &[u8],
     swarm: &mut Swarm<GratiaBehaviour>,
 ) {
-    if let Some((peer, request)) = sync_manager.next_sync_request() {
-        let msg = SyncProtocolMessage {
-            source: local_peer_bytes.to_vec(),
-            target: peer.to_bytes(),
-            payload: SyncPayload::Request(request),
-        };
-        if let Ok(data) = msg.to_bytes() {
-            let topic = gossipsub::IdentTopic::new(gossip::TOPIC_SYNC);
-            if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic, data) {
-                tracing::debug!("Failed to send sync request: {}", e);
-            } else {
-                tracing::debug!(%peer, "Sent sync request");
-            }
-        }
+    // WHY: Use request-response (v2) for direct peer-to-peer block requests
+    // instead of gossipsub broadcast (v1). The peer parameter from
+    // next_sync_request() identifies exactly which peer to ask.
+    while let Some((peer, request)) = sync_manager.next_sync_request() {
+        tracing::debug!(%peer, ?request, "Sending sync v2 request");
+        swarm.behaviour_mut().sync_rr.send_request(&peer, request);
     }
 }
 
