@@ -45,7 +45,7 @@ use gratia_pol::ProofOfLifeManager;
 use gratia_governance::GovernanceManager;
 use gratia_core::types::Vote;
 use gratia_staking::StakingManager;
-use gratia_state::db::InMemoryStore;
+use gratia_state::db::{InMemoryStore, StorageBackend, StorageBackendConfig, open_storage};
 use gratia_state::StateManager;
 use gratia_vm::interpreter::InterpreterRuntime;
 use gratia_vm::runtime::{MockRuntime, ContractValue};
@@ -66,12 +66,12 @@ use crate::convert::{address_from_hex, address_to_hex, mining_state_to_string};
 /// WHY: The network event loop runs in a separate tokio task and can't access
 /// the FFI inner state directly. This Arc-wrapped provider bridges the gap.
 struct StateBlockProvider {
-    store: Arc<InMemoryStore>,
+    store: Arc<dyn gratia_state::db::StateStore>,
 }
 
 impl BlockProvider for StateBlockProvider {
     fn get_blocks(&self, from_height: u64, to_height: u64) -> Vec<Block> {
-        let db = gratia_state::db::StateDb::new(self.store.clone() as Arc<dyn gratia_state::db::StateStore>);
+        let db = gratia_state::db::StateDb::new(self.store.clone());
         let mut blocks = Vec::new();
         for height in from_height..=to_height.min(from_height + 49) {
             // WHY: Cap at 50 blocks per request to bound response size for mobile.
@@ -638,11 +638,13 @@ struct GratiaNodeInner {
     /// mobile-native smart contracts. Uses MockRuntime with native handlers
     /// for Phase 2; upgradeable to full WASM execution with wasmer later.
     vm: Option<GratiaVm>,
-    /// Direct reference to the InMemoryStore for file-based persistence.
+    /// Storage backend handle for state persistence.
     /// WHY: StateManager holds the store as Arc<dyn StateStore>, which doesn't
-    /// expose save_to_file(). We keep a typed Arc<InMemoryStore> so we can
-    /// save state to disk after each block finalization.
-    state_store: Option<Arc<InMemoryStore>>,
+    /// expose persist(). We keep the StorageBackend handle so we can save
+    /// state to disk after each block finalization. For RocksDB, persist()
+    /// is a no-op (writes are already durable). For InMemoryStore, it
+    /// serializes the BTreeMap to disk.
+    storage_backend: Option<StorageBackend>,
     /// Governance manager — one-phone-one-vote proposals and polls.
     governance: GovernanceManager,
     /// Bluetooth/Wi-Fi Direct mesh transport layer (Phase 3).
@@ -811,7 +813,7 @@ impl GratiaNode {
             chain_persistence: Some(ChainPersistence::new(&data_dir)),
             mempool: Vec::new(),
             state_manager: None, // Initialized when consensus starts
-            state_store: None,
+            storage_backend: None,
             vm: None, // Initialized on first contract deploy or call
             governance: GovernanceManager::new(config.governance),
             mesh_transport: None,
@@ -1864,15 +1866,9 @@ impl GratiaNode {
 
                                 // Persist state for synced blocks (same cadence as produced blocks)
                                 if new_height % 5 == 0 {
-                                    if let Some(ref store) = inner.state_store {
-                                        let state_path = format!("{}/chain_state.db",
-                                            inner.chain_persistence.as_ref()
-                                                .map(|p| p.data_dir())
-                                                .unwrap_or(""));
-                                        if !state_path.is_empty() && state_path != "/chain_state.db" {
-                                            if let Err(e) = store.save_to_file(&state_path) {
-                                                warn!("Failed to persist synced state: {}", e);
-                                            }
+                                    if let Some(ref backend) = inner.storage_backend {
+                                        if let Err(e) = backend.persist() {
+                                            warn!("Failed to persist synced state: {}", e);
                                         }
                                     }
                                 }
@@ -2264,14 +2260,8 @@ impl GratiaNode {
                                             }
 
                                             // Persist on-chain state.
-                                            if let Some(ref store) = inner.state_store {
-                                                let state_path = format!("{}/chain_state.db",
-                                                    inner.chain_persistence.as_ref()
-                                                        .map(|p| p.data_dir())
-                                                        .unwrap_or(""));
-                                                if !state_path.is_empty() && state_path != "/chain_state.db" {
-                                                    let _ = store.save_to_file(&state_path);
-                                                }
+                                            if let Some(ref backend) = inner.storage_backend {
+                                                let _ = backend.persist();
                                             }
                                         }
                                         Err(e) => {
@@ -2526,17 +2516,34 @@ impl GratiaNode {
         // for the mobile UI. Uses our node_id and current height as starting point.
         inner.sync_protocol = Some(ConsensusSyncProtocol::new(node_id, initial_height));
 
-        // Initialize on-chain state manager with persistent InMemoryStore.
+        // Initialize on-chain state manager with storage backend.
         // WHY: The state manager tracks account balances and nonces on-chain.
         // When blocks are finalized, transactions are applied to state — enforcing
         // balance checks and nonce ordering. This prevents double-spends.
-        // WHY load_from_file: State persists across app restarts. On first launch,
-        // the file doesn't exist and we get a fresh store. On subsequent launches,
-        // account balances and nonces are restored from the previous session.
+        // WHY open_storage: The factory picks the right backend. With the
+        // `rocksdb-backend` feature enabled, RocksDB is used (automatic
+        // persistence, efficient iteration). Without it, InMemoryStore with
+        // file persistence is used (no C++ dependency, works everywhere).
         let state_path = format!("{}/chain_state.db", self.data_dir);
-        let store = Arc::new(InMemoryStore::load_from_file(&state_path));
-        let sm = StateManager::new(store.clone() as Arc<dyn gratia_state::db::StateStore>);
-        inner.state_store = Some(store);
+        let backend_config = {
+            #[cfg(feature = "rocksdb-backend")]
+            {
+                // WHY: RocksDB directory is separate from the file-based path
+                let rocksdb_path = format!("{}/rocksdb", self.data_dir);
+                StorageBackendConfig::RocksDb { db_path: rocksdb_path }
+            }
+            #[cfg(not(feature = "rocksdb-backend"))]
+            {
+                StorageBackendConfig::InMemory {
+                    persistence_path: Some(state_path.clone()),
+                }
+            }
+        };
+        let backend = open_storage(backend_config).map_err(|e| FfiError::InternalError {
+            reason: format!("failed to open storage backend: {}", e),
+        })?;
+        let sm = StateManager::new(backend.store.clone());
+        inner.storage_backend = Some(backend);
 
         // WHY: Only seed if the on-chain account has zero balance (fresh store).
         // If we loaded from a persistence file, the account already has the
@@ -2558,7 +2565,7 @@ impl GratiaNode {
                 rust_log(&format!(
                     "State loaded from disk: {} Lux ({} GRAT) on-chain, {} entries",
                     on_chain_balance, on_chain_balance / 1_000_000,
-                    inner.state_store.as_ref().map(|s| s.data_size_estimate()).unwrap_or(0),
+                    inner.storage_backend.as_ref().and_then(|b| b.in_memory_handle.as_ref()).map(|s| s.data_size_estimate()).unwrap_or(0),
                 ));
             }
         }
@@ -2569,8 +2576,8 @@ impl GratiaNode {
         // peers requesting them via the sync protocol. Before this point,
         // the NoBlockProvider returns empty results.
         // WHY: Clone the store Arc before borrowing network mutably to avoid
-        // conflicting borrows on `inner` (mutable for network, immutable for state_store).
-        let store_clone = inner.state_store.clone();
+        // conflicting borrows on `inner` (mutable for network, immutable for storage_backend).
+        let store_clone = inner.storage_backend.as_ref().map(|b| b.store.clone());
         if let (Some(ref mut network), Some(store)) = (&mut inner.network, store_clone) {
             let provider = Arc::new(StateBlockProvider {
                 store,
@@ -3977,14 +3984,8 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                                 }
 
                                 // Persist on-chain state.
-                                if let Some(ref store) = guard.state_store {
-                                    let state_path = format!("{}/chain_state.db",
-                                        guard.chain_persistence.as_ref()
-                                            .map(|p| p.data_dir())
-                                            .unwrap_or(""));
-                                    if !state_path.is_empty() && state_path != "/chain_state.db" {
-                                        let _ = store.save_to_file(&state_path);
-                                    }
+                                if let Some(ref backend) = guard.storage_backend {
+                                    let _ = backend.persist();
                                 }
                             }
                             Err(e) => {
@@ -4258,24 +4259,17 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                             // WHY: Persist on-chain state every block so the on-chain
                             // balance always matches the wallet display. Prevents
                             // transaction rejections from stale state. Flash wear is
-                            // minimal (~1KB every 4 seconds). In production with
-                            // RocksDB, this becomes a WAL flush.
+                            // minimal (~1KB every 4 seconds). With RocksDB, persist()
+                            // is a no-op (writes already durable via WAL).
                             {
-                                if let Some(ref store) = guard.state_store {
-                                    let state_path = format!("{}/chain_state.db",
-                                        guard.chain_persistence.as_ref()
-                                            .map(|p| p.data_dir())
-                                            .unwrap_or(""));
-                                    if !state_path.is_empty() && state_path != "/chain_state.db" {
-                                        if let Err(e) = store.save_to_file(&state_path) {
-                                            warn!("Failed to persist state: {}", e);
-                                        } else {
-                                            rust_log(&format!(
-                                                "State persisted at height {} ({} entries)",
-                                                finalized_height,
-                                                store.data_size_estimate(),
-                                            ));
-                                        }
+                                if let Some(ref backend) = guard.storage_backend {
+                                    if let Err(e) = backend.persist() {
+                                        warn!("Failed to persist state: {}", e);
+                                    } else {
+                                        rust_log(&format!(
+                                            "State persisted at height {}",
+                                            finalized_height,
+                                        ));
                                     }
                                 }
                             }

@@ -226,6 +226,24 @@ const MIN_PEERS_FOR_SYNC_DECISION: usize = 1;
 /// Used by the sync event loop to periodically request chain tips from peers.
 pub const CHAIN_TIP_POLL_INTERVAL_SECS: u64 = 30;
 
+/// How long to wait for a sync response before considering the request timed out (seconds).
+/// WHY: Mobile connections can be slow, but waiting more than 30 seconds for 50 blocks
+/// (~12.5 MB) means the peer is likely unresponsive. Retrying with another peer is better
+/// than waiting indefinitely on a dead connection.
+const SYNC_REQUEST_TIMEOUT_SECS: i64 = 30;
+
+/// How long before a peer's chain state report is considered stale (seconds).
+/// WHY: On a 4-second block time, 5 minutes of silence means the peer has missed
+/// ~75 blocks. They're either offline or partitioned. Evicting stale peers prevents
+/// the sync manager from making decisions based on outdated information.
+const PEER_STALE_TIMEOUT_SECS: i64 = 300;
+
+/// Maximum number of concurrent sync requests to different peers.
+/// WHY: Requesting blocks from multiple peers simultaneously speeds up initial sync
+/// (each peer serves a different block range). But too many concurrent requests
+/// wastes bandwidth on mobile. 3 is a pragmatic limit for testnet.
+const MAX_CONCURRENT_SYNC_REQUESTS: usize = 3;
+
 /// Manages state synchronization with network peers.
 pub struct SyncManager {
     /// Current sync state.
@@ -237,7 +255,12 @@ pub struct SyncManager {
     /// Chain state reported by each peer.
     peer_states: HashMap<PeerId, PeerChainState>,
     /// Blocks that have been requested but not yet received.
-    pending_requests: HashMap<PeerId, (u64, u64)>, // (from, to)
+    /// Value is (from_height, to_height, request_timestamp).
+    pending_requests: HashMap<PeerId, (u64, u64, DateTime<Utc>)>,
+    /// Count of consecutive failed sync attempts (for backoff).
+    /// WHY: If all peers are returning errors, exponential backoff prevents
+    /// hammering them on every tick. Resets to 0 on any successful sync.
+    consecutive_failures: u32,
 }
 
 impl SyncManager {
@@ -249,6 +272,7 @@ impl SyncManager {
             local_tip,
             peer_states: HashMap::new(),
             pending_requests: HashMap::new(),
+            consecutive_failures: 0,
         }
     }
 
@@ -287,6 +311,62 @@ impl SyncManager {
         self.peer_states.remove(peer);
         self.pending_requests.remove(peer);
         self.reevaluate_sync_state();
+    }
+
+    /// Evict peers whose chain state reports are older than PEER_STALE_TIMEOUT_SECS.
+    ///
+    /// WHY: On mobile networks, peers go offline without cleanly disconnecting.
+    /// Stale peer data leads to incorrect sync decisions (e.g., thinking we're
+    /// behind based on a height reported 10 minutes ago by a now-offline peer).
+    /// Returns the number of peers evicted.
+    pub fn evict_stale_peers(&mut self) -> usize {
+        let now = Utc::now();
+        let stale_cutoff = chrono::Duration::seconds(PEER_STALE_TIMEOUT_SECS);
+        let stale_peers: Vec<PeerId> = self
+            .peer_states
+            .iter()
+            .filter(|(_, state)| now - state.last_updated > stale_cutoff)
+            .map(|(id, _)| *id)
+            .collect();
+
+        let count = stale_peers.len();
+        for peer in &stale_peers {
+            self.peer_states.remove(peer);
+            self.pending_requests.remove(peer);
+        }
+
+        if count > 0 {
+            self.reevaluate_sync_state();
+        }
+        count
+    }
+
+    /// Check for timed-out sync requests and cancel them.
+    ///
+    /// WHY: A peer that accepted a sync request but never responded holds the
+    /// block range hostage — no other peer will be asked for those blocks.
+    /// After SYNC_REQUEST_TIMEOUT_SECS, we cancel the request so
+    /// next_sync_request() can retry with a different peer.
+    /// Returns the list of peers whose requests timed out.
+    pub fn cancel_timed_out_requests(&mut self) -> Vec<PeerId> {
+        let now = Utc::now();
+        let timeout = chrono::Duration::seconds(SYNC_REQUEST_TIMEOUT_SECS);
+        let timed_out: Vec<PeerId> = self
+            .pending_requests
+            .iter()
+            .filter(|(_, (_, _, requested_at))| now - *requested_at > timeout)
+            .map(|(peer, _)| *peer)
+            .collect();
+
+        for peer in &timed_out {
+            self.pending_requests.remove(peer);
+        }
+
+        if !timed_out.is_empty() {
+            self.consecutive_failures += 1;
+            self.reevaluate_sync_state();
+        }
+        timed_out
     }
 
     /// Determine the best known network height from peer reports.
@@ -330,19 +410,40 @@ impl SyncManager {
     }
 
     /// Generate the next sync request to send to a peer.
-    /// Returns None if already synced or no suitable peer available.
+    /// Returns None if already synced, at max concurrent requests, or no suitable peer available.
+    ///
+    /// WHY: Supports parallel sync requests to different peers for different block ranges.
+    /// Each request covers a non-overlapping range, so blocks arrive out of order but
+    /// can be applied sequentially. This is critical for initial sync when a new phone
+    /// joins a testnet with thousands of blocks.
     pub fn next_sync_request(&mut self) -> Option<(PeerId, SyncRequest)> {
+        // Respect concurrent request limit
+        if self.pending_requests.len() >= MAX_CONCURRENT_SYNC_REQUESTS {
+            return None;
+        }
+
         let network_height = self.best_network_height()?;
 
         if self.local_height >= network_height {
             return None;
         }
 
-        // Find a peer that has blocks we need and that we haven't already
-        // sent a pending request to
-        let from = self.local_height + 1;
+        // Find the highest block height we've already requested (pending or local)
+        let highest_requested = self
+            .pending_requests
+            .values()
+            .map(|(_, to, _)| *to)
+            .max()
+            .unwrap_or(self.local_height);
+
+        let from = highest_requested + 1;
+        if from > network_height {
+            return None;
+        }
         let to = (from + MAX_BLOCKS_PER_REQUEST - 1).min(network_height);
 
+        // Find a peer that has blocks we need and that we haven't already
+        // sent a pending request to
         let peer = self
             .peer_states
             .iter()
@@ -352,7 +453,7 @@ impl SyncManager {
             .map(|(peer_id, _)| *peer_id)
             .next()?;
 
-        self.pending_requests.insert(peer, (from, to));
+        self.pending_requests.insert(peer, (from, to, Utc::now()));
         self.state = SyncState::Syncing {
             local_height: self.local_height,
             target_height: network_height,
@@ -373,10 +474,11 @@ impl SyncManager {
     ) -> Result<Vec<Block>, NetworkError> {
         let expected = self.pending_requests.remove(peer);
 
-        if let Some((from, _to)) = expected {
+        if let Some((from, _to, _requested_at)) = expected {
             // Basic sanity check: are the blocks in the expected range?
             if let Some(first) = blocks.first() {
                 if first.header.height != from {
+                    self.consecutive_failures += 1;
                     return Err(NetworkError::SyncError(format!(
                         "Expected blocks starting at height {}, got {}",
                         from, first.header.height
@@ -387,6 +489,7 @@ impl SyncManager {
             // Verify blocks are contiguous
             for window in blocks.windows(2) {
                 if window[1].header.height != window[0].header.height + 1 {
+                    self.consecutive_failures += 1;
                     return Err(NetworkError::SyncError(
                         "Received non-contiguous blocks".to_string(),
                     ));
@@ -394,6 +497,8 @@ impl SyncManager {
             }
         }
 
+        // Successful response resets failure counter
+        self.consecutive_failures = 0;
         Ok(blocks)
     }
 
@@ -468,6 +573,35 @@ impl SyncManager {
     pub fn pending_request_count(&self) -> usize {
         self.pending_requests.len()
     }
+
+    /// Number of consecutive sync failures (for backoff decisions).
+    pub fn consecutive_failures(&self) -> u32 {
+        self.consecutive_failures
+    }
+
+    /// Perform periodic maintenance: evict stale peers, cancel timed-out requests.
+    ///
+    /// WHY: Called from the slot timer on every chain tip poll interval.
+    /// Consolidates all housekeeping into one call so the FFI doesn't need
+    /// to remember to call multiple methods.
+    /// Returns a summary of what happened.
+    pub fn tick_maintenance(&mut self) -> SyncMaintenanceSummary {
+        let stale_evicted = self.evict_stale_peers();
+        let timed_out = self.cancel_timed_out_requests();
+        SyncMaintenanceSummary {
+            stale_peers_evicted: stale_evicted,
+            timed_out_requests: timed_out.len(),
+        }
+    }
+}
+
+/// Summary of periodic sync maintenance operations.
+#[derive(Debug, Clone)]
+pub struct SyncMaintenanceSummary {
+    /// Number of stale peers evicted.
+    pub stale_peers_evicted: usize,
+    /// Number of timed-out sync requests cancelled.
+    pub timed_out_requests: usize,
 }
 
 #[cfg(test)]
@@ -609,7 +743,7 @@ mod tests {
     fn test_handle_blocks_contiguity_check() {
         let mut sm = SyncManager::new(0, BlockHash([0u8; 32]));
         let peer = PeerId::random();
-        sm.pending_requests.insert(peer, (1, 3));
+        sm.pending_requests.insert(peer, (1, 3, Utc::now()));
 
         // Non-contiguous blocks should fail
         let blocks = vec![
@@ -619,6 +753,108 @@ mod tests {
 
         let result = sm.handle_blocks_response(&peer, blocks);
         assert!(result.is_err());
+        assert_eq!(sm.consecutive_failures(), 1);
+    }
+
+    #[test]
+    fn test_evict_stale_peers() {
+        let mut sm = SyncManager::new(0, BlockHash([0u8; 32]));
+        let fresh_peer = PeerId::random();
+        let stale_peer = PeerId::random();
+
+        // Fresh peer
+        sm.update_peer_state(fresh_peer, 100, BlockHash([1u8; 32]));
+
+        // Stale peer — manually backdate
+        sm.peer_states.insert(
+            stale_peer,
+            PeerChainState {
+                height: 50,
+                tip_hash: BlockHash([2u8; 32]),
+                last_updated: Utc::now() - chrono::Duration::seconds(PEER_STALE_TIMEOUT_SECS + 10),
+            },
+        );
+
+        assert_eq!(sm.tracked_peer_count(), 2);
+        let evicted = sm.evict_stale_peers();
+        assert_eq!(evicted, 1);
+        assert_eq!(sm.tracked_peer_count(), 1);
+        assert!(sm.peer_states.contains_key(&fresh_peer));
+        assert!(!sm.peer_states.contains_key(&stale_peer));
+    }
+
+    #[test]
+    fn test_cancel_timed_out_requests() {
+        let mut sm = SyncManager::new(0, BlockHash([0u8; 32]));
+        let peer = PeerId::random();
+
+        // Insert a request that's already timed out
+        sm.pending_requests.insert(
+            peer,
+            (1, 50, Utc::now() - chrono::Duration::seconds(SYNC_REQUEST_TIMEOUT_SECS + 5)),
+        );
+
+        assert_eq!(sm.pending_request_count(), 1);
+        let timed_out = sm.cancel_timed_out_requests();
+        assert_eq!(timed_out.len(), 1);
+        assert_eq!(sm.pending_request_count(), 0);
+        assert_eq!(sm.consecutive_failures(), 1);
+    }
+
+    #[test]
+    fn test_parallel_sync_requests() {
+        let mut sm = SyncManager::new(0, BlockHash([0u8; 32]));
+
+        // Add enough peers to support parallel requests
+        let peers: Vec<PeerId> = (0..5).map(|_| PeerId::random()).collect();
+        for peer in &peers {
+            sm.update_peer_state(*peer, 200, BlockHash([1u8; 32]));
+        }
+
+        // Should be able to get multiple concurrent requests
+        let req1 = sm.next_sync_request();
+        assert!(req1.is_some());
+        let req2 = sm.next_sync_request();
+        assert!(req2.is_some());
+        let req3 = sm.next_sync_request();
+        assert!(req3.is_some());
+
+        // Fourth should be blocked by MAX_CONCURRENT_SYNC_REQUESTS
+        let req4 = sm.next_sync_request();
+        assert!(req4.is_none());
+
+        assert_eq!(sm.pending_request_count(), 3);
+    }
+
+    #[test]
+    fn test_tick_maintenance() {
+        let mut sm = SyncManager::new(0, BlockHash([0u8; 32]));
+        let stale_peer = PeerId::random();
+
+        sm.peer_states.insert(
+            stale_peer,
+            PeerChainState {
+                height: 50,
+                tip_hash: BlockHash([1u8; 32]),
+                last_updated: Utc::now() - chrono::Duration::seconds(PEER_STALE_TIMEOUT_SECS + 10),
+            },
+        );
+
+        let summary = sm.tick_maintenance();
+        assert_eq!(summary.stale_peers_evicted, 1);
+        assert_eq!(summary.timed_out_requests, 0);
+    }
+
+    #[test]
+    fn test_successful_response_resets_failures() {
+        let mut sm = SyncManager::new(0, BlockHash([0u8; 32]));
+        let peer = PeerId::random();
+        sm.consecutive_failures = 5;
+        sm.pending_requests.insert(peer, (1, 1, Utc::now()));
+
+        let blocks = vec![make_block_at_height(1)];
+        sm.handle_blocks_response(&peer, blocks).unwrap();
+        assert_eq!(sm.consecutive_failures(), 0);
     }
 
     fn make_block_at_height(height: u64) -> Block {

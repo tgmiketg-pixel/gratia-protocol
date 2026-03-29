@@ -7,6 +7,14 @@ edition.workspace = true
 [lib]
 crate-type = ["lib", "cdylib"]
 
+[features]
+default = []
+# WHY: When building for Android/iOS production, enable this to use RocksDB
+# instead of InMemoryStore with file persistence. Requires the NDK C++ toolchain
+# for cross-compilation. The default (no feature) uses InMemoryStore + file
+# persistence which works everywhere without C++ dependencies.
+rocksdb-backend = ["gratia-state/rocksdb-backend"]
+
 [dependencies]
 # UniFFI for generating Kotlin (Android) and Swift (iOS) bindings
 uniffi = { version = "0.28", features = ["cli"] }

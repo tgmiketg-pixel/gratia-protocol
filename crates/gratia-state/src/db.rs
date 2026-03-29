@@ -740,6 +740,96 @@ impl StateDb {
 // can still be keyed by (node_id, date) in on-device storage.
 
 // ============================================================================
+// Storage Backend Factory
+// ============================================================================
+
+/// Configuration for which storage backend to use.
+///
+/// WHY: The FFI needs a single entry point that picks the right backend
+/// based on compile-time features and runtime config. This avoids hardcoding
+/// InMemoryStore in the FFI and makes the transition to RocksDB a config change,
+/// not a code change.
+#[derive(Debug, Clone)]
+pub enum StorageBackendConfig {
+    /// In-memory store with optional file-based persistence.
+    /// Path is the file to save/load state from. If None, data is ephemeral.
+    InMemory { persistence_path: Option<String> },
+    /// RocksDB backend (requires `rocksdb-backend` feature).
+    /// Path is the directory for the RocksDB database.
+    #[cfg(feature = "rocksdb-backend")]
+    RocksDb { db_path: String },
+}
+
+/// Result of opening a storage backend.
+///
+/// WHY: The caller needs both the trait object (for StateManager/StateDb) and
+/// optionally the concrete InMemoryStore handle (for file-based save_to_file).
+/// With RocksDB, persistence is automatic; with InMemoryStore, the caller must
+/// periodically call save_to_file() on the concrete handle.
+pub struct StorageBackend {
+    /// The storage backend as a trait object.
+    pub store: Arc<dyn StateStore>,
+    /// If using InMemoryStore with file persistence, this holds the concrete
+    /// handle for calling save_to_file(). None when using RocksDB (which
+    /// persists automatically on every write).
+    pub in_memory_handle: Option<Arc<InMemoryStore>>,
+    /// The persistence path (for logging and save operations).
+    pub persistence_path: Option<String>,
+}
+
+impl StorageBackend {
+    /// Persist the current state to disk (if applicable).
+    ///
+    /// For InMemoryStore: serializes the BTreeMap to the persistence file.
+    /// For RocksDB: no-op (writes are already durable).
+    pub fn persist(&self) -> Result<(), GratiaError> {
+        if let (Some(handle), Some(path)) = (&self.in_memory_handle, &self.persistence_path) {
+            handle.save_to_file(path)?;
+        }
+        // WHY: RocksDB writes are already durable via WAL, so no explicit persist needed.
+        Ok(())
+    }
+
+    /// Get the approximate data size in bytes.
+    pub fn estimate_size(&self) -> Result<u64, GratiaError> {
+        self.store.estimate_size_bytes()
+    }
+}
+
+/// Open a storage backend based on the given configuration.
+///
+/// WHY: Single entry point for creating storage backends. The FFI calls this
+/// once during initialization. When `rocksdb-backend` is compiled in, RocksDB
+/// is used for production (automatic persistence, efficient iteration, compaction).
+/// Otherwise, InMemoryStore with file persistence is used (works everywhere,
+/// no C++ dependency, adequate for testnets up to ~100K blocks).
+pub fn open_storage(config: StorageBackendConfig) -> Result<StorageBackend, GratiaError> {
+    match config {
+        StorageBackendConfig::InMemory { persistence_path } => {
+            let store = match &persistence_path {
+                Some(path) => Arc::new(InMemoryStore::load_from_file(path)),
+                None => Arc::new(InMemoryStore::new()),
+            };
+            Ok(StorageBackend {
+                store: store.clone() as Arc<dyn StateStore>,
+                in_memory_handle: Some(store),
+                persistence_path,
+            })
+        }
+        #[cfg(feature = "rocksdb-backend")]
+        StorageBackendConfig::RocksDb { db_path } => {
+            let store = Arc::new(RocksDbStore::open(&db_path)?);
+            tracing::info!("Opened RocksDB backend at {}", db_path);
+            Ok(StorageBackend {
+                store: store as Arc<dyn StateStore>,
+                in_memory_handle: None,
+                persistence_path: Some(db_path),
+            })
+        }
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -856,5 +946,59 @@ mod tests {
         let size = store.estimate_size_bytes().unwrap();
         // "hello" (5) + "world" (5) = 10 bytes minimum
         assert!(size >= 10);
+    }
+
+    #[test]
+    fn test_open_storage_in_memory_ephemeral() {
+        let config = StorageBackendConfig::InMemory { persistence_path: None };
+        let backend = open_storage(config).unwrap();
+        assert!(backend.in_memory_handle.is_some());
+        assert!(backend.persistence_path.is_none());
+        // Writes should work
+        backend.store.put(CF_STATE, b"key", b"val").unwrap();
+        assert_eq!(backend.store.get(CF_STATE, b"key").unwrap(), Some(b"val".to_vec()));
+        // Persist is a no-op without a path
+        backend.persist().unwrap();
+    }
+
+    #[test]
+    fn test_open_storage_in_memory_with_persistence() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("gratia_backend_test_{}.db", std::process::id()));
+        let path_str = path.to_str().unwrap().to_string();
+
+        // Open, write, persist
+        {
+            let config = StorageBackendConfig::InMemory {
+                persistence_path: Some(path_str.clone()),
+            };
+            let backend = open_storage(config).unwrap();
+            backend.store.put(CF_ACCOUNTS, b"addr1", b"data1").unwrap();
+            backend.persist().unwrap();
+        }
+
+        // Re-open and verify data survived
+        {
+            let config = StorageBackendConfig::InMemory {
+                persistence_path: Some(path_str.clone()),
+            };
+            let backend = open_storage(config).unwrap();
+            assert_eq!(
+                backend.store.get(CF_ACCOUNTS, b"addr1").unwrap(),
+                Some(b"data1".to_vec())
+            );
+        }
+
+        // Cleanup
+        let _ = std::fs::remove_file(&path_str);
+    }
+
+    #[test]
+    fn test_storage_backend_estimate_size() {
+        let config = StorageBackendConfig::InMemory { persistence_path: None };
+        let backend = open_storage(config).unwrap();
+        backend.store.put(CF_STATE, b"key", b"value").unwrap();
+        let size = backend.estimate_size().unwrap();
+        assert!(size >= 8); // "key" (3) + "value" (5)
     }
 }
