@@ -90,6 +90,19 @@ impl From<FfiSensorEvent> for SensorEvent {
                 timestamp: now,
                 is_charging,
             },
+            // WHY: Environmental sensor readings (barometer, light, magnetometer,
+            // accelerometer) are cached in GratiaNodeInner for VM host functions
+            // but don't map to PoL sensor events. The PoL engine cares about
+            // motion patterns, not raw sensor values. We map these to Motion
+            // events with zero impact on PoL validation (motion requires threshold
+            // detection, which these won't trigger).
+            FfiSensorEvent::BarometerReading { .. }
+            | FfiSensorEvent::LightReading { .. }
+            | FfiSensorEvent::MagnetometerReading { .. }
+            | FfiSensorEvent::AccelerometerReading { .. } => {
+                // No-op for PoL: these are only used by the VM sensor cache
+                SensorEvent::Motion { timestamp: now }
+            }
         }
     }
 }

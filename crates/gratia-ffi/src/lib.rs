@@ -368,6 +368,27 @@ pub enum FfiSensorEvent {
     ChargeEvent {
         is_charging: bool,
     },
+    /// Barometric pressure reading (hPa).
+    /// WHY: Enables environmental oracle contracts and weather-aware smart contracts.
+    /// Aggregated across thousands of phones, this creates a decentralized weather network.
+    BarometerReading {
+        hpa: f32,
+    },
+    /// Ambient light level reading (lux — photometric unit, not GRAT Lux).
+    /// WHY: Indoor/outdoor detection for location-triggered contracts without GPS.
+    LightReading {
+        lux: f32,
+    },
+    /// Magnetometer heading (degrees, 0-360).
+    /// WHY: Orientation-aware contracts and compass-based proximity verification.
+    MagnetometerReading {
+        degrees: f32,
+    },
+    /// Accelerometer magnitude reading (m/s^2, scalar).
+    /// WHY: Activity-level detection for fitness contracts and proof-of-movement.
+    AccelerometerReading {
+        magnitude: f32,
+    },
 }
 
 /// A governance proposal for the mobile UI.
@@ -675,6 +696,27 @@ struct GratiaNodeInner {
     /// pending block. If the hash doesn't match, the signature is for a different
     /// block (possibly from a fork) and should be ignored.
     pending_block_hash: Option<[u8; 32]>,
+
+    // ── Live sensor cache for VM host functions ─────────────────────────
+    // WHY: Smart contracts access sensor data via @location, @proximity,
+    // @presence, and @sensor host functions. The PoL engine uses sensor events
+    // for daily attestation validation, but the VM needs the LATEST reading
+    // at contract execution time. These fields cache the most recent value
+    // from each sensor so HostEnvironment can be populated immediately.
+
+    /// Latest GPS fix (latitude, longitude).
+    /// Updated on every FfiSensorEvent::GpsUpdate.
+    last_gps: Option<(f32, f32)>,
+    /// Latest barometric pressure in hPa.
+    last_barometer: Option<f64>,
+    /// Latest ambient light level in lux (photometric, not GRAT Lux).
+    last_light: Option<f64>,
+    /// Latest magnetometer heading in degrees (0-360).
+    last_magnetometer: Option<f64>,
+    /// Latest accelerometer magnitude in m/s^2.
+    last_accelerometer: Option<f64>,
+    /// Timestamp of the most recent sensor update (for freshness checks).
+    last_sensor_time: chrono::DateTime<chrono::Utc>,
 }
 
 impl GratiaNodeInner {
@@ -833,6 +875,12 @@ impl GratiaNode {
             lux_fees: gratia_lux::FeeCalculator::new(),
             pending_block_created_at: None,
             pending_block_hash: None,
+            last_gps: None,
+            last_barometer: None,
+            last_light: None,
+            last_magnetometer: None,
+            last_accelerometer: None,
+            last_sensor_time: chrono::Utc::now(),
         };
 
         Ok(GratiaNode {
@@ -1353,6 +1401,40 @@ impl GratiaNode {
     /// processed into the daily PoL attestation.
     pub fn submit_sensor_event(&self, event: FfiSensorEvent) -> Result<(), FfiError> {
         let mut inner = self.lock_inner()?;
+
+        // WHY: Cache the latest reading from each sensor for VM host functions.
+        // The PoL engine gets the event for daily attestation validation.
+        // The VM needs the LATEST value at contract execution time — these
+        // cached fields are read when building HostEnvironment.
+        let now = chrono::Utc::now();
+        match &event {
+            FfiSensorEvent::GpsUpdate { lat, lon } => {
+                inner.last_gps = Some((*lat, *lon));
+                inner.last_sensor_time = now;
+            }
+            FfiSensorEvent::BarometerReading { hpa } => {
+                inner.last_barometer = Some(*hpa as f64);
+                inner.last_sensor_time = now;
+            }
+            FfiSensorEvent::LightReading { lux } => {
+                inner.last_light = Some(*lux as f64);
+                inner.last_sensor_time = now;
+            }
+            FfiSensorEvent::MagnetometerReading { degrees } => {
+                inner.last_magnetometer = Some(*degrees as f64);
+                inner.last_sensor_time = now;
+            }
+            FfiSensorEvent::AccelerometerReading { magnitude } => {
+                inner.last_accelerometer = Some(*magnitude as f64);
+                inner.last_sensor_time = now;
+            }
+            FfiSensorEvent::BluetoothScan { .. } => {
+                // WHY: BLE peer count is already tracked by the sync manager
+                // for the @proximity host function. No separate cache needed.
+            }
+            _ => {}
+        }
+
         let internal_event: gratia_pol::collector::SensorEvent = event.into();
         inner.sensor_buffer.process_event(internal_event);
         Ok(())
@@ -2879,14 +2961,76 @@ impl GratiaNode {
             gas_limit,
         };
 
+        let now_ts = chrono::Utc::now().timestamp() as u64;
         let mut host_env = HostEnvironment::new(
             block_height,
-            chrono::Utc::now().timestamp() as u64,
+            now_ts,
             caller,
             caller_balance,
         )
         .with_presence_score(presence)
         .with_nearby_peers(peers);
+
+        // WHY: Populate host environment with live sensor data from the cache.
+        // This is what makes GRATIA smart contracts unique — @location, @sensor
+        // opcodes return REAL phone sensor data, not mock values. Contracts can
+        // react to the physical world: geo-fenced deals, weather-aware logic,
+        // proximity verification, proof-of-movement.
+        {
+            let inner = self.lock_inner().map_err(|e| FfiError::InternalError {
+                reason: format!("sensor cache lock: {}", e),
+            })?;
+            let sensor_age_secs = now_ts.saturating_sub(
+                inner.last_sensor_time.timestamp() as u64
+            );
+            // WHY: Readings older than 60 seconds are marked stale. Contracts
+            // can check is_fresh and decide whether to trust the data.
+            let is_fresh = sensor_age_secs < 60;
+
+            if let Some((lat, lon)) = inner.last_gps {
+                host_env = host_env.with_location(gratia_core::types::GeoLocation { lat, lon });
+            }
+            if let Some(hpa) = inner.last_barometer {
+                host_env = host_env.with_sensor_reading(
+                    gratia_vm::host_functions::SensorReading {
+                        sensor_type: gratia_vm::host_functions::SensorType::Barometer,
+                        value: hpa,
+                        timestamp_secs: now_ts,
+                        is_fresh,
+                    },
+                );
+            }
+            if let Some(lux) = inner.last_light {
+                host_env = host_env.with_sensor_reading(
+                    gratia_vm::host_functions::SensorReading {
+                        sensor_type: gratia_vm::host_functions::SensorType::AmbientLight,
+                        value: lux,
+                        timestamp_secs: now_ts,
+                        is_fresh,
+                    },
+                );
+            }
+            if let Some(deg) = inner.last_magnetometer {
+                host_env = host_env.with_sensor_reading(
+                    gratia_vm::host_functions::SensorReading {
+                        sensor_type: gratia_vm::host_functions::SensorType::Magnetometer,
+                        value: deg,
+                        timestamp_secs: now_ts,
+                        is_fresh,
+                    },
+                );
+            }
+            if let Some(mag) = inner.last_accelerometer {
+                host_env = host_env.with_sensor_reading(
+                    gratia_vm::host_functions::SensorReading {
+                        sensor_type: gratia_vm::host_functions::SensorType::Accelerometer,
+                        value: mag,
+                        timestamp_secs: now_ts,
+                        is_fresh,
+                    },
+                );
+            }
+        }
 
         match vm.call_contract(&call, &mut host_env) {
             Ok(result) => {
