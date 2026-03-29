@@ -840,9 +840,9 @@ mod tests {
             signature: vec![0u8; 64],
         });
 
-        // Save to temp file
+        // Save to temp file (unique name to avoid parallel test collisions)
         let dir = std::env::temp_dir();
-        let path = dir.join("lux_store_test.json");
+        let path = dir.join(format!("lux_store_test_{}.json", std::process::id()));
         let path_str = path.to_str().unwrap();
         store.save_to_file(path_str).unwrap();
 
