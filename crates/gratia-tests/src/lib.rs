@@ -25,3 +25,5 @@ pub mod behavioral_spoofing;
 pub mod emulator_detection;
 #[cfg(test)]
 pub mod stake_manipulation;
+#[cfg(test)]
+pub mod sync_protocol;

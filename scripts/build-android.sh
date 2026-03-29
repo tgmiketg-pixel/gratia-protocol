@@ -4,8 +4,10 @@
 # and generate UniFFI Kotlin bindings.
 #
 # Usage:
-#   ./scripts/build-android.sh          # Release build (default)
-#   ./scripts/build-android.sh debug    # Debug build (faster, larger)
+#   ./scripts/build-android.sh              # Release build (default)
+#   ./scripts/build-android.sh debug        # Debug build (faster, larger)
+#   ./scripts/build-android.sh --rocksdb    # Release build with RocksDB backend
+#   ./scripts/build-android.sh debug --rocksdb  # Debug + RocksDB
 #
 # Prerequisites:
 #   - Rust with aarch64-linux-android target installed
@@ -23,7 +25,24 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # WHY: Build profile defaults to release. Debug builds are faster to compile
 # but produce much larger .so files (~10x) which is fine during development.
-PROFILE="${1:-release}"
+PROFILE="release"
+ROCKSDB_FLAG=""
+
+for arg in "$@"; do
+    case "$arg" in
+        debug)
+            PROFILE="debug"
+            ;;
+        --rocksdb)
+            # WHY: Enable RocksDB backend for production persistence. Requires
+            # the NDK C++ toolchain (libclang + LLVM) for cross-compiling the
+            # RocksDB C++ code to ARM64. Without this flag, InMemoryStore with
+            # file persistence is used (adequate for testnet, no C++ dependency).
+            ROCKSDB_FLAG="--features rocksdb-backend"
+            ;;
+    esac
+done
+
 if [ "$PROFILE" = "debug" ]; then
     PROFILE_FLAG=""
     TARGET_DIR="debug"
@@ -46,6 +65,7 @@ export PATH="/c/Users/Michael/mingw64/bin:/c/Users/Michael/.cargo/bin:/usr/bin:$
 echo "=== Gratia Android Build ==="
 echo "Profile: $PROFILE"
 echo "Target:  $ANDROID_TARGET"
+echo "RocksDB: ${ROCKSDB_FLAG:-disabled}"
 echo ""
 
 # ── Step 1: Cross-compile gratia-ffi for Android ARM64 ──────────────────────
@@ -55,7 +75,8 @@ cd "$PROJECT_ROOT"
 cargo build \
     --target "$ANDROID_TARGET" \
     -p gratia-ffi \
-    $PROFILE_FLAG
+    $PROFILE_FLAG \
+    $ROCKSDB_FLAG
 
 SO_PATH="$PROJECT_ROOT/target/$ANDROID_TARGET/$TARGET_DIR/libgratia_ffi.so"
 if [ ! -f "$SO_PATH" ]; then

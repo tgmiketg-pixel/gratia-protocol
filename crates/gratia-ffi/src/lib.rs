@@ -3805,6 +3805,17 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
             {
                 sync.update_local_state(local_height, local_tip);
 
+                // WHY: Run periodic maintenance before evaluating sync state.
+                // Evicts stale peers (offline >5min) and cancels timed-out
+                // requests (>30s) so sync decisions use fresh data.
+                let maintenance = sync.tick_maintenance();
+                if maintenance.stale_peers_evicted > 0 || maintenance.timed_out_requests > 0 {
+                    rust_log(&format!(
+                        "Sync maintenance: evicted {} stale peers, cancelled {} timed-out requests",
+                        maintenance.stale_peers_evicted, maintenance.timed_out_requests,
+                    ));
+                }
+
                 let network_height = sync.best_network_height().unwrap_or(0);
                 net_height_for_sp = Some((local_height, network_height));
 
@@ -3814,7 +3825,10 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                             "Sync: behind network ({}/{}), requesting blocks",
                             local_height, network_height
                         ));
-                        if let Some((_peer, request)) = sync.next_sync_request() {
+                        // WHY: Request blocks from multiple peers in parallel when behind.
+                        // next_sync_request() returns None when at max concurrent requests
+                        // or no suitable peer is available, so the loop self-limits.
+                        while let Some((_peer, request)) = sync.next_sync_request() {
                             rust_log(&format!("Sync: generated request {:?}", request));
                         }
                     }

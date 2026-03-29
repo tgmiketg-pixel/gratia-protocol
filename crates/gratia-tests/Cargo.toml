@@ -17,3 +17,4 @@ gratia-network = { path = "../gratia-network" }
 chrono = { workspace = true }
 serde = { workspace = true }
 rand = { workspace = true }
+libp2p = { workspace = true }
