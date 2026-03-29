@@ -27,6 +27,7 @@ pub mod gossip;
 pub mod mesh;
 pub mod reputation;
 pub mod sync;
+pub mod sync_protocol;
 pub mod transport;
 
 use std::collections::hash_map::DefaultHasher;

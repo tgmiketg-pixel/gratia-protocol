@@ -13,6 +13,8 @@ chrono = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 libp2p = { workspace = true }
+async-trait = "0.1"
+futures = "0.3"
 bytes = { workspace = true }
 sha2 = { workspace = true }
 gratia-lux = { path = "../gratia-lux" }

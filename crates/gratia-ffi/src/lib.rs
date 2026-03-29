@@ -32,8 +32,10 @@ use chrono::Utc;
 use tracing::{debug, error, info, warn};
 
 use gratia_consensus::committee::EligibleNode;
+use gratia_consensus::validation::{validate_block_transactions, MIN_TRANSACTION_FEE};
 use gratia_consensus::vrf::{VrfPublicKey, VrfSecretKey};
 use gratia_consensus::ConsensusEngine;
+use gratia_core::emission::EmissionSchedule;
 use gratia_core::config::Config;
 use gratia_core::types::{Block, BlockHash, Lux, MiningState, NodeId, PowerState};
 use gratia_consensus::sync::SyncProtocol as ConsensusSyncProtocol;
@@ -1787,12 +1789,33 @@ impl GratiaNode {
                                     );
                                 }
 
-                                // WHY: Apply synced block transactions to on-chain state.
-                                // Without this, blocks received from peers don't update
-                                // account balances, so the receiving phone can't see
-                                // incoming transfers or validate future transactions
-                                // against correct nonces. This closes the gap where only
-                                // locally-produced blocks updated state.
+                                // WHY: Validate synced block transactions BEFORE applying.
+                                // Without validation, a malicious peer could send blocks
+                                // containing forged transactions (fake signatures, zero fees)
+                                // that would corrupt our on-chain state. validate_block_transactions
+                                // checks: signature validity, minimum fee, payload rules, no
+                                // duplicate tx hashes, and transaction count limits.
+                                if !block_clone.transactions.is_empty() {
+                                    if let Err(e) = validate_block_transactions(
+                                        &block_clone.transactions,
+                                        MIN_TRANSACTION_FEE,
+                                    ) {
+                                        warn!(
+                                            "REJECTING synced block at height {}: {}",
+                                            new_height, e,
+                                        );
+                                        rust_log(&format!(
+                                            "SECURITY: Rejected block {} — invalid transactions: {}",
+                                            new_height, e,
+                                        ));
+                                        continue; // Skip this block, don't apply
+                                    }
+                                }
+
+                                // WHY: Apply validated synced block transactions to on-chain state.
+                                // Transactions have passed structural validation above. Balance and
+                                // nonce checks happen here during application. This closes the gap
+                                // where only locally-produced blocks updated state.
                                 if let Some(ref sm) = inner.state_manager {
                                     let our_addr = inner.wallet.address().ok();
                                     let mut applied = 0u32;
@@ -1846,10 +1869,16 @@ impl GratiaNode {
                                 // WHY: Credit mining reward for received blocks to the
                                 // block producer's account in our state, so the explorer
                                 // and balance queries reflect the true state of the chain.
+                                // Uses active_miners from the block header (reported by
+                                // the producer) to calculate the per-miner share.
                                 if let Some(ref sm) = inner.state_manager {
                                     let producer_addr = gratia_core::types::Address(block_clone.header.producer.0);
-                                    let active_miners = 3u64; // Phase 2 estimate
-                                    let reward: Lux = gratia_core::emission::EmissionSchedule
+                                    // WHY: Use the block's active_miners field instead of
+                                    // hardcoded estimate. The producer reports how many miners
+                                    // were active when the block was produced. Minimum 1 to
+                                    // prevent division by zero.
+                                    let active_miners = (block_clone.header.active_miners as u64).max(1);
+                                    let reward: Lux = EmissionSchedule
                                         ::per_miner_block_reward_lux(new_height, active_miners);
                                     let mut acct = sm.get_account(&producer_addr).unwrap_or_default();
                                     acct.balance += reward;
@@ -3851,6 +3880,35 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                             local_height, network_height,
                         ));
                     }
+                }
+            }
+
+            // ── Geographic sharding activation check ────────────────────
+            // WHY: Check every 8 slots (~32s) whether the network has grown
+            // past the 10,000-node threshold that triggers sharding. Once
+            // activated, each node is assigned to a geographic shard based on
+            // its GPS location. Sharding is irreversible per epoch — once
+            // active, it stays active even if nodes drop temporarily.
+            if guard.shard_coordinator.is_none() {
+                // Estimate total network nodes from peer count + 1 (self)
+                let total_nodes = guard.sync_manager.as_ref()
+                    .map(|sm| sm.tracked_peer_count() as u64 + 1)
+                    .unwrap_or(1);
+
+                if total_nodes >= gratia_state::sharding::SHARDING_ACTIVATION_THRESHOLD {
+                    use gratia_consensus::sharded_consensus::ShardCoordinator;
+                    use gratia_core::types::ShardId;
+
+                    let coordinator = ShardCoordinator::new(
+                        ShardId(0), // WHY: Default shard 0 until GPS-based assignment
+                        gratia_state::sharding::DEFAULT_ACTIVE_SHARDS,
+                    );
+                    guard.shard_coordinator = Some(coordinator);
+                    rust_log(&format!(
+                        "SHARDING ACTIVATED: {} nodes detected (threshold: {})",
+                        total_nodes,
+                        gratia_state::sharding::SHARDING_ACTIVATION_THRESHOLD,
+                    ));
                 }
             }
         }

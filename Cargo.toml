@@ -47,7 +47,7 @@ bulletproofs = "5.0"
 merlin = "3.0"
 
 # Networking
-libp2p = { version = "0.54", features = ["tokio", "gossipsub", "kad", "quic", "noise", "identify", "mdns", "macros"] }
+libp2p = { version = "0.54", features = ["tokio", "gossipsub", "kad", "quic", "noise", "identify", "mdns", "macros", "request-response"] }
 
 # Storage
 rocksdb = "0.22"
