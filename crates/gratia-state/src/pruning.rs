@@ -333,6 +333,183 @@ pub fn run_pruning_cycle(
 }
 
 // ============================================================================
+// PruningConfig / PruningManager / PruneStats — higher-level pruning API
+// ============================================================================
+
+/// Configuration for the interval-based pruning manager.
+///
+/// While `PruningPolicy` controls *what* gets pruned (retention windows, size
+/// limits), `PruningConfig` controls *when* and *how aggressively* the pruning
+/// manager runs.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PruningConfig {
+    /// Maximum number of full blocks to keep on disk.
+    /// Older blocks have their bodies removed (headers kept for chain integrity).
+    /// Default: 10,000 blocks (~11.1 hours at 4-second block time).
+    // WHY: 10k blocks is enough for short reorgs and recent queries on a phone
+    // while keeping flash storage usage predictable. Archive nodes store full
+    // history; mobile nodes don't need to.
+    pub max_blocks_retained: u64,
+
+    /// Hard limit on total state database size in bytes.
+    /// When estimated size exceeds this, pruning is forced regardless of block
+    /// retention settings.
+    /// Default: 2 GB (2,147,483,648 bytes).
+    // WHY: 2 GB leaves generous headroom on a 32 GB phone (OS ~10 GB, apps
+    // ~8 GB, user data ~10 GB, Gratia state ~2 GB). Conservative target avoids
+    // the user ever seeing a "storage full" notification caused by Gratia.
+    pub max_state_size_bytes: u64,
+
+    /// How often to check whether pruning is needed, measured in blocks.
+    /// Default: every 100 blocks (~6.7 minutes at 4-second block time).
+    // WHY: Checking every block wastes CPU on size estimation. Every 100 blocks
+    // is frequent enough that the database never overshoots the limit by more
+    // than ~100 blocks worth of data (~25 KB * 100 = ~2.5 MB overshoot max).
+    pub prune_interval_blocks: u64,
+
+    /// Number of days of transaction history to retain for the user's wallet
+    /// history display and receipt lookups.
+    /// Default: 90 days.
+    // WHY: 90 days covers typical dispute resolution periods and gives users
+    // enough history to reconcile with external records. Older transactions
+    // can still be looked up via archive nodes or the block explorer.
+    pub keep_recent_txs_days: u32,
+}
+
+impl Default for PruningConfig {
+    fn default() -> Self {
+        PruningConfig {
+            max_blocks_retained: 10_000,
+            max_state_size_bytes: 2_147_483_648,
+            prune_interval_blocks: 100,
+            keep_recent_txs_days: 90,
+        }
+    }
+}
+
+/// Cumulative statistics tracked across pruning cycles.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PruneStats {
+    /// Total number of block bodies removed across all pruning cycles.
+    pub total_blocks_pruned: u64,
+    /// Total estimated bytes freed across all pruning cycles.
+    pub total_bytes_freed: u64,
+    /// Block height at which the most recent pruning cycle ran.
+    pub last_prune_height: u64,
+    /// Timestamp of the most recent pruning cycle.
+    pub last_prune_timestamp: DateTime<Utc>,
+}
+
+impl Default for PruneStats {
+    fn default() -> Self {
+        PruneStats {
+            total_blocks_pruned: 0,
+            total_bytes_freed: 0,
+            last_prune_height: 0,
+            // WHY: Unix epoch as sentinel — means "never pruned yet".
+            last_prune_timestamp: DateTime::<Utc>::from_timestamp(0, 0)
+                .expect("epoch timestamp is always valid"),
+        }
+    }
+}
+
+/// Interval-based pruning manager that tracks block cadence and cumulative
+/// statistics.
+///
+/// The `PruningManager` sits between the consensus layer and the low-level
+/// pruning functions. Each time a block is applied, the caller increments
+/// the manager's counter via `tick()`. When `should_prune()` returns true,
+/// the caller runs the pruning cycle and feeds the result back via
+/// `record_prune()`.
+///
+/// This design keeps the pruning logic stateless (pure functions operating
+/// on `StateDb`) while the manager owns the scheduling and bookkeeping.
+#[derive(Debug, Clone)]
+pub struct PruningManager {
+    /// Configuration controlling pruning intervals and limits.
+    pub config: PruningConfig,
+    /// Number of blocks processed since the last pruning check.
+    pub blocks_since_last_prune: u64,
+    /// Cumulative pruning statistics.
+    pub prune_stats: PruneStats,
+}
+
+impl PruningManager {
+    /// Create a new PruningManager with the given configuration.
+    pub fn new(config: PruningConfig) -> Self {
+        PruningManager {
+            config,
+            blocks_since_last_prune: 0,
+            prune_stats: PruneStats::default(),
+        }
+    }
+
+    /// Create a new PruningManager with default configuration.
+    pub fn with_defaults() -> Self {
+        Self::new(PruningConfig::default())
+    }
+
+    /// Increment the block counter. Call this once per applied block.
+    pub fn tick(&mut self) {
+        self.blocks_since_last_prune += 1;
+    }
+
+    /// Returns true when enough blocks have elapsed to warrant a pruning check.
+    ///
+    /// Resets the internal counter when it returns true, so the next call
+    /// starts counting from zero again.
+    pub fn should_prune(&mut self) -> bool {
+        if self.blocks_since_last_prune >= self.config.prune_interval_blocks {
+            self.blocks_since_last_prune = 0;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Calculate the block height below which blocks can be pruned.
+    ///
+    /// Returns 0 if the chain is too short to prune anything.
+    pub fn calculate_prune_target(&self, current_height: u64) -> u64 {
+        current_height.saturating_sub(self.config.max_blocks_retained)
+    }
+
+    /// Rough estimate of storage consumption for a given number of blocks and
+    /// transactions.
+    ///
+    /// This is a heuristic, not an exact measurement. It accounts for:
+    /// - Block headers (~200 bytes each)
+    /// - Block bodies (~200 bytes overhead + transaction data)
+    /// - Transactions (~250 bytes each for standard, ~2 KB for shielded)
+    /// - Index overhead (~50 bytes per block for height->hash mapping)
+    ///
+    /// The estimate is intentionally conservative (overestimates) so that
+    /// pruning triggers slightly early rather than slightly late.
+    pub fn estimate_storage_bytes(block_count: u64, tx_count: u64) -> u64 {
+        // WHY: 450 bytes per block = 200 byte header + 200 byte body overhead
+        // + 50 byte index entry. Measured from bincode serialization of typical
+        // Gratia blocks during testnet. Conservative to avoid underestimating.
+        const BYTES_PER_BLOCK: u64 = 450;
+        // WHY: 300 bytes per transaction = average of standard (250 bytes) and
+        // shielded (~2 KB), weighted heavily toward standard since shielded
+        // transactions are opt-in and expected to be <5% of volume initially.
+        const BYTES_PER_TX: u64 = 300;
+
+        block_count
+            .saturating_mul(BYTES_PER_BLOCK)
+            .saturating_add(tx_count.saturating_mul(BYTES_PER_TX))
+    }
+
+    /// Record the result of a pruning cycle into cumulative statistics.
+    pub fn record_prune(&mut self, blocks_pruned: u64, bytes_freed: u64, height: u64) {
+        self.prune_stats.total_blocks_pruned += blocks_pruned;
+        self.prune_stats.total_bytes_freed += bytes_freed;
+        self.prune_stats.last_prune_height = height;
+        self.prune_stats.last_prune_timestamp = Utc::now();
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -460,6 +637,7 @@ mod tests {
                 blinded_id: [0xAA; 32],
                 nullifier: [nullifier_byte; 32],
                 zk_proof: vec![0u8; 32],
+                zk_commitments: None,
                 presence_score: 50,
                 sensor_flags: gratia_core::types::SensorFlags {
                     gps: true,
@@ -511,6 +689,7 @@ mod tests {
                 blinded_id: [0xAA; 32],
                 nullifier: [nullifier_byte; 32],
                 zk_proof: vec![0u8; 32],
+                zk_commitments: None,
                 presence_score: 50,
                 sensor_flags: gratia_core::types::SensorFlags {
                     gps: true,
@@ -569,5 +748,182 @@ mod tests {
 
         let result = run_pruning_cycle(&db, &policy, 5).unwrap();
         assert_eq!(result.blocks_pruned, 3); // blocks 0, 1, 2 pruned
+    }
+
+    // ====================================================================
+    // PruningConfig / PruningManager / PruneStats tests
+    // ====================================================================
+
+    #[test]
+    fn test_pruning_config_defaults() {
+        let config = PruningConfig::default();
+        assert_eq!(config.max_blocks_retained, 10_000);
+        assert_eq!(config.max_state_size_bytes, 2_147_483_648);
+        assert_eq!(config.prune_interval_blocks, 100);
+        assert_eq!(config.keep_recent_txs_days, 90);
+    }
+
+    #[test]
+    fn test_prune_stats_defaults() {
+        let stats = PruneStats::default();
+        assert_eq!(stats.total_blocks_pruned, 0);
+        assert_eq!(stats.total_bytes_freed, 0);
+        assert_eq!(stats.last_prune_height, 0);
+        // Sentinel timestamp is Unix epoch.
+        assert_eq!(stats.last_prune_timestamp.timestamp(), 0);
+    }
+
+    #[test]
+    fn test_pruning_manager_should_prune_cycle() {
+        let config = PruningConfig {
+            prune_interval_blocks: 5,
+            ..Default::default()
+        };
+        let mut mgr = PruningManager::new(config);
+
+        // Ticking 1-4 should not trigger pruning.
+        for _ in 0..4 {
+            mgr.tick();
+            assert!(!mgr.should_prune());
+        }
+
+        // The 5th tick should trigger pruning.
+        mgr.tick();
+        assert!(mgr.should_prune());
+
+        // Counter resets after should_prune returns true.
+        assert_eq!(mgr.blocks_since_last_prune, 0);
+
+        // Next cycle: 5 more ticks needed.
+        for _ in 0..4 {
+            mgr.tick();
+            assert!(!mgr.should_prune());
+        }
+        mgr.tick();
+        assert!(mgr.should_prune());
+    }
+
+    #[test]
+    fn test_pruning_manager_should_prune_immediate_at_interval() {
+        // With interval = 1, every tick triggers pruning.
+        let config = PruningConfig {
+            prune_interval_blocks: 1,
+            ..Default::default()
+        };
+        let mut mgr = PruningManager::new(config);
+
+        mgr.tick();
+        assert!(mgr.should_prune());
+        mgr.tick();
+        assert!(mgr.should_prune());
+        mgr.tick();
+        assert!(mgr.should_prune());
+    }
+
+    #[test]
+    fn test_calculate_prune_target() {
+        let mgr = PruningManager::with_defaults();
+
+        // Chain shorter than retention — target is 0.
+        assert_eq!(mgr.calculate_prune_target(5_000), 0);
+
+        // Chain at exactly the retention window — target is 0.
+        assert_eq!(mgr.calculate_prune_target(10_000), 0);
+
+        // Chain longer than retention — prune below the cutoff.
+        assert_eq!(mgr.calculate_prune_target(15_000), 5_000);
+        assert_eq!(mgr.calculate_prune_target(100_000), 90_000);
+    }
+
+    #[test]
+    fn test_calculate_prune_target_custom_config() {
+        let config = PruningConfig {
+            max_blocks_retained: 500,
+            ..Default::default()
+        };
+        let mgr = PruningManager::new(config);
+
+        assert_eq!(mgr.calculate_prune_target(1_000), 500);
+        assert_eq!(mgr.calculate_prune_target(500), 0);
+        assert_eq!(mgr.calculate_prune_target(250), 0);
+    }
+
+    #[test]
+    fn test_estimate_storage_bytes() {
+        // Zero blocks and zero transactions = zero bytes.
+        assert_eq!(PruningManager::estimate_storage_bytes(0, 0), 0);
+
+        // 1,000 blocks with no transactions.
+        // 1,000 * 450 = 450,000 bytes.
+        assert_eq!(PruningManager::estimate_storage_bytes(1_000, 0), 450_000);
+
+        // No blocks, 1,000 transactions.
+        // 1,000 * 300 = 300,000 bytes.
+        assert_eq!(PruningManager::estimate_storage_bytes(0, 1_000), 300_000);
+
+        // Mixed: 10,000 blocks + 50,000 transactions.
+        // 10,000 * 450 + 50,000 * 300 = 4,500,000 + 15,000,000 = 19,500,000 bytes.
+        assert_eq!(
+            PruningManager::estimate_storage_bytes(10_000, 50_000),
+            19_500_000
+        );
+    }
+
+    #[test]
+    fn test_estimate_storage_bytes_overflow_safety() {
+        // Extremely large values should not panic (saturating arithmetic).
+        let result = PruningManager::estimate_storage_bytes(u64::MAX, u64::MAX);
+        assert_eq!(result, u64::MAX);
+    }
+
+    #[test]
+    fn test_record_prune_accumulates() {
+        let mut mgr = PruningManager::with_defaults();
+
+        mgr.record_prune(100, 50_000, 10_000);
+        assert_eq!(mgr.prune_stats.total_blocks_pruned, 100);
+        assert_eq!(mgr.prune_stats.total_bytes_freed, 50_000);
+        assert_eq!(mgr.prune_stats.last_prune_height, 10_000);
+        assert!(mgr.prune_stats.last_prune_timestamp.timestamp() > 0);
+
+        mgr.record_prune(200, 75_000, 20_000);
+        assert_eq!(mgr.prune_stats.total_blocks_pruned, 300);
+        assert_eq!(mgr.prune_stats.total_bytes_freed, 125_000);
+        assert_eq!(mgr.prune_stats.last_prune_height, 20_000);
+    }
+
+    #[test]
+    fn test_pruning_config_serde_roundtrip() {
+        let config = PruningConfig {
+            max_blocks_retained: 5_000,
+            max_state_size_bytes: 1_073_741_824,
+            prune_interval_blocks: 50,
+            keep_recent_txs_days: 60,
+        };
+
+        let serialized = bincode::serialize(&config).unwrap();
+        let deserialized: PruningConfig = bincode::deserialize(&serialized).unwrap();
+
+        assert_eq!(deserialized.max_blocks_retained, 5_000);
+        assert_eq!(deserialized.max_state_size_bytes, 1_073_741_824);
+        assert_eq!(deserialized.prune_interval_blocks, 50);
+        assert_eq!(deserialized.keep_recent_txs_days, 60);
+    }
+
+    #[test]
+    fn test_prune_stats_serde_roundtrip() {
+        let stats = PruneStats {
+            total_blocks_pruned: 42,
+            total_bytes_freed: 123_456,
+            last_prune_height: 9_999,
+            last_prune_timestamp: Utc::now(),
+        };
+
+        let serialized = bincode::serialize(&stats).unwrap();
+        let deserialized: PruneStats = bincode::deserialize(&serialized).unwrap();
+
+        assert_eq!(deserialized.total_blocks_pruned, 42);
+        assert_eq!(deserialized.total_bytes_freed, 123_456);
+        assert_eq!(deserialized.last_prune_height, 9_999);
     }
 }

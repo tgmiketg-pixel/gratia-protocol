@@ -1289,6 +1289,7 @@ mod tests {
             sender_pubkey: vec![0; 32],
             signature: vec![0; 64],
             nonce: 0,
+            chain_id: 2,
             fee: 1000,
             timestamp: Utc::now(),
         }

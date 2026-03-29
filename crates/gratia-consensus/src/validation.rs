@@ -6,8 +6,9 @@
 use gratia_core::crypto::{verify_signature, sha256};
 use gratia_core::error::GratiaError;
 use gratia_core::types::{
-    Block, BlockHeader, Lux, Transaction, TransactionPayload,
+    Block, BlockHeader, Lux, ProofOfLifeAttestation, Transaction, TransactionPayload,
 };
+use gratia_zk::bulletproofs::{PolRangeProof, PolThresholds};
 
 use crate::committee::ValidatorCommittee;
 
@@ -64,6 +65,12 @@ pub struct ValidationContext {
     /// Timestamp of the previous block, used to enforce monotonicity.
     /// `None` only for the genesis block (height 0).
     pub previous_block_timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    /// Proof of Life thresholds for ZK proof verification.
+    /// WHY: These are governance-adjustable, so they come from config rather
+    /// than being hardcoded. The verifier must use the same thresholds the
+    /// prover used (which are the network's current thresholds at the time
+    /// the attestation was created).
+    pub pol_thresholds: PolThresholds,
 }
 
 // ============================================================================
@@ -375,6 +382,85 @@ pub fn validate_committee_parameters(
     Ok(())
 }
 
+/// Validate a single Proof of Life attestation's ZK proof.
+///
+/// If the attestation contains a non-empty ZK proof and commitments, verify
+/// them using the Bulletproofs verifier. Attestations without a ZK proof
+/// (e.g., from the genesis epoch or during the transition period) are
+/// accepted but logged.
+///
+/// # Arguments
+/// * `attestation` - The on-chain PoL attestation to verify.
+/// * `thresholds` - The governance-set PoL thresholds for the current epoch.
+pub fn validate_attestation_zk_proof(
+    attestation: &ProofOfLifeAttestation,
+    thresholds: &PolThresholds,
+) -> Result<(), GratiaError> {
+    // WHY: During the transition period (and for genesis-era attestations),
+    // the zk_proof field may be empty. We accept these but require ZK proofs
+    // once the network matures. A future governance vote can make ZK proofs
+    // mandatory by rejecting empty proofs here.
+    if attestation.zk_proof.is_empty() {
+        tracing::debug!("Attestation has no ZK proof — accepted during transition period");
+        return Ok(());
+    }
+
+    let commitments = attestation.zk_commitments.as_ref().ok_or_else(|| {
+        GratiaError::InvalidZkProof {
+            reason: "attestation has zk_proof bytes but missing zk_commitments".into(),
+        }
+    })?;
+
+    let range_proof = PolRangeProof {
+        proof_bytes: attestation.zk_proof.clone(),
+        commitments: commitments.clone(),
+        // WHY: The flexible API uses 4 core numeric parameters.
+        parameter_count: 4,
+    };
+
+    gratia_zk::verify_pol_proof(&range_proof, thresholds).map_err(|e| {
+        GratiaError::InvalidZkProof {
+            reason: format!("PoL attestation ZK proof verification failed: {}", e),
+        }
+    })?;
+
+    Ok(())
+}
+
+/// Validate all Proof of Life attestations in a block.
+///
+/// Checks:
+/// - No duplicate nullifiers (prevents double-submission)
+/// - ZK proof is valid for each attestation (if present)
+pub fn validate_block_attestations(
+    attestations: &[ProofOfLifeAttestation],
+    thresholds: &PolThresholds,
+) -> Result<(), GratiaError> {
+    // Check for duplicate nullifiers within the same block.
+    let mut seen_nullifiers = std::collections::HashSet::new();
+    for att in attestations {
+        if !seen_nullifiers.insert(att.nullifier) {
+            return Err(GratiaError::BlockValidationFailed {
+                reason: format!(
+                    "Duplicate attestation nullifier in block: {}",
+                    hex::encode(att.nullifier),
+                ),
+            });
+        }
+    }
+
+    // Verify ZK proofs for each attestation.
+    for (i, att) in attestations.iter().enumerate() {
+        validate_attestation_zk_proof(att, thresholds).map_err(|e| {
+            GratiaError::BlockValidationFailed {
+                reason: format!("Attestation {} ZK proof invalid: {}", i, e),
+            }
+        })?;
+    }
+
+    Ok(())
+}
+
 /// Validate a complete block (header + transactions + size).
 pub fn validate_block(
     block: &Block,
@@ -398,6 +484,9 @@ pub fn validate_block(
 
     // Validate transactions
     validate_block_transactions(&block.transactions, ctx.min_transaction_fee)?;
+
+    // Validate PoL attestation ZK proofs
+    validate_block_attestations(&block.attestations, &ctx.pol_thresholds)?;
 
     // Validate finality (sufficient validator signatures)
     let sig_count = block.validator_signatures.len();
@@ -457,6 +546,7 @@ mod tests {
             sender_pubkey: keypair.public_key_bytes(),
             signature,
             nonce,
+            chain_id: 2,
             fee,
             timestamp,
         }
@@ -601,6 +691,7 @@ mod tests {
                     sender_pubkey: keypair.public_key_bytes(),
                     signature,
                     nonce,
+                    chain_id: 2,
                     fee,
                     timestamp,
                 }
@@ -635,6 +726,7 @@ mod tests {
             max_block_size: MAX_BLOCK_SIZE,
             min_transaction_fee: MIN_TRANSACTION_FEE,
             previous_block_timestamp: None,
+            pol_thresholds: PolThresholds::default(),
         };
 
         assert!(validate_block_header(&header, &ctx).is_err());
@@ -665,6 +757,7 @@ mod tests {
             max_block_size: MAX_BLOCK_SIZE,
             min_transaction_fee: MIN_TRANSACTION_FEE,
             previous_block_timestamp: None,
+            pol_thresholds: PolThresholds::default(),
         };
 
         assert!(validate_block_header(&header, &ctx).is_err());
@@ -694,6 +787,7 @@ mod tests {
             max_block_size: MAX_BLOCK_SIZE,
             min_transaction_fee: MIN_TRANSACTION_FEE,
             previous_block_timestamp: None,
+            pol_thresholds: PolThresholds::default(),
         };
 
         assert!(validate_block_header(&header, &ctx).is_err());
@@ -724,6 +818,7 @@ mod tests {
             max_block_size: MAX_BLOCK_SIZE,
             min_transaction_fee: MIN_TRANSACTION_FEE,
             previous_block_timestamp: None,
+            pol_thresholds: PolThresholds::default(),
         };
 
         assert!(validate_block_header(&header, &ctx).is_ok());
@@ -756,6 +851,7 @@ mod tests {
             max_block_size: MAX_BLOCK_SIZE,
             min_transaction_fee: MIN_TRANSACTION_FEE,
             previous_block_timestamp: Some(previous_ts),
+            pol_thresholds: PolThresholds::default(),
         };
 
         let result = validate_block_header(&header, &ctx);
@@ -789,6 +885,7 @@ mod tests {
             max_block_size: MAX_BLOCK_SIZE,
             min_transaction_fee: MIN_TRANSACTION_FEE,
             previous_block_timestamp: Some(ts),
+            pol_thresholds: PolThresholds::default(),
         };
 
         assert!(validate_block_header(&header, &ctx).is_ok());

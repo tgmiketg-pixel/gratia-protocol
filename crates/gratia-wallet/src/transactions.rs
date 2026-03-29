@@ -21,15 +21,42 @@ pub struct TransactionBuilder<'a, K: Keystore> {
     keystore: &'a K,
     nonce: u64,
     fee: Lux,
+    /// WHY: chain_id is included in the signing payload to prevent cross-chain
+    /// replay attacks. A transaction signed for testnet (chain_id=2) cannot be
+    /// replayed on mainnet (chain_id=1) and vice versa.
+    chain_id: u32,
 }
+
+/// Default chain ID for testnet.
+/// WHY: During development and testing, chain_id=2 is used for testnet.
+/// Mainnet will use chain_id=1. This constant provides a safe default.
+const DEFAULT_CHAIN_ID: u32 = 2;
 
 impl<'a, K: Keystore> TransactionBuilder<'a, K> {
     /// Create a new builder bound to the given keystore.
+    ///
+    /// Uses the default testnet chain_id (2). For mainnet or custom chains,
+    /// use `with_chain_id()`.
     pub fn new(keystore: &'a K, nonce: u64, fee: Lux) -> Self {
         Self {
             keystore,
             nonce,
             fee,
+            chain_id: DEFAULT_CHAIN_ID,
+        }
+    }
+
+    /// Create a new builder with an explicit chain_id.
+    ///
+    /// WHY: Allows callers to specify the chain_id for mainnet (1), testnet (2),
+    /// or any future chain. The chain_id is included in the signed payload to
+    /// prevent cross-chain replay attacks.
+    pub fn with_chain_id(keystore: &'a K, nonce: u64, fee: Lux, chain_id: u32) -> Self {
+        Self {
+            keystore,
+            nonce,
+            fee,
+            chain_id,
         }
     }
 
@@ -59,11 +86,11 @@ impl<'a, K: Keystore> TransactionBuilder<'a, K> {
         let sender_pubkey = self.keystore.public_key_bytes()?;
         let timestamp = Utc::now();
 
-        // Serialize the signable content: payload + nonce + fee + timestamp.
-        // WHY: We include nonce and timestamp in the signed blob to prevent
-        // replay attacks and ensure each signature is unique even for
-        // identical payloads.
-        let signable = signable_bytes(&payload, self.nonce, self.fee, &timestamp)?;
+        // Serialize the signable content: payload + nonce + chain_id + fee + timestamp.
+        // WHY: We include nonce, chain_id, and timestamp in the signed blob to
+        // prevent replay attacks (nonce), cross-chain replay attacks (chain_id),
+        // and ensure each signature is unique even for identical payloads (timestamp).
+        let signable = signable_bytes(&payload, self.nonce, self.chain_id, self.fee, &timestamp)?;
 
         let signature = self.keystore.sign(&signable)?;
 
@@ -75,6 +102,7 @@ impl<'a, K: Keystore> TransactionBuilder<'a, K> {
             sender_pubkey,
             signature,
             nonce: self.nonce,
+            chain_id: self.chain_id, // WHY: Included in signing payload. Testnet = 2, mainnet = 1.
             fee: self.fee,
             timestamp,
         })
@@ -91,7 +119,7 @@ impl<'a, K: Keystore> TransactionBuilder<'a, K> {
 /// 1. The signature matches the sender's public key over the signable content.
 /// 2. The transaction hash is consistent with the signed data.
 pub fn verify_transaction(tx: &Transaction) -> Result<(), GratiaError> {
-    let signable = signable_bytes(&tx.payload, tx.nonce, tx.fee, &tx.timestamp)?;
+    let signable = signable_bytes(&tx.payload, tx.nonce, tx.chain_id, tx.fee, &tx.timestamp)?;
 
     // Verify the Ed25519 signature
     gratia_core::crypto::verify_signature(&tx.sender_pubkey, &signable, &tx.signature)?;
@@ -118,20 +146,27 @@ pub fn sender_address(tx: &Transaction) -> Result<Address, GratiaError> {
 
 /// Produce the canonical byte sequence that gets signed.
 ///
+/// Format: bincode(payload) || nonce (LE) || chain_id (LE) || fee (LE) || timestamp_millis (LE)
+///
 /// WHY: Canonical serialization prevents signature malleability. Using bincode
-/// gives deterministic byte order for the same logical payload.
+/// gives deterministic byte order for the same logical payload. chain_id is
+/// included to prevent cross-chain replay attacks (e.g., testnet tx replayed
+/// on mainnet).
 fn signable_bytes(
     payload: &TransactionPayload,
     nonce: u64,
+    chain_id: u32,
     fee: Lux,
     timestamp: &chrono::DateTime<Utc>,
 ) -> Result<Vec<u8>, GratiaError> {
     let payload_bytes = bincode::serialize(payload)
         .map_err(|e| GratiaError::SerializationError(e.to_string()))?;
 
-    let mut buf = Vec::with_capacity(payload_bytes.len() + 8 + 8 + 8);
+    // 8 (nonce) + 4 (chain_id) + 8 (fee) + 8 (timestamp) = 28 extra bytes
+    let mut buf = Vec::with_capacity(payload_bytes.len() + 28);
     buf.extend_from_slice(&payload_bytes);
     buf.extend_from_slice(&nonce.to_le_bytes());
+    buf.extend_from_slice(&chain_id.to_le_bytes());
     buf.extend_from_slice(&fee.to_le_bytes());
     buf.extend_from_slice(&timestamp.timestamp_millis().to_le_bytes());
     Ok(buf)

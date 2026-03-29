@@ -390,6 +390,8 @@ object GratiaCoreManager {
                     NetworkEvent.BlockReceived(ffi.height.toLong(), ffi.producer)
                 is uniffi.gratia_ffi.FfiNetworkEvent.TransactionReceived ->
                     NetworkEvent.TransactionReceived(ffi.hashHex)
+                is uniffi.gratia_ffi.FfiNetworkEvent.LuxPostReceived ->
+                    NetworkEvent.LuxPostReceived(ffi.hash, ffi.author)
             }
         }
     }
@@ -683,6 +685,84 @@ object GratiaCoreManager {
     }
 
     // ========================================================================
+    // Lux Social Protocol
+    // ========================================================================
+
+    fun luxCreatePost(content: String): String {
+        return callNode { it.luxCreatePost(content) }
+    }
+
+    fun luxReply(parentHash: String, content: String): String {
+        return callNode { it.luxReply(parentHash, content) }
+    }
+
+    fun luxLikePost(postHash: String) {
+        callNode { it.luxLikePost(postHash) }
+    }
+
+    fun luxRepost(originalHash: String, quote: String?): String {
+        return callNode { it.luxRepost(originalHash, quote) }
+    }
+
+    fun luxFollow(targetAddress: String) {
+        callNode { it.luxFollow(targetAddress) }
+    }
+
+    fun luxUnfollow(targetAddress: String) {
+        callNode { it.luxUnfollow(targetAddress) }
+    }
+
+    fun luxGetGlobalFeed(limit: Int = 50): LuxFeed {
+        val ffi = callNode { it.luxGetGlobalFeed(limit.toUInt()) }
+        return LuxFeed(
+            posts = ffi.posts.map { p ->
+                LuxPostBridge(
+                    hash = p.hash,
+                    author = p.author,
+                    authorDisplayName = p.authorDisplayName,
+                    content = p.content,
+                    timestampMillis = p.timestampMillis,
+                    likes = p.likes.toLong(),
+                    reposts = p.reposts.toLong(),
+                    replies = p.replies.toLong(),
+                    likedByMe = p.likedByMe,
+                    repostedByMe = p.repostedByMe,
+                )
+            },
+            postFeeLux = ffi.postFeeLux.toLong(),
+            totalBurnedLux = ffi.totalBurnedLux.toLong(),
+        )
+    }
+
+    fun luxGetProfile(address: String): LuxProfileBridge {
+        val ffi = callNode { it.luxGetProfile(address) }
+        return LuxProfileBridge(
+            address = ffi.address,
+            displayName = ffi.displayName,
+            bio = ffi.bio,
+            followerCount = ffi.followerCount.toLong(),
+            followingCount = ffi.followingCount.toLong(),
+            postCount = ffi.postCount.toLong(),
+        )
+    }
+
+    fun luxSetProfile(displayName: String, bio: String) {
+        callNode { it.luxSetProfile(displayName, bio) }
+    }
+
+    fun luxGetPostFee(): Long {
+        return callNode { it.luxGetPostFee().toLong() }
+    }
+
+    fun luxGetTotalBurned(): Long {
+        return callNode { it.luxGetTotalBurned().toLong() }
+    }
+
+    fun luxGetPostCount(): Long {
+        return callNode { it.luxGetPostCount().toLong() }
+    }
+
+    // ========================================================================
     // Private helpers
     // ========================================================================
 
@@ -855,6 +935,9 @@ sealed class NetworkEvent {
 
     /** A transaction was received from the network. */
     data class TransactionReceived(val hashHex: String) : NetworkEvent()
+
+    /** A Lux social post was received from the network. */
+    data class LuxPostReceived(val hash: String, val author: String) : NetworkEvent()
 }
 
 /**
@@ -961,4 +1044,36 @@ private fun FfiMiningStatus.toBridge() = MiningStatus(
     isPluggedIn = isPluggedIn,
     currentDayPolValid = currentDayPolValid,
     presenceScore = presenceScore.toInt(),
+)
+
+// ============================================================================
+// Lux Social Protocol data classes
+// ============================================================================
+
+data class LuxPostBridge(
+    val hash: String,
+    val author: String,
+    val authorDisplayName: String,
+    val content: String,
+    val timestampMillis: Long,
+    val likes: Long,
+    val reposts: Long,
+    val replies: Long,
+    val likedByMe: Boolean,
+    val repostedByMe: Boolean,
+)
+
+data class LuxFeed(
+    val posts: List<LuxPostBridge>,
+    val postFeeLux: Long,
+    val totalBurnedLux: Long,
+)
+
+data class LuxProfileBridge(
+    val address: String,
+    val displayName: String,
+    val bio: String,
+    val followerCount: Long,
+    val followingCount: Long,
+    val postCount: Long,
 )

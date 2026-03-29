@@ -9,6 +9,7 @@ pub mod config;
 pub mod emission;
 pub mod error;
 pub mod crypto;
+pub mod mempool;
 
 pub use types::*;
 pub use config::Config;

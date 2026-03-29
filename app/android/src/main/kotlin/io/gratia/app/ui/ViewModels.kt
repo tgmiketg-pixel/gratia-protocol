@@ -39,6 +39,7 @@ data class MiningStatus(
     val currentDayPolValid: Boolean,
     val presenceScore: Int,
     val earnedThisSessionLux: Long = 0,
+    val isConsensusActive: Boolean = false,
 )
 
 data class ProofOfLifeStatus(
@@ -122,28 +123,61 @@ class WalletViewModel : ViewModel() {
         }
     }
 
+    private var lastKnownTxCount: Int = 0
+
     private fun refreshQuiet() {
         try {
             val bridge = io.gratia.app.bridge.GratiaCoreManager
             val info = bridge.getWalletInfo()
             val txs = bridge.getTransactionHistory()
+            val mappedTxs = txs.map { tx ->
+                TransactionInfo(
+                    hashHex = tx.hashHex,
+                    direction = tx.direction,
+                    counterparty = tx.counterparty,
+                    amountLux = tx.amountLux,
+                    timestampMillis = tx.timestampMillis,
+                    status = tx.status,
+                )
+            }
+
+            // WHY: Detect new incoming transactions by comparing tx count.
+            // If a new "received" tx appeared, fire a push notification so
+            // the user knows they got GRAT even if the app is in the background.
+            if (lastKnownTxCount > 0 && mappedTxs.size > lastKnownTxCount) {
+                val newTxs = mappedTxs.take(mappedTxs.size - lastKnownTxCount)
+                for (tx in newTxs) {
+                    if (tx.direction == "received") {
+                        notifyIncomingTransfer(tx)
+                    }
+                }
+            }
+            lastKnownTxCount = mappedTxs.size
+
             _uiState.value = _uiState.value.copy(
                 walletInfo = WalletInfo(
                     address = info.address,
                     balanceLux = info.balanceLux,
                     miningState = info.miningState,
                 ),
-                transactions = txs.map { tx ->
-                    TransactionInfo(
-                        hashHex = tx.hashHex,
-                        direction = tx.direction,
-                        counterparty = tx.counterparty,
-                        amountLux = tx.amountLux,
-                        timestampMillis = tx.timestampMillis,
-                        status = tx.status,
-                    )
-                },
+                transactions = mappedTxs,
             )
+        } catch (e: Exception) {
+            android.util.Log.w("WalletVM", "Refresh failed: ${e.message}")
+        }
+    }
+
+    private fun notifyIncomingTransfer(tx: TransactionInfo) {
+        try {
+            val context = io.gratia.app.GratiaApplication.appContext ?: return
+            val amountGrat = "%.2f".format(tx.amountLux / 1_000_000.0)
+            val notification = io.gratia.app.service.NotificationHelper.buildTransactionNotification(
+                context, amountGrat, tx.counterparty ?: "Unknown",
+            )
+            val manager = context.getSystemService(android.content.Context.NOTIFICATION_SERVICE)
+                as? android.app.NotificationManager
+            // WHY: Use tx hash code as notification ID so each transfer gets its own notification.
+            manager?.notify(tx.hashHex.hashCode(), notification)
         } catch (_: Exception) {}
     }
 
@@ -382,6 +416,10 @@ class MiningViewModel : ViewModel() {
             val pol = bridge.getProofOfLifeStatus()
             val stake = bridge.getStakeInfo()
             val walletBalance = try { bridge.getWalletInfo().balanceLux } catch (_: Exception) { 0L }
+            val consensusActive = try {
+                val cs = bridge.getConsensusStatus()
+                cs.state != "stopped"
+            } catch (_: Exception) { false }
             _uiState.value = _uiState.value.copy(
                 miningStatus = MiningStatus(
                     state = mining.state,
@@ -390,6 +428,7 @@ class MiningViewModel : ViewModel() {
                     currentDayPolValid = mining.currentDayPolValid,
                     presenceScore = mining.presenceScore,
                     earnedThisSessionLux = walletBalance,
+                    isConsensusActive = consensusActive,
                 ),
                 polStatus = ProofOfLifeStatus(
                     isValidToday = pol.isValidToday,
@@ -405,7 +444,9 @@ class MiningViewModel : ViewModel() {
                     meetsMinimum = stake.meetsMinimum,
                 ),
             )
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            android.util.Log.w("MiningVM", "Quiet refresh failed: ${e.message}")
+        }
     }
 
     fun loadMiningData() {
@@ -417,6 +458,10 @@ class MiningViewModel : ViewModel() {
                 val pol = bridge.getProofOfLifeStatus()
                 val stake = bridge.getStakeInfo()
                 val walletBalance = try { bridge.getWalletInfo().balanceLux } catch (_: Exception) { 0L }
+                val consensusActive = try {
+                    val cs = bridge.getConsensusStatus()
+                    cs.state != "stopped"
+                } catch (_: Exception) { false }
                 _uiState.value = MiningUiState(
                     miningStatus = MiningStatus(
                         state = mining.state,
@@ -425,6 +470,7 @@ class MiningViewModel : ViewModel() {
                         currentDayPolValid = mining.currentDayPolValid,
                         presenceScore = mining.presenceScore,
                         earnedThisSessionLux = walletBalance,
+                        isConsensusActive = consensusActive,
                     ),
                     polStatus = ProofOfLifeStatus(
                         isValidToday = pol.isValidToday,
@@ -818,6 +864,8 @@ class NetworkViewModel : ViewModel() {
                         "Block #${event.height} from ${event.producer.take(8)}..."
                     is io.gratia.app.bridge.NetworkEvent.TransactionReceived ->
                         "Tx ${event.hashHex.take(8)}... received"
+                    is io.gratia.app.bridge.NetworkEvent.LuxPostReceived ->
+                        "Lux post from ${event.author.take(14)}..."
                 }
                 addEvent(msg)
             }

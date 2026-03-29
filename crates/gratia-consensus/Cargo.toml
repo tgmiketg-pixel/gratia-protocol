@@ -6,6 +6,7 @@ edition.workspace = true
 
 [dependencies]
 gratia-core = { path = "../gratia-core" }
+gratia-zk = { path = "../gratia-zk" }
 serde = { workspace = true }
 bincode = { workspace = true }
 thiserror = { workspace = true }

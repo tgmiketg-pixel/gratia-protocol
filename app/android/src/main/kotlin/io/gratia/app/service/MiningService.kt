@@ -309,6 +309,21 @@ class MiningService : Service() {
 
         while (serviceScope.isActive) {
             try {
+                // WHY: Check consensus state first. Block production and mining
+                // rewards only happen inside the slot timer, which exits when
+                // consensus stops. Without this check, the MiningService keeps
+                // running (showing "Mining" in the UI) but earns nothing.
+                try {
+                    val consensusStatus = GratiaCoreManager.getConsensusStatus()
+                    if (consensusStatus.state == "stopped") {
+                        Log.i(TAG, "Consensus stopped — stopping mining service")
+                        stopSelf()
+                        return
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to check consensus status: ${e.message}")
+                }
+
                 val batteryManager = getSystemService(Context.BATTERY_SERVICE)
                     as android.os.BatteryManager
 

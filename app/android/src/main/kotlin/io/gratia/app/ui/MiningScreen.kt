@@ -78,13 +78,20 @@ fun MiningScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                navigationIcon = { GratiaLogo(modifier = Modifier.padding(start = 12.dp)) },
-                title = { Text("Mining") },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ),
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                GratiaLogo(size = 56)
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    "Mining",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                )
+            }
         },
     ) { padding ->
         if (state.isLoading) {
@@ -208,19 +215,15 @@ private fun MiningStateCard(
     onStartMining: () -> Unit,
     onStopMining: () -> Unit,
 ) {
-    // WHY: During genesis, mining state may be "proof_of_life" even though
-    // blocks are being produced and rewards are accumulating. We detect
-    // active mining by: explicit "mining" state, OR balance is growing
-    // (earnedThisSessionLux > 0 means blocks have been rewarded), OR
-    // plugged in + above 80% (conditions met even if state string lags).
-    // WHY: During genesis, mining state may be "proof_of_life" even though
-    // blocks are being produced and rewards are accumulating. We detect
-    // active mining by: explicit "mining" state, OR balance is growing
-    // (earnedThisSessionLux > 0 means blocks have been rewarded), OR
-    // plugged in + above 80% (conditions met even if state string lags).
-    val isMining = status.state == "mining" ||
+    // WHY: Mining animation should only show when consensus is actively
+    // running AND power conditions are met. Without the consensus check,
+    // the animation runs indefinitely after consensus stops — misleading
+    // the user into thinking they're earning when no blocks are produced.
+    val isMining = status.isConsensusActive && (
+        status.state == "mining" ||
         status.earnedThisSessionLux > 0 ||
         (status.isPluggedIn && status.batteryPercent >= 80)
+    )
 
     val stateColor = if (isMining) {
         SignalGreen
@@ -372,7 +375,18 @@ private fun MiningStateCard(
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                 )
             } else {
-                // Not mining — show static state
+                // Not mining — show static state with clear reason
+                val notMiningLabel: String
+                val notMiningDescription: String
+
+                if (!status.isConsensusActive) {
+                    notMiningLabel = "Not Mining"
+                    notMiningDescription = "Consensus is not running — no blocks being produced"
+                } else {
+                    notMiningLabel = miningStateLabel(status.state)
+                    notMiningDescription = miningStateDescription(status)
+                }
+
                 Box(
                     modifier = Modifier.size(80.dp),
                     contentAlignment = Alignment.Center,
@@ -380,18 +394,26 @@ private fun MiningStateCard(
                     Canvas(modifier = Modifier.size(56.dp)) {
                         drawCircle(color = stateColor)
                     }
+                    // WHY: Show a clear "off" icon so the user instantly sees
+                    // mining is inactive, rather than just a colored circle.
+                    Icon(
+                        Icons.Default.PowerOff,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(28.dp),
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Text(
-                    text = miningStateLabel(status.state),
+                    text = notMiningLabel,
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                     color = stateColor,
                 )
                 Text(
-                    text = miningStateDescription(status),
+                    text = notMiningDescription,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                     textAlign = TextAlign.Center,

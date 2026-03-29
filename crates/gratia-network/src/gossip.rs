@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use gratia_core::types::{Block, NodeId, ProofOfLifeAttestation, Transaction};
+use gratia_core::types::{Block, NodeId, ProofOfLifeAttestation, Transaction, ValidatorSignature};
 
 use crate::error::NetworkError;
 
@@ -31,9 +31,16 @@ pub const TOPIC_NODE_ANNOUNCE: &str = "gratia/nodes/1";
 /// a dedicated request/response protocol (e.g., libp2p request-response) should
 /// replace this in Phase 3 for bandwidth efficiency.
 pub const TOPIC_SYNC: &str = "gratia/sync/1";
+/// WHY: Separate topic for Lux social posts so social traffic doesn't compete
+/// with consensus-critical block/tx propagation and can be rate-limited independently.
+pub const TOPIC_LUX_POSTS: &str = "gratia/lux/posts/1";
+/// WHY: Dedicated topic for validator signatures on pending blocks. Separate from
+/// TOPIC_BLOCKS because signatures arrive asynchronously after a block is proposed —
+/// mixing them with block propagation would complicate deduplication and processing.
+pub const TOPIC_VALIDATOR_SIGS: &str = "gratia/validator-sigs/1";
 
 /// All topics the Gratia node subscribes to.
-pub const ALL_TOPICS: &[&str] = &[TOPIC_BLOCKS, TOPIC_TRANSACTIONS, TOPIC_ATTESTATIONS, TOPIC_NODE_ANNOUNCE, TOPIC_SYNC];
+pub const ALL_TOPICS: &[&str] = &[TOPIC_BLOCKS, TOPIC_TRANSACTIONS, TOPIC_ATTESTATIONS, TOPIC_NODE_ANNOUNCE, TOPIC_SYNC, TOPIC_LUX_POSTS, TOPIC_VALIDATOR_SIGS];
 
 // ============================================================================
 // Message Types
@@ -59,6 +66,22 @@ pub struct NodeAnnouncement {
     pub timestamp: DateTime<Utc>,
 }
 
+/// A validator's signature on a pending block, broadcast for BFT finality.
+///
+/// WHY: When a block producer creates a block, it signs it and broadcasts the
+/// block + its own signature. Other committee members validate the block and
+/// broadcast their signatures via this message. Once enough signatures accumulate
+/// (meeting the finality threshold), the block is finalized.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidatorSignatureMessage {
+    /// SHA-256 hash of the block header being signed.
+    pub block_hash: [u8; 32],
+    /// Height of the block being signed.
+    pub height: u64,
+    /// The validator's signature (includes validator NodeId and Ed25519 sig).
+    pub signature: ValidatorSignature,
+}
+
 /// A gossip message wrapping the different types of data propagated
 /// over the network. Serialized to bincode for compact mobile-friendly encoding.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +97,12 @@ pub enum GossipMessage {
 
     /// A node announcing its eligibility for committee selection.
     NodeAnnouncement(Box<NodeAnnouncement>),
+
+    /// A new Lux social post created by a user.
+    NewLuxPost(Box<gratia_lux::LuxPost>),
+
+    /// A validator's signature on a pending block for BFT finality.
+    ValidatorSignatureMsg(Box<ValidatorSignatureMessage>),
 }
 
 impl GossipMessage {
@@ -84,6 +113,8 @@ impl GossipMessage {
             GossipMessage::NewTransaction(_) => TOPIC_TRANSACTIONS,
             GossipMessage::NewAttestation(_) => TOPIC_ATTESTATIONS,
             GossipMessage::NodeAnnouncement(_) => TOPIC_NODE_ANNOUNCE,
+            GossipMessage::NewLuxPost(_) => TOPIC_LUX_POSTS,
+            GossipMessage::ValidatorSignatureMsg(_) => TOPIC_VALIDATOR_SIGS,
         }
     }
 
@@ -129,6 +160,20 @@ impl GossipMessage {
                 // expected and will be filtered by the dedup cache.
                 let mut id = b"node:".to_vec();
                 id.extend_from_slice(&ann.node_id.0);
+                id
+            }
+            GossipMessage::NewLuxPost(post) => {
+                // WHY: Dedup by post hash — each post has a unique SHA-256 hash.
+                let mut id = b"lux:".to_vec();
+                id.extend_from_slice(post.hash.as_bytes());
+                id
+            }
+            GossipMessage::ValidatorSignatureMsg(msg) => {
+                // WHY: Dedup by block hash + validator node ID — each committee
+                // member signs each block exactly once.
+                let mut id = b"vsig:".to_vec();
+                id.extend_from_slice(&msg.block_hash);
+                id.extend_from_slice(&msg.signature.validator.0);
                 id
             }
         }
@@ -209,6 +254,43 @@ pub fn validate_incoming_message(data: &[u8]) -> Result<GossipMessage, NetworkEr
                     "Invalid announcement presence score: {} (must be 40-100)",
                     ann.presence_score
                 )));
+            }
+        }
+        GossipMessage::NewLuxPost(post) => {
+            // WHY: Reject posts with empty content or missing signature at the
+            // gossip layer before they reach the application.
+            if post.content.is_empty() && post.attachments.is_empty() {
+                return Err(NetworkError::InvalidMessage(
+                    "Lux post has no content and no attachments".to_string(),
+                ));
+            }
+            if post.signature.is_empty() {
+                return Err(NetworkError::InvalidMessage(
+                    "Lux post has empty signature".to_string(),
+                ));
+            }
+            if post.hash.is_empty() {
+                return Err(NetworkError::InvalidMessage(
+                    "Lux post has empty hash".to_string(),
+                ));
+            }
+        }
+        GossipMessage::ValidatorSignatureMsg(msg) => {
+            // WHY: Reject structurally invalid validator signatures at the gossip
+            // layer. Full committee membership and cryptographic verification
+            // happens in the consensus/FFI layer.
+            if msg.signature.signature.len() != 64 {
+                return Err(NetworkError::InvalidMessage(
+                    format!(
+                        "Invalid validator signature length: {} (expected 64)",
+                        msg.signature.signature.len()
+                    ),
+                ));
+            }
+            if msg.block_hash == [0u8; 32] {
+                return Err(NetworkError::InvalidMessage(
+                    "Validator signature has zero block hash".to_string(),
+                ));
             }
         }
     }
@@ -299,6 +381,10 @@ pub struct GossipHandler {
     attestation_cache: DeduplicationCache,
     /// Deduplication cache for node announcements.
     announce_cache: DeduplicationCache,
+    /// Deduplication cache for Lux social posts.
+    lux_cache: DeduplicationCache,
+    /// Deduplication cache for validator signature messages.
+    sig_cache: DeduplicationCache,
 }
 
 impl GossipHandler {
@@ -316,6 +402,12 @@ impl GossipHandler {
             // WHY: Announce cache — one per node. 500 entries covers all peers
             // in early network. Re-announcements on reconnect are expected.
             announce_cache: DeduplicationCache::new(500),
+            // WHY: Lux post cache — social posts arrive frequently but less than
+            // transactions. 5,000 entries covers several minutes of activity.
+            lux_cache: DeduplicationCache::new(5_000),
+            // WHY: Validator sig cache — up to 21 committee members * recent blocks.
+            // 2,000 entries covers ~95 blocks worth of full committee signatures.
+            sig_cache: DeduplicationCache::new(2_000),
         }
     }
 
@@ -344,6 +436,8 @@ impl GossipHandler {
             GossipMessage::NewTransaction(_) => self.tx_cache.check_and_insert(&msg_id),
             GossipMessage::NewAttestation(_) => self.attestation_cache.check_and_insert(&msg_id),
             GossipMessage::NodeAnnouncement(_) => self.announce_cache.check_and_insert(&msg_id),
+            GossipMessage::NewLuxPost(_) => self.lux_cache.check_and_insert(&msg_id),
+            GossipMessage::ValidatorSignatureMsg(_) => self.sig_cache.check_and_insert(&msg_id),
         };
 
         if is_new {
@@ -410,6 +504,38 @@ impl GossipHandler {
         }
         Ok((TOPIC_ATTESTATIONS.to_string(), data))
     }
+
+    /// Prepare a validator signature message for gossip publication.
+    pub fn prepare_validator_signature(
+        &self,
+        msg: ValidatorSignatureMessage,
+    ) -> Result<(String, Vec<u8>), NetworkError> {
+        let gossip_msg = GossipMessage::ValidatorSignatureMsg(Box::new(msg));
+        let data = gossip_msg.to_bytes()?;
+        if data.len() > MAX_MESSAGE_SIZE {
+            return Err(NetworkError::MessageTooLarge {
+                size: data.len(),
+                max: MAX_MESSAGE_SIZE,
+            });
+        }
+        Ok((TOPIC_VALIDATOR_SIGS.to_string(), data))
+    }
+
+    /// Prepare a Lux social post for gossip publication.
+    pub fn prepare_lux_post(
+        &self,
+        post: gratia_lux::LuxPost,
+    ) -> Result<(String, Vec<u8>), NetworkError> {
+        let msg = GossipMessage::NewLuxPost(Box::new(post));
+        let data = msg.to_bytes()?;
+        if data.len() > MAX_MESSAGE_SIZE {
+            return Err(NetworkError::MessageTooLarge {
+                size: data.len(),
+                max: MAX_MESSAGE_SIZE,
+            });
+        }
+        Ok((TOPIC_LUX_POSTS.to_string(), data))
+    }
 }
 
 impl Default for GossipHandler {
@@ -454,6 +580,7 @@ mod tests {
             sender_pubkey: vec![1u8; 32],
             signature: vec![2u8; 64],
             nonce: 1,
+            chain_id: 2, // WHY: Testnet chain ID for test data
             fee: 1000,
             timestamp: Utc::now(),
         }
@@ -464,6 +591,7 @@ mod tests {
             blinded_id: [0xAA; 32],
             nullifier: [0xBB; 32],
             zk_proof: vec![0u8; 128],
+            zk_commitments: None,
             presence_score: 65,
             sensor_flags: SensorFlags {
                 gps: true,

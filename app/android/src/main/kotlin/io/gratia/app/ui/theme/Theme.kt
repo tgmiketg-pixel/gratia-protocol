@@ -107,7 +107,11 @@ private val LightColorScheme = lightColorScheme(
  */
 @Composable
 fun GratiaTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    darkTheme: Boolean = when (ThemeManager.themeMode) {
+        ThemeManager.ThemeMode.DARK -> true
+        ThemeManager.ThemeMode.LIGHT -> false
+        ThemeManager.ThemeMode.SYSTEM -> isSystemInDarkTheme()
+    },
     content: @Composable () -> Unit,
 ) {
     val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme

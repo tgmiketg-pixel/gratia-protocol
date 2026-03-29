@@ -48,6 +48,9 @@
     <!-- Network state: check connectivity for consensus participation -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- Biometric: fingerprint/face authentication for app lock and transaction confirmation -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+
     <!-- NFC is optional — Wi-Fi-only phones are first-class citizens -->
     <uses-feature android:name="android.hardware.nfc" android:required="false" />
 
@@ -106,6 +109,20 @@
                 android:resource="@xml/nfc_aid_list" />
         </service>
 
+        <!-- FileProvider for securely sharing CSV exports and other files
+             with external apps via content:// URIs.
+             WHY: Direct file:// URIs are blocked on Android 7.0+ (Nougat).
+             FileProvider grants temporary read permission to the receiving app. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <!-- Restart PoL service after device reboot.
              WHY exported="true": Boot receivers must be exported to receive
              the system BOOT_COMPLETED broadcast.
@@ -122,6 +139,18 @@
                      instead of BOOT_COMPLETED on fast-boot/hibernation resume. -->
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
+        </receiver>
+
+        <!-- Home screen widget showing GRAT balance and mining status -->
+        <receiver
+            android:name=".widget.GratiaWidget"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/gratia_widget_info" />
         </receiver>
 
     </application>

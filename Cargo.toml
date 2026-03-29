@@ -11,6 +11,7 @@ members = [
     "crates/gratia-vm",
     "crates/gratia-network",
     "crates/gratia-state",
+    "crates/gratia-lux",
     "crates/gratia-ffi",
     "crates/gratiascript",
     "crates/gratia-bootstrap",

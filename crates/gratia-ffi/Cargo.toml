@@ -22,6 +22,7 @@ gratia-consensus = { path = "../gratia-consensus" }
 gratia-state = { path = "../gratia-state" }
 gratia-vm = { path = "../gratia-vm" }
 gratia-zk = { path = "../gratia-zk" }
+gratia-lux = { path = "../gratia-lux" }
 gratiascript = { path = "../gratiascript" }
 
 # Workspace dependencies
@@ -32,6 +33,7 @@ thiserror = { workspace = true }
 chrono = { workspace = true }
 hex = { workspace = true }
 curve25519-dalek = { workspace = true }
+ed25519-dalek = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tokio = { workspace = true }

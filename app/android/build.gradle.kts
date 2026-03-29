@@ -150,6 +150,16 @@ dependencies {
     implementation("androidx.camera:camera-view:1.3.1")
     implementation("com.google.mlkit:barcode-scanning:17.2.0")
 
+    // WHY: BiometricPrompt provides fingerprint, face, and device credential
+    // authentication on Android 6.0+ (API 23+). Falls back to PIN/pattern/password
+    // on devices without biometric hardware. Covers the $50 phone target.
+    implementation("androidx.biometric:biometric:1.1.0")
+
+    // WHY: EncryptedSharedPreferences stores security credentials (hashed PIN,
+    // hashed pattern) using AES-256 via Android Keystore. Even with root access,
+    // the stored hashes can't be read without the Keystore key.
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+
     // Testing
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")

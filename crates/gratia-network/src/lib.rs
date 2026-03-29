@@ -14,6 +14,7 @@
 //! - [`discovery`] — Kademlia DHT peer discovery.
 //! - [`gossip`] — Gossipsub for block/transaction/attestation propagation.
 //! - [`sync`] — Block synchronization protocol.
+//! - [`reputation`] — Peer reputation tracking and rate limiting.
 //!
 //! ## Usage
 //!
@@ -24,6 +25,7 @@ pub mod discovery;
 pub mod error;
 pub mod gossip;
 pub mod mesh;
+pub mod reputation;
 pub mod sync;
 pub mod transport;
 
@@ -43,7 +45,7 @@ use gratia_core::types::{Block, BlockHash, NodeId, ProofOfLifeAttestation, Trans
 
 use crate::discovery::PeerDiscovery;
 use crate::error::NetworkError;
-use crate::gossip::{GossipHandler, GossipMessage, NodeAnnouncement, ALL_TOPICS};
+use crate::gossip::{GossipHandler, GossipMessage, NodeAnnouncement, ValidatorSignatureMessage, ALL_TOPICS};
 use crate::mesh::MeshTransport;
 use crate::sync::{SyncManager, SyncPayload, SyncProtocolMessage, SyncRequest, SyncState, CHAIN_TIP_POLL_INTERVAL_SECS};
 use crate::transport::{ConnectionManager, TransportConfig};
@@ -108,6 +110,14 @@ pub enum NetworkEvent {
 
     /// A peer announced their node info for committee selection.
     NodeAnnounced(Box<NodeAnnouncement>),
+
+    /// A Lux social post was received from the gossip network.
+    LuxPostReceived(Box<gratia_lux::LuxPost>),
+
+    /// A validator signature for a pending block was received.
+    /// WHY: Committee members sign blocks they validate. When enough signatures
+    /// accumulate (meeting the finality threshold), the block is finalized.
+    ValidatorSignatureReceived(Box<ValidatorSignatureMessage>),
 }
 
 // ============================================================================
@@ -236,6 +246,12 @@ pub enum NetworkCommand {
     },
     /// Announce this node's info to the network for committee selection.
     AnnounceNode(Box<NodeAnnouncement>),
+    /// Publish a Lux social post to the gossip network.
+    PublishLuxPost(Box<gratia_lux::LuxPost>),
+    /// Publish a validator signature for a pending block to the gossip network.
+    /// WHY: After validating a block from another producer, committee members
+    /// broadcast their signature so the producer can collect enough for finality.
+    PublishValidatorSignature(Box<ValidatorSignatureMessage>),
     /// Dial a specific peer address.
     DialPeer(String),
     /// Trigger a sync check — the SyncManager determines what to request.
@@ -492,6 +508,36 @@ impl NetworkManager {
         Ok(())
     }
 
+    /// Non-blocking broadcast of a validator signature to the network.
+    /// WHY: Used from sync contexts (slot timer under mutex) where we can't await.
+    pub fn try_broadcast_validator_signature_sync(
+        &self,
+        msg: &ValidatorSignatureMessage,
+    ) -> Result<(), NetworkError> {
+        let cmd_tx = self.command_tx.as_ref().ok_or(NetworkError::NotStarted)?;
+
+        let _ = self.gossip.prepare_validator_signature(msg.clone())?;
+
+        cmd_tx
+            .try_send(NetworkCommand::PublishValidatorSignature(Box::new(msg.clone())))
+            .map_err(|e| NetworkError::ChannelError(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Non-blocking broadcast of a Lux post to the network.
+    /// WHY: Used from sync contexts (FFI layer) where we can't await.
+    pub fn try_broadcast_lux_post_sync(&self, post: &gratia_lux::LuxPost) -> Result<(), NetworkError> {
+        let cmd_tx = self.command_tx.as_ref().ok_or(NetworkError::NotStarted)?;
+
+        let _ = self.gossip.prepare_lux_post(post.clone())?;
+
+        cmd_tx.try_send(NetworkCommand::PublishLuxPost(Box::new(post.clone())))
+            .map_err(|e| NetworkError::ChannelError(e.to_string()))?;
+
+        Ok(())
+    }
+
     /// Broadcast a new transaction to the network via gossipsub.
     pub async fn broadcast_transaction(&self, tx: Transaction) -> Result<(), NetworkError> {
         let cmd_tx = self.command_tx.as_ref().ok_or(NetworkError::NotStarted)?;
@@ -686,6 +732,8 @@ impl NetworkManager {
             gossip::GossipMessage::NewTransaction(tx) => NetworkEvent::TransactionReceived(tx),
             gossip::GossipMessage::NewAttestation(att) => NetworkEvent::AttestationReceived(att),
             gossip::GossipMessage::NodeAnnouncement(ann) => NetworkEvent::NodeAnnounced(ann),
+            gossip::GossipMessage::NewLuxPost(post) => NetworkEvent::LuxPostReceived(post),
+            gossip::GossipMessage::ValidatorSignatureMsg(sig) => NetworkEvent::ValidatorSignatureReceived(sig),
         }))
     }
 
@@ -810,6 +858,22 @@ async fn run_swarm_event_loop(
                                             "Received node announcement via gossip"
                                         );
                                         NetworkEvent::NodeAnnounced(ann)
+                                    }
+                                    GossipMessage::NewLuxPost(post) => {
+                                        tracing::debug!(
+                                            hash = %post.hash,
+                                            author = %post.author,
+                                            "Received Lux post via gossip"
+                                        );
+                                        NetworkEvent::LuxPostReceived(post)
+                                    }
+                                    GossipMessage::ValidatorSignatureMsg(sig_msg) => {
+                                        tracing::debug!(
+                                            height = sig_msg.height,
+                                            validator = ?sig_msg.signature.validator,
+                                            "Received validator signature via gossip"
+                                        );
+                                        NetworkEvent::ValidatorSignatureReceived(sig_msg)
                                     }
                                 };
                                 if event_tx.send(net_event).await.is_err() {
@@ -995,6 +1059,24 @@ async fn run_swarm_event_loop(
                             let topic = gossipsub::IdentTopic::new(gossip::TOPIC_NODE_ANNOUNCE);
                             if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic, data) {
                                 tracing::error!("Failed to publish node announcement: {}", e);
+                            }
+                        }
+                    }
+                    Some(NetworkCommand::PublishLuxPost(post)) => {
+                        let msg = GossipMessage::NewLuxPost(post);
+                        if let Ok(data) = msg.to_bytes() {
+                            let topic = gossipsub::IdentTopic::new(gossip::TOPIC_LUX_POSTS);
+                            if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic, data) {
+                                tracing::error!("Failed to publish Lux post: {}", e);
+                            }
+                        }
+                    }
+                    Some(NetworkCommand::PublishValidatorSignature(sig_msg)) => {
+                        let msg = GossipMessage::ValidatorSignatureMsg(sig_msg);
+                        if let Ok(data) = msg.to_bytes() {
+                            let topic = gossipsub::IdentTopic::new(gossip::TOPIC_VALIDATOR_SIGS);
+                            if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic, data) {
+                                tracing::error!("Failed to publish validator signature: {}", e);
                             }
                         }
                     }

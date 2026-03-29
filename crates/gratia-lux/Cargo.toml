@@ -1,0 +1,33 @@
+[package]
+name = "gratia-lux"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Lux — decentralized social protocol for the Gratia network"
+
+[dependencies]
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+bincode = { workspace = true }
+
+# Cryptography — Ed25519 signing for posts, SHA-256 for content hashing
+ed25519-dalek = { workspace = true }
+sha2 = { workspace = true }
+rand = { workspace = true }
+hex = { workspace = true }
+
+# Time
+chrono = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Bytes
+bytes = { workspace = true }
+
+# Core protocol types (NodeId, wallet address format)
+gratia-core = { path = "../gratia-core" }

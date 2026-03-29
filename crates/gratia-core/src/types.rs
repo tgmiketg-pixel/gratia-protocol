@@ -200,8 +200,14 @@ pub struct Transaction {
     pub sender_pubkey: Vec<u8>,
     /// Ed25519 signature over the payload.
     pub signature: Vec<u8>,
-    /// Transaction nonce (prevents replay).
+    /// Transaction nonce (prevents replay within the same chain).
     pub nonce: u64,
+    /// Chain ID (prevents replay across different networks).
+    ///
+    /// WHY: Without a chain ID, a transaction signed for testnet could be
+    /// replayed on mainnet. The chain_id is included in the signing payload
+    /// so the signature is network-specific. 1 = mainnet, 2 = testnet.
+    pub chain_id: u32,
     /// Fee in Lux.
     pub fee: Lux,
     /// Timestamp.
@@ -332,6 +338,12 @@ pub struct ProofOfLifeAttestation {
     pub nullifier: [u8; 32],
     /// ZK proof that all required PoL parameters were met.
     pub zk_proof: Vec<u8>,
+    /// Pedersen commitments from the ZK proof (one per proven parameter).
+    /// WHY: Commitments are stored separately from the proof bytes because
+    /// verifiers need them as explicit inputs to the Bulletproofs verification
+    /// algorithm. They are not secret — they reveal nothing about the
+    /// underlying values without the blinding factors.
+    pub zk_commitments: Option<Vec<Vec<u8>>>,
     /// Composite Presence Score (40-100).
     /// WHY: The score is included because it affects VRF weighting
     /// but doesn't reveal identity. Many nodes share the same score.

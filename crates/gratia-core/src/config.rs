@@ -181,6 +181,13 @@ impl Default for GovernanceConfig {
 /// Network parameters.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkConfig {
+    /// Unique chain identifier for replay protection.
+    ///
+    /// WHY: Prevents transactions signed for one network (e.g., testnet) from
+    /// being replayed on another (e.g., mainnet). The chain_id is included in
+    /// the transaction signing payload so signatures are network-specific.
+    /// 1 = mainnet, 2 = testnet, 3+ = devnets
+    pub chain_id: u32,
     /// Target block time (seconds).
     pub target_block_time_secs: u64,
     /// Maximum block size (bytes).
@@ -196,6 +203,7 @@ pub struct NetworkConfig {
 impl Default for NetworkConfig {
     fn default() -> Self {
         NetworkConfig {
+            chain_id: 2,                         // WHY: Testnet = 2, mainnet will be 1
             target_block_time_secs: 4,           // 4 seconds (middle of 3-5 range)
             max_block_size_bytes: 262_144,       // 256 KB
             committee_size: 21,

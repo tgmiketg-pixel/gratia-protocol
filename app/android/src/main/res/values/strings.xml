@@ -61,6 +61,9 @@
     <!-- Network screen -->
     <string name="tab_network">Network</string>
 
+    <!-- Lux social protocol tab -->
+    <string name="tab_lux">Lux</string>
+
     <!-- NFC tap-to-transact service -->
     <string name="nfc_service_desc">Gratia NFC Transfer</string>
     <string name="nfc_aid_desc">Gratia Wallet Address</string>

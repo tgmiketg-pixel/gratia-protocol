@@ -272,6 +272,7 @@ mod tests {
             sender_pubkey: keypair.public_key_bytes(),
             signature,
             nonce,
+            chain_id: 2,
             fee,
             timestamp,
         }

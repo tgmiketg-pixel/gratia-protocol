@@ -39,6 +39,12 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import io.gratia.app.GratiaLogo
+import io.gratia.app.MainActivity
+import io.gratia.app.security.SecurityManager
+import io.gratia.app.ui.theme.ThemeManager
+import io.gratia.app.security.PinSetup
+import io.gratia.app.security.PatternSetup
+import androidx.biometric.BiometricManager as AndroidBiometricManager
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -74,13 +80,20 @@ fun SettingsScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                navigationIcon = { GratiaLogo(modifier = Modifier.padding(start = 12.dp)) },
-                title = { Text("Settings") },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ),
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                GratiaLogo(size = 56)
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    "Settings",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                )
+            }
         },
     ) { padding ->
         if (state.isLoading) {
@@ -264,6 +277,16 @@ private fun SettingsContent(
             WalletSettingsSection(onShowExportSeed, onShowRestoreWallet)
         }
 
+        // Security section
+        item {
+            SecuritySection()
+        }
+
+        // Appearance section
+        item {
+            AppearanceSection()
+        }
+
         // Staking section
         item {
             StakingSection(
@@ -313,6 +336,273 @@ private fun SettingsContent(
                 participationDays = state.participationDays,
             )
         }
+    }
+}
+
+// ============================================================================
+// Section: Appearance
+// ============================================================================
+
+@Composable
+private fun AppearanceSection() {
+    var currentMode by remember { mutableStateOf(ThemeManager.themeMode) }
+
+    SettingsSection(title = "Appearance") {
+        Text(
+            text = "Theme",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+
+        val modes = listOf(
+            "Follow System" to ThemeManager.ThemeMode.SYSTEM,
+            "Dark" to ThemeManager.ThemeMode.DARK,
+            "Light" to ThemeManager.ThemeMode.LIGHT,
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            modes.forEach { (label, mode) ->
+                val isSelected = currentMode == mode
+                OutlinedButton(
+                    onClick = {
+                        ThemeManager.themeMode = mode
+                        currentMode = mode
+                    },
+                    modifier = Modifier.weight(1f),
+                    colors = if (isSelected) {
+                        ButtonDefaults.outlinedButtonColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        )
+                    } else {
+                        ButtonDefaults.outlinedButtonColors()
+                    },
+                ) {
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1,
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Section: Security
+// ============================================================================
+
+@Composable
+private fun SecuritySection() {
+    val context = LocalContext.current
+    var lockMethod by remember { mutableStateOf(SecurityManager.lockMethod) }
+    var appLockEnabled by remember { mutableStateOf(SecurityManager.appLockEnabled) }
+    var txAuthEnabled by remember { mutableStateOf(SecurityManager.txAuthEnabled) }
+
+    // Setup dialogs
+    var showPinSetup by remember { mutableStateOf(false) }
+    var showPatternSetup by remember { mutableStateOf(false) }
+
+    // WHY: Check hardware biometric availability so we only show the option
+    // on devices that actually have a fingerprint sensor or face unlock.
+    val biometricManager = AndroidBiometricManager.from(context)
+    val canBiometric = biometricManager.canAuthenticate(
+        AndroidBiometricManager.Authenticators.BIOMETRIC_STRONG
+    ) == AndroidBiometricManager.BIOMETRIC_SUCCESS
+    val canDeviceCredential = biometricManager.canAuthenticate(
+        AndroidBiometricManager.Authenticators.DEVICE_CREDENTIAL
+    ) == AndroidBiometricManager.BIOMETRIC_SUCCESS
+
+    SettingsSection(title = "Security") {
+        // App Lock toggle
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "App Lock",
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    text = "Require authentication to open the app",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                )
+            }
+            Switch(
+                checked = appLockEnabled,
+                onCheckedChange = { enabled ->
+                    if (enabled) {
+                        // No method set yet — prompt to choose one
+                        if (lockMethod == SecurityManager.LockMethod.NONE) {
+                            // Default to PIN setup
+                            showPinSetup = true
+                        } else {
+                            SecurityManager.appLockEnabled = true
+                            appLockEnabled = true
+                        }
+                    } else {
+                        SecurityManager.disableLock()
+                        appLockEnabled = false
+                        txAuthEnabled = false
+                        lockMethod = SecurityManager.LockMethod.NONE
+                    }
+                },
+            )
+        }
+
+        if (appLockEnabled) {
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = "Lock Method",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Lock method options
+            val methods = mutableListOf<Pair<String, SecurityManager.LockMethod>>()
+            if (canBiometric) {
+                methods.add("Fingerprint / Face" to SecurityManager.LockMethod.BIOMETRIC)
+            }
+            methods.add("5-Digit PIN" to SecurityManager.LockMethod.PIN)
+            methods.add("Draw Pattern" to SecurityManager.LockMethod.PATTERN)
+            if (canDeviceCredential) {
+                methods.add("Device Lock (Phone PIN/Pattern)" to SecurityManager.LockMethod.DEVICE_CREDENTIAL)
+            }
+
+            methods.forEach { (label, method) ->
+                val isSelected = lockMethod == method
+                OutlinedButton(
+                    onClick = {
+                        when (method) {
+                            SecurityManager.LockMethod.BIOMETRIC -> {
+                                SecurityManager.enableBiometric()
+                                lockMethod = SecurityManager.LockMethod.BIOMETRIC
+                                appLockEnabled = true
+                                txAuthEnabled = true
+                            }
+                            SecurityManager.LockMethod.PIN -> {
+                                showPinSetup = true
+                            }
+                            SecurityManager.LockMethod.PATTERN -> {
+                                showPatternSetup = true
+                            }
+                            SecurityManager.LockMethod.DEVICE_CREDENTIAL -> {
+                                SecurityManager.enableDeviceCredential()
+                                lockMethod = SecurityManager.LockMethod.DEVICE_CREDENTIAL
+                                appLockEnabled = true
+                                txAuthEnabled = true
+                            }
+                            SecurityManager.LockMethod.NONE -> {}
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 2.dp),
+                    colors = if (isSelected) {
+                        ButtonDefaults.outlinedButtonColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        )
+                    } else {
+                        ButtonDefaults.outlinedButtonColors()
+                    },
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = label,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (isSelected) {
+                            Text(
+                                text = "Active",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Transaction auth toggle
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Confirm Transactions",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        text = "Authenticate before sending GRAT",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    )
+                }
+                Switch(
+                    checked = txAuthEnabled,
+                    onCheckedChange = { enabled ->
+                        SecurityManager.txAuthEnabled = enabled
+                        txAuthEnabled = enabled
+                    },
+                )
+            }
+        }
+    }
+
+    // PIN setup dialog
+    if (showPinSetup) {
+        AlertDialog(
+            onDismissRequest = { showPinSetup = false },
+            confirmButton = {},
+            text = {
+                PinSetup(
+                    onPinSet = { pin ->
+                        SecurityManager.setPin(pin)
+                        lockMethod = SecurityManager.LockMethod.PIN
+                        appLockEnabled = true
+                        txAuthEnabled = true
+                        showPinSetup = false
+                    },
+                    onCancel = { showPinSetup = false },
+                )
+            },
+        )
+    }
+
+    // Pattern setup dialog
+    if (showPatternSetup) {
+        AlertDialog(
+            onDismissRequest = { showPatternSetup = false },
+            confirmButton = {},
+            text = {
+                PatternSetup(
+                    onPatternSet = { pattern ->
+                        SecurityManager.setPattern(pattern)
+                        lockMethod = SecurityManager.LockMethod.PATTERN
+                        appLockEnabled = true
+                        txAuthEnabled = true
+                        showPatternSetup = false
+                    },
+                    onCancel = { showPatternSetup = false },
+                )
+            },
+        )
     }
 }
 

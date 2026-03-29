@@ -14,6 +14,7 @@ import io.gratia.app.BuildConfig
 import io.gratia.app.bridge.GratiaCoreManager
 import io.gratia.app.bridge.GratiaBridgeException
 import io.gratia.app.bridge.NetworkStatus
+import io.gratia.app.security.HardwareKeystore
 import io.gratia.app.service.ProofOfLifeService
 import io.gratia.app.worker.PolHeartbeatWorker
 import java.util.concurrent.TimeUnit
@@ -34,6 +35,10 @@ class GratiaApplication : Application() {
         // Notification channel IDs for foreground services
         const val CHANNEL_POL = "gratia_proof_of_life"
         const val CHANNEL_MINING = "gratia_mining"
+
+        /** Global app context for ViewModels that need to post notifications. */
+        var appContext: Context? = null
+            private set
     }
 
     // WHY: Tracks whether wallet initialization succeeded. Network and consensus
@@ -45,7 +50,9 @@ class GratiaApplication : Application() {
         super.onCreate()
 
         Log.i(TAG, "Gratia application starting")
+        appContext = applicationContext
 
+        io.gratia.app.security.AddressBook.init(this)
         createNotificationChannels()
         initializeRustCore()
         startP2PNetwork()
@@ -281,6 +288,11 @@ class GratiaApplication : Application() {
                 Log.i(TAG, "Debug bypass enabled (debug build)")
             }
 
+            // WHY: Initialize the hardware keystore BEFORE checking for an
+            // existing wallet. The AES wrapping key must exist in Android
+            // Keystore before we can migrate or store any wallet keys.
+            initializeHardwareKeystore(dataDir)
+
             // Auto-create a wallet on first launch if one doesn't exist.
             // WHY: The consensus engine needs a signing key (derived from the wallet)
             // for VRF block producer selection. Without a wallet, consensus can't start.
@@ -317,6 +329,44 @@ class GratiaApplication : Application() {
             // and will show appropriate error states. This handles the case where
             // the native .so library isn't loaded yet during development.
             Log.e(TAG, "Failed to initialize Rust core: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Initialize the Android Keystore-backed hardware keystore and migrate
+     * any existing plaintext wallet key to encrypted storage.
+     *
+     * WHY: Before this integration, FileKeystore stored the raw Ed25519 key
+     * in plaintext at {dataDir}/wallet_key.bin. While Android's app sandbox
+     * restricts access to the file, a rooted device or physical extraction
+     * could read the key. By encrypting it with an AES key held in the
+     * hardware security module (StrongBox or TEE), the private key is
+     * protected even if the file system is compromised.
+     *
+     * Migration is automatic and one-time: if a plaintext key file exists,
+     * it is encrypted, stored in SharedPreferences, and the original file
+     * is overwritten with zeros then deleted.
+     */
+    private fun initializeHardwareKeystore(dataDir: String) {
+        try {
+            HardwareKeystore.init(applicationContext)
+            Log.i(TAG, "HardwareKeystore initialized (hardware-backed: ${HardwareKeystore.isHardwareBacked()})")
+
+            // WHY: Migrate plaintext key file to hardware keystore. This is a
+            // one-time operation on first launch after the hardware keystore
+            // integration is deployed. On subsequent launches, the plaintext
+            // file will no longer exist and this returns false immediately.
+            if (HardwareKeystore.migrateFromPlaintextFile(dataDir)) {
+                Log.i(TAG, "Migrated plaintext wallet key to hardware-backed encrypted storage")
+            }
+        } catch (e: Exception) {
+            // WHY: Hardware keystore failure is non-fatal. The Rust FileKeystore
+            // still works as a fallback (plaintext file in app-private storage).
+            // Logging at ERROR level so this shows up in diagnostics — it means
+            // the device has no hardware key protection, which is a security
+            // concern but not a functional blocker.
+            Log.e(TAG, "HardwareKeystore initialization failed: ${e.message}. " +
+                "Wallet keys will use software-only storage.", e)
         }
     }
 }

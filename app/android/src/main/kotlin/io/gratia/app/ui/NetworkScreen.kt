@@ -72,13 +72,20 @@ fun NetworkScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                navigationIcon = { GratiaLogo(modifier = Modifier.padding(start = 12.dp)) },
-                title = { Text("Network") },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ),
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                GratiaLogo(size = 56)
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    "Network",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                )
+            }
         },
     ) { padding ->
         LazyColumn(

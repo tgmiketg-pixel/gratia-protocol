@@ -626,6 +626,7 @@ mod tests {
             sender_pubkey: signing_key.verifying_key().as_bytes().to_vec(),
             signature: signature.to_bytes().to_vec(),
             nonce,
+            chain_id: 2,
             fee,
             timestamp: Utc::now(),
         }
@@ -875,6 +876,7 @@ mod tests {
             sender_pubkey: sender_key.verifying_key().as_bytes().to_vec(),
             signature: signature.to_bytes().to_vec(),
             nonce: 0,
+            chain_id: 2,
             fee: 1_000,
             timestamp: Utc::now(),
         };

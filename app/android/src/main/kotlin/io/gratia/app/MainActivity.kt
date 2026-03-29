@@ -13,15 +13,20 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.fragment.app.FragmentActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.biometric.BiometricManager as AndroidBiometricManager
+import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
+import io.gratia.app.security.SecurityManager
+import io.gratia.app.security.LockScreen
 import io.gratia.app.service.ProofOfLifeService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -29,11 +34,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CellTower
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.HowToVote
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.AccountBalance
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.CellTower
+import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.HowToVote
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
@@ -44,6 +51,9 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
@@ -67,7 +77,71 @@ import io.gratia.app.ui.theme.WarmWhite
  * Uses Jetpack Compose for the UI with a bottom navigation bar routing
  * between the four core screens: Wallet, Mining, Governance, Settings.
  */
-class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
+class MainActivity : FragmentActivity(), NfcAdapter.ReaderCallback {
+
+    // ========================================================================
+    // Biometric authentication
+    // ========================================================================
+
+    /**
+     * Callback for when biometric authentication succeeds.
+     * Set by the composable layer before triggering the prompt.
+     */
+    private var onBiometricSuccess: (() -> Unit)? = null
+
+    /**
+     * Show the system biometric prompt (fingerprint/face/device credentials).
+     *
+     * WHY: BiometricPrompt must be created from an Activity or Fragment context —
+     * it cannot be triggered from a pure Composable. The Activity hosts the prompt,
+     * and the result is forwarded back to the Composable via the callback.
+     */
+    fun showBiometricPrompt(
+        title: String = "Authenticate",
+        subtitle: String = "Verify your identity to continue",
+        onSuccess: () -> Unit,
+    ) {
+        onBiometricSuccess = onSuccess
+        val executor = ContextCompat.getMainExecutor(this)
+        val callback = object : BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                SecurityManager.onAuthSuccess()
+                onBiometricSuccess?.invoke()
+                onBiometricSuccess = null
+            }
+            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                Log.w("GratiaBiometric", "Auth error ($errorCode): $errString")
+            }
+            override fun onAuthenticationFailed() {
+                Log.w("GratiaBiometric", "Auth failed — fingerprint not recognized")
+            }
+        }
+
+        val prompt = BiometricPrompt(this, executor, callback)
+
+        val method = SecurityManager.lockMethod
+        val promptInfo = if (method == SecurityManager.LockMethod.DEVICE_CREDENTIAL) {
+            // WHY: DEVICE_CREDENTIAL allows the user's existing phone lock (PIN/pattern/password)
+            // as the authenticator. Cannot combine with setNegativeButtonText.
+            BiometricPrompt.PromptInfo.Builder()
+                .setTitle(title)
+                .setSubtitle(subtitle)
+                .setAllowedAuthenticators(
+                    AndroidBiometricManager.Authenticators.BIOMETRIC_STRONG or
+                    AndroidBiometricManager.Authenticators.DEVICE_CREDENTIAL
+                )
+                .build()
+        } else {
+            BiometricPrompt.PromptInfo.Builder()
+                .setTitle(title)
+                .setSubtitle(subtitle)
+                .setNegativeButtonText("Cancel")
+                .setAllowedAuthenticators(AndroidBiometricManager.Authenticators.BIOMETRIC_STRONG)
+                .build()
+        }
+
+        prompt.authenticate(promptInfo)
+    }
 
     companion object {
         private const val TAG = "GratiaMainActivity"
@@ -129,9 +203,64 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
 
         nfcAdapter = NfcAdapter.getDefaultAdapter(this)
 
+        // WHY: Must init before any Composable reads SecurityManager state.
+        SecurityManager.init(this)
+        io.gratia.app.ui.theme.ThemeManager.init(this)
+
+        // WHY: Check if onboarding has been completed. First-time users see
+        // the walkthrough; returning users skip straight to the wallet.
+        val onboardingPrefs = getSharedPreferences("gratia_onboarding", MODE_PRIVATE)
+        val onboardingComplete = onboardingPrefs.getBoolean("completed", false)
+
         setContent {
             GratiaTheme {
-                GratiaApp()
+                var showSplash by remember { mutableStateOf(true) }
+                var showOnboarding by remember { mutableStateOf(!onboardingComplete) }
+                var isUnlocked by remember {
+                    mutableStateOf(!SecurityManager.shouldShowLockScreen())
+                }
+
+                Box(modifier = Modifier.fillMaxSize()) {
+                    when {
+                        showSplash -> {
+                            io.gratia.app.ui.SplashScreen(
+                                onTimeout = { showSplash = false },
+                            )
+                        }
+                        showOnboarding -> {
+                            io.gratia.app.ui.OnboardingScreen(
+                                onComplete = {
+                                    onboardingPrefs.edit()
+                                        .putBoolean("completed", true)
+                                        .apply()
+                                    showOnboarding = false
+                                },
+                            )
+                        }
+                        else -> {
+                            // Always render GratiaApp so navigation state is preserved
+                            GratiaApp()
+
+                            // Lock screen overlay — blocks interaction until authenticated
+                            if (!isUnlocked && SecurityManager.shouldShowLockScreen()) {
+                                val activity = this@MainActivity
+                                LockScreen(
+                                    lockMethod = SecurityManager.lockMethod,
+                                    onPinVerified = { isUnlocked = true },
+                                    onPatternVerified = { isUnlocked = true },
+                                    onBiometricRequest = {
+                                        activity.showBiometricPrompt(
+                                            title = "Unlock Gratia",
+                                            subtitle = "Verify your identity to access your wallet",
+                                        ) {
+                                            isUnlocked = true
+                                        }
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
         requestPermissionsAndStartPoL()
@@ -350,6 +479,7 @@ object GratiaRoutes {
     const val MINING = "mining"
     const val NETWORK = "network"
     const val GOVERNANCE = "governance"
+    const val LUX = "lux"
     const val SETTINGS = "settings"
 }
 
@@ -383,16 +513,16 @@ val bottomNavTabs = listOf(
         unselectedIcon = Icons.Outlined.Bolt,
     ),
     BottomNavTab(
-        route = GratiaRoutes.NETWORK,
-        labelResId = R.string.tab_network,
-        selectedIcon = Icons.Filled.CellTower,
-        unselectedIcon = Icons.Outlined.CellTower,
-    ),
-    BottomNavTab(
         route = GratiaRoutes.GOVERNANCE,
         labelResId = R.string.tab_governance,
         selectedIcon = Icons.Filled.HowToVote,
         unselectedIcon = Icons.Outlined.HowToVote,
+    ),
+    BottomNavTab(
+        route = GratiaRoutes.LUX,
+        labelResId = R.string.tab_lux,
+        selectedIcon = Icons.Filled.Forum,
+        unselectedIcon = Icons.Outlined.Forum,
     ),
     BottomNavTab(
         route = GratiaRoutes.SETTINGS,
@@ -415,7 +545,7 @@ val bottomNavTabs = listOf(
  * key brand elements that make Gratia instantly recognizable.
  */
 @Composable
-fun GratiaLogo(modifier: Modifier = Modifier, size: Int = 36) {
+fun GratiaLogo(modifier: Modifier = Modifier, size: Int = 48) {
     val logoPainter = androidx.compose.ui.res.painterResource(
         id = R.drawable.ic_gratia_logo
     )
@@ -511,6 +641,9 @@ fun GratiaApp() {
             }
             composable(GratiaRoutes.GOVERNANCE) {
                 io.gratia.app.ui.GovernanceScreen()
+            }
+            composable(GratiaRoutes.LUX) {
+                io.gratia.app.ui.LuxScreen()
             }
             composable(GratiaRoutes.SETTINGS) {
                 io.gratia.app.ui.SettingsScreen()

@@ -1,5 +1,6 @@
 package io.gratia.app.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,12 +19,15 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.CallMade
 import androidx.compose.material.icons.automirrored.filled.CallReceived
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Warning
 import io.gratia.app.GratiaLogo
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -78,6 +82,9 @@ import androidx.compose.foundation.layout.wrapContentSize
 import androidx.core.content.ContextCompat
 import androidx.compose.runtime.LaunchedEffect
 import io.gratia.app.MainActivity
+import io.gratia.app.security.AddressBook
+import io.gratia.app.security.SecurityManager
+import io.gratia.app.security.LockScreen
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -156,15 +163,70 @@ fun WalletScreen(
         return
     }
 
+    // WHY: Connection status shows at a glance if the node is online and
+    // how many peers it's connected to. Users need to know if their
+    // transactions will actually propagate.
+    val networkStatus = remember { mutableStateOf<io.gratia.app.bridge.NetworkStatus?>(null) }
+    LaunchedEffect(Unit) {
+        try {
+            networkStatus.value = io.gratia.app.bridge.GratiaCoreManager.getNetworkStatus()
+        } catch (_: Exception) {}
+    }
+
     Scaffold(
         topBar = {
-            TopAppBar(
-                navigationIcon = { GratiaLogo(modifier = Modifier.padding(start = 12.dp)) },
-                title = { Text("Wallet") },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ),
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                GratiaLogo(size = 56)
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    "Wallet",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                )
+                // Connection status chip
+                networkStatus.value?.let { net ->
+                    val chipColor = if (net.isRunning && net.peerCount > 0) {
+                        io.gratia.app.ui.theme.SignalGreen
+                    } else if (net.isRunning) {
+                        io.gratia.app.ui.theme.AmberGold
+                    } else {
+                        MaterialTheme.colorScheme.error
+                    }
+                    val label = if (net.isRunning) {
+                        "${net.peerCount} peer${if (net.peerCount != 1) "s" else ""}"
+                    } else {
+                        "Offline"
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .background(
+                                chipColor.copy(alpha = 0.15f),
+                                shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                            )
+                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .background(chipColor, shape = androidx.compose.foundation.shape.CircleShape),
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = chipColor,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+            }
         },
     ) { padding ->
         if (state.isLoading) {
@@ -177,6 +239,9 @@ fun WalletScreen(
                 CircularProgressIndicator()
             }
         } else {
+            // WHY: Pull-to-refresh lets users manually update their balance
+            // and transaction history without waiting for the 5-second poll.
+            var isRefreshing by remember { mutableStateOf(false) }
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -189,6 +254,13 @@ fun WalletScreen(
                     onReceiveClick = { viewModel.showReceiveDialog() },
                     onBackupClick = onNavigateToSettings ?: {},
                     onRestoreClick = { viewModel.showRestoreDialog() },
+                    onRefresh = {
+                        isRefreshing = true
+                        viewModel.loadWalletData()
+                        isRefreshing = false
+                    },
+                    isRefreshing = isRefreshing,
+                    isOffline = networkStatus.value?.isRunning == false,
                 )
             }
         }
@@ -226,7 +298,12 @@ fun WalletScreen(
             )
         }
 
-        // Send dialog
+        // Send dialog with transaction auth gate
+        // WHY: pendingSend holds the address+amount while the user authenticates.
+        // The send only executes after successful auth, preventing unauthorized transfers.
+        var pendingSend by remember { mutableStateOf<Pair<String, Long>?>(null) }
+        var showTxAuth by remember { mutableStateOf(false) }
+
         if (state.showSendDialog) {
             SendDialog(
                 initialAddress = scannedAddress,
@@ -236,8 +313,14 @@ fun WalletScreen(
                     scannedAddress = null
                 },
                 onSend = { address, amount ->
-                    viewModel.sendTransfer(address, amount)
-                    scannedAddress = null
+                    if (SecurityManager.shouldAuthForTransaction()) {
+                        pendingSend = Pair(address, amount)
+                        showTxAuth = true
+                        viewModel.hideSendDialog()
+                    } else {
+                        viewModel.sendTransfer(address, amount)
+                        scannedAddress = null
+                    }
                 },
                 onScanClick = {
                     if (cameraPermissionGranted) {
@@ -247,6 +330,73 @@ fun WalletScreen(
                     }
                 },
             )
+        }
+
+        // Transaction authentication overlay
+        if (showTxAuth && pendingSend != null) {
+            val lockMethod = SecurityManager.lockMethod
+            if (lockMethod == SecurityManager.LockMethod.BIOMETRIC ||
+                lockMethod == SecurityManager.LockMethod.DEVICE_CREDENTIAL) {
+                // Trigger biometric prompt via Activity
+                val activity = context as? MainActivity
+                LaunchedEffect(Unit) {
+                    activity?.showBiometricPrompt(
+                        title = "Confirm Transaction",
+                        subtitle = "Authenticate to send GRAT",
+                    ) {
+                        pendingSend?.let { (addr, amt) ->
+                            viewModel.sendTransfer(addr, amt)
+                        }
+                        pendingSend = null
+                        showTxAuth = false
+                        scannedAddress = null
+                    }
+                }
+            } else {
+                // PIN or Pattern auth overlay
+                androidx.compose.material3.AlertDialog(
+                    onDismissRequest = {
+                        showTxAuth = false
+                        pendingSend = null
+                    },
+                    confirmButton = {},
+                    title = {
+                        Text(
+                            "Confirm Transaction",
+                            fontWeight = FontWeight.Bold,
+                        )
+                    },
+                    text = {
+                        when (lockMethod) {
+                            SecurityManager.LockMethod.PIN -> {
+                                io.gratia.app.security.PinEntry(
+                                    onPinComplete = {
+                                        pendingSend?.let { (addr, amt) ->
+                                            viewModel.sendTransfer(addr, amt)
+                                        }
+                                        pendingSend = null
+                                        showTxAuth = false
+                                        scannedAddress = null
+                                    },
+                                )
+                            }
+                            SecurityManager.LockMethod.PATTERN -> {
+                                io.gratia.app.security.PatternLock(
+                                    onPatternComplete = {
+                                        pendingSend?.let { (addr, amt) ->
+                                            viewModel.sendTransfer(addr, amt)
+                                        }
+                                        pendingSend = null
+                                        showTxAuth = false
+                                        scannedAddress = null
+                                    },
+                                )
+                            }
+                            else -> {}
+                        }
+                    },
+                )
+            }
         }
 
         // Receive dialog
@@ -267,6 +417,9 @@ private fun WalletContent(
     onReceiveClick: () -> Unit,
     onBackupClick: () -> Unit,
     onRestoreClick: () -> Unit,
+    onRefresh: (() -> Unit)? = null,
+    isRefreshing: Boolean = false,
+    isOffline: Boolean = false,
 ) {
     val wallet = state.walletInfo ?: run {
         // WHY: On fresh install the wallet info may be null briefly while the
@@ -288,10 +441,29 @@ private fun WalletContent(
         return
     }
 
+    // WHY: Track which transaction the user tapped to show its detail dialog.
+    // Null means no dialog is showing.
+    var selectedTransaction by remember { mutableStateOf<TransactionInfo?>(null) }
+
+    // Transaction detail dialog
+    selectedTransaction?.let { tx ->
+        TransactionDetailDialog(
+            tx = tx,
+            onDismiss = { selectedTransaction = null },
+        )
+    }
+
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        // Offline banner — shown when the network layer is not running
+        if (isOffline) {
+            item {
+                OfflineBanner()
+            }
+        }
+
         // Balance card
         item {
             BalanceCard(
@@ -308,13 +480,48 @@ private fun WalletContent(
             }
         }
 
-        // Transaction history header
+        // Transaction history header with refresh
         item {
-            Text(
-                text = "Recent Transactions",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Recent Transactions",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                // Export CSV button
+                val exportContext = LocalContext.current
+                IconButton(
+                    onClick = {
+                        CsvExporter.shareTransactions(exportContext, state.transactions)
+                    },
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Share,
+                        contentDescription = "Export CSV",
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+                if (onRefresh != null) {
+                    IconButton(onClick = onRefresh) {
+                        if (isRefreshing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Refresh",
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                    }
+                }
+            }
         }
 
         // Transaction list or empty state
@@ -345,7 +552,10 @@ private fun WalletContent(
             }
         } else {
             items(state.transactions, key = { it.hashHex }) { tx ->
-                TransactionRow(tx)
+                TransactionRow(
+                    tx = tx,
+                    onClick = { selectedTransaction = tx },
+                )
             }
         }
     }
@@ -449,7 +659,10 @@ private fun BalanceCard(
 }
 
 @Composable
-private fun TransactionRow(tx: TransactionInfo) {
+private fun TransactionRow(
+    tx: TransactionInfo,
+    onClick: () -> Unit = {},
+) {
     val isReceived = tx.direction == "received"
     val directionIcon = if (isReceived) {
         Icons.AutoMirrored.Filled.CallReceived
@@ -465,7 +678,9 @@ private fun TransactionRow(tx: TransactionInfo) {
     val dateFormat = remember { SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()) }
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
     ) {
         Row(
             modifier = Modifier
@@ -510,6 +725,186 @@ private fun TransactionRow(tx: TransactionInfo) {
                     color = directionColor,
                 )
                 StatusChip(tx.status)
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Transaction Detail Dialog
+// ============================================================================
+
+/**
+ * Full-screen detail dialog for a single transaction.
+ *
+ * WHY: Users need to inspect transaction details (hash for verification,
+ * full addresses for auditing, exact Lux amounts) without leaving the
+ * wallet screen. Copy buttons let them paste hashes/addresses into a
+ * block explorer or share with counterparties.
+ */
+@Composable
+private fun TransactionDetailDialog(
+    tx: TransactionInfo,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
+    val dateFormat = remember { SimpleDateFormat("MMM d, yyyy  HH:mm:ss", Locale.getDefault()) }
+
+    val isReceived = tx.direction == "received"
+    val isMiningReward = tx.counterparty == null
+    val typeLabel = when {
+        isMiningReward -> "Mining Reward"
+        isReceived -> "Received"
+        else -> "Sent"
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Transaction Details",
+                fontWeight = FontWeight.Bold,
+            )
+        },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                // Type
+                DetailRow(label = "Type", value = typeLabel)
+
+                Divider()
+
+                // Amount in GRAT
+                val amountPrefix = if (isReceived || isMiningReward) "+" else "-"
+                DetailRow(
+                    label = "Amount",
+                    value = "$amountPrefix${formatGrat(tx.amountLux)} GRAT",
+                    valueColor = if (isReceived || isMiningReward) SignalGreen else MaterialTheme.colorScheme.error,
+                )
+
+                // Amount in Lux
+                DetailRow(
+                    label = "Amount (Lux)",
+                    value = "%,d".format(tx.amountLux),
+                )
+
+                Divider()
+
+                // Transaction hash with copy
+                DetailRowWithCopy(
+                    label = "Transaction Hash",
+                    value = tx.hashHex,
+                    displayValue = truncateAddress(tx.hashHex, prefixLen = 12, suffixLen = 8),
+                    clipboardManager = clipboardManager,
+                    clipLabel = "Transaction Hash",
+                )
+
+                // From / To addresses
+                if (!isMiningReward && tx.counterparty != null) {
+                    val addressLabel = if (isReceived) "From" else "To"
+                    DetailRowWithCopy(
+                        label = addressLabel,
+                        value = tx.counterparty,
+                        displayValue = truncateAddress(tx.counterparty),
+                        clipboardManager = clipboardManager,
+                        clipLabel = "$addressLabel Address",
+                    )
+                }
+
+                Divider()
+
+                // Timestamp
+                DetailRow(
+                    label = "Time",
+                    value = dateFormat.format(Date(tx.timestampMillis)),
+                )
+
+                // Status
+                DetailRow(
+                    label = "Status",
+                    value = tx.status.replaceFirstChar { it.uppercase() },
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        },
+    )
+}
+
+/**
+ * A simple label + value row for the transaction detail dialog.
+ */
+@Composable
+private fun DetailRow(
+    label: String,
+    value: String,
+    valueColor: Color = MaterialTheme.colorScheme.onSurface,
+) {
+    Column {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            color = valueColor,
+        )
+    }
+}
+
+/**
+ * A label + truncated value row with a copy-to-clipboard button.
+ *
+ * WHY: Transaction hashes and addresses are too long to display in full
+ * within a dialog, but users need the full value for verification. The
+ * copy button lets them grab the complete string.
+ */
+@Composable
+private fun DetailRowWithCopy(
+    label: String,
+    value: String,
+    displayValue: String,
+    clipboardManager: androidx.compose.ui.platform.ClipboardManager,
+    clipLabel: String,
+) {
+    Column {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = displayValue,
+                style = MaterialTheme.typography.bodyMedium,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(
+                onClick = {
+                    clipboardManager.setText(AnnotatedString(value))
+                },
+                modifier = Modifier.size(28.dp),
+            ) {
+                Icon(
+                    Icons.Default.ContentCopy,
+                    contentDescription = "Copy $clipLabel",
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
             }
         }
     }
@@ -705,6 +1100,11 @@ private fun SendDialog(
     var addressError by remember { mutableStateOf<String?>(null) }
     var amountError by remember { mutableStateOf<String?>(null) }
 
+    // WHY: Load contacts once when the dialog opens. Contacts are stored
+    // locally and the list is small (max 100), so no need for async loading.
+    val contacts = remember { AddressBook.getContacts() }
+    var showAddContactDialog by remember { mutableStateOf(false) }
+
     val clipboardManager = LocalClipboardManager.current
 
     AlertDialog(
@@ -752,6 +1152,66 @@ private fun SendDialog(
                         }
                     },
                 )
+
+                // Contacts section — shows saved contacts as tappable chips
+                if (contacts.isNotEmpty()) {
+                    Text(
+                        text = "Contacts",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    )
+                    // WHY: Wrapping contacts in a Column of Rows keeps the dialog
+                    // scrollable without needing ExperimentalLayoutApi FlowRow.
+                    // Max 3 chips per row to fit the dialog width comfortably.
+                    contacts.chunked(2).forEach { rowContacts ->
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            rowContacts.forEach { contact ->
+                                SuggestionChip(
+                                    onClick = {
+                                        toAddress = contact.address
+                                        addressError = null
+                                    },
+                                    label = {
+                                        Column {
+                                            Text(
+                                                text = contact.name,
+                                                style = MaterialTheme.typography.labelMedium,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            Text(
+                                                text = "${contact.address.take(10)}...${contact.address.takeLast(4)}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                                                maxLines = 1,
+                                            )
+                                        }
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Add to contacts — shown when the user has typed a valid-looking address
+                // that is not already saved
+                if (toAddress.matches(Regex("grat:[0-9a-f]{64}")) &&
+                    contacts.none { it.address == toAddress }
+                ) {
+                    TextButton(
+                        onClick = { showAddContactDialog = true },
+                        modifier = Modifier.padding(0.dp),
+                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+                    ) {
+                        Text(
+                            text = "+ Add to contacts",
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
+
                 OutlinedTextField(
                     value = amountText,
                     onValueChange = {
@@ -821,6 +1281,66 @@ private fun SendDialog(
                 },
             ) {
                 Text("Send")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+    )
+
+    // Add-to-contacts dialog — lets the user save the entered address with a nickname
+    if (showAddContactDialog) {
+        AddContactDialog(
+            address = toAddress,
+            onSave = { contactName ->
+                AddressBook.addContact(contactName, toAddress)
+                showAddContactDialog = false
+            },
+            onDismiss = { showAddContactDialog = false },
+        )
+    }
+}
+
+// ============================================================================
+// Add Contact Dialog
+// ============================================================================
+
+@Composable
+private fun AddContactDialog(
+    address: String,
+    onSave: (name: String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var contactName by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Save Contact") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "${address.take(10)}...${address.takeLast(4)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                )
+                OutlinedTextField(
+                    value = contactName,
+                    onValueChange = { contactName = it },
+                    label = { Text("Contact name") },
+                    placeholder = { Text("e.g. Alice, Mom") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSave(contactName.trim()) },
+                enabled = contactName.isNotBlank(),
+            ) {
+                Text("Save")
             }
         },
         dismissButton = {
@@ -932,4 +1452,58 @@ private fun ReceiveDialog(
             }
         },
     )
+}
+
+// ============================================================================
+// Offline Banner
+// ============================================================================
+
+/**
+ * Dismissible amber-colored banner shown when the network layer is not running.
+ *
+ * WHY: Users need to know their wallet is offline so they understand that
+ * sends will not propagate and balance may be stale. Amber (not red) because
+ * the wallet is still usable for viewing — it's a warning, not an error.
+ */
+@Composable
+fun OfflineBanner() {
+    var dismissed by remember { mutableStateOf(false) }
+    if (dismissed) return
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = AmberGold.copy(alpha = 0.15f),
+        ),
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Default.Warning,
+                contentDescription = "Offline warning",
+                tint = AmberGold,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                text = "You're offline \u2014 some features may be unavailable",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(
+                onClick = { dismissed = true },
+                modifier = Modifier.size(28.dp),
+            ) {
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = "Dismiss",
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                )
+            }
+        }
+    }
 }

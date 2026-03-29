@@ -152,6 +152,20 @@ async fn main() {
                     "Node announced"
                 );
             }
+            Some(NetworkEvent::LuxPostReceived(post)) => {
+                tracing::debug!(
+                    hash = %post.hash,
+                    author = %post.author,
+                    "Lux post relayed"
+                );
+            }
+            Some(NetworkEvent::ValidatorSignatureReceived(sig)) => {
+                tracing::debug!(
+                    height = sig.height,
+                    validator = ?sig.signature.validator,
+                    "Validator signature relayed"
+                );
+            }
             None => {
                 tracing::warn!("Event channel closed — shutting down");
                 break;

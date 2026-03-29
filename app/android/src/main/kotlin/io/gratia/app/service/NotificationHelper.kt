@@ -73,7 +73,9 @@ object NotificationHelper {
             NotificationManager.IMPORTANCE_LOW
         ).apply {
             description = "Active GRAT mining status"
-            setShowBadge(false)
+            // WHY: Badge shows on the app icon when mining is active, giving
+            // at-a-glance confirmation that the phone is earning GRAT.
+            setShowBadge(true)
             // WHY: Mining runs for hours. Sound/vibration on every notification
             // update would drive users insane. Silent + visible icon only.
             setSound(null, null)
@@ -159,6 +161,7 @@ object NotificationHelper {
             .setSilent(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
+            .setNumber(1) // WHY: Shows badge dot on app icon when mining
             .apply { pendingIntent?.let { setContentIntent(it) } }
             .build()
     }

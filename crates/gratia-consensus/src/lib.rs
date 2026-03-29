@@ -14,6 +14,7 @@ pub mod committee;
 pub mod block_production;
 pub mod validation;
 pub mod sharded_consensus;
+pub mod sync;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -86,7 +87,9 @@ pub struct ConsensusEngine {
     /// Recent finalized block hashes for fork detection.
     recent_block_hashes: Vec<BlockHash>,
     /// Pending block awaiting signatures (if this node is producing).
-    pending_block: Option<PendingBlock>,
+    /// WHY: pub so the FFI layer can inspect signature count and block header
+    /// for BFT finality tracking (checking sigs, reading header for co-signing).
+    pub pending_block: Option<PendingBlock>,
     /// Current engine state.
     state: ConsensusState,
     /// This node's Composite Presence Score.
@@ -407,6 +410,7 @@ impl ConsensusEngine {
                 max_block_size: validation::MAX_BLOCK_SIZE,
                 min_transaction_fee: validation::MIN_TRANSACTION_FEE,
                 previous_block_timestamp: self.last_finalized_timestamp,
+                pol_thresholds: gratia_zk::PolThresholds::default(),
             };
             validation::validate_block(&block, &ctx)?;
         } else {
@@ -568,6 +572,96 @@ impl ConsensusEngine {
         }
 
         sign_block(header, self.node_id, keypair)
+    }
+}
+
+// ============================================================================
+// Fork Resolution
+// ============================================================================
+
+/// The outcome of a fork resolution comparison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForkChoice {
+    /// Keep our current block — it has equal or stronger finality.
+    KeepOurs,
+    /// Switch to the alternative block — it has stronger finality.
+    SwitchToTheirs,
+    /// Neither block has enough information to decide. Wait for more signatures.
+    NeedMoreInfo,
+}
+
+/// Resolves forks by comparing competing blocks at the same height.
+///
+/// WHY: In a BFT system, two producers may occasionally propose blocks at the
+/// same height (e.g., network partition, slot timing skew). The fork resolver
+/// provides a deterministic rule so all honest nodes converge on the same chain:
+///
+/// 1. Block with MORE valid committee signatures wins (stronger finality).
+/// 2. Tie-break: lower block hash wins (deterministic, unpredictable).
+/// 3. If neither block is finalized, wait for more signatures.
+pub struct ForkResolver;
+
+impl ForkResolver {
+    /// Compare two competing blocks at the same height and decide which to keep.
+    ///
+    /// `our_sigs` and `their_sigs` are the number of valid committee signatures
+    /// each block has collected.
+    pub fn resolve_fork(
+        our_block: &Block,
+        their_block: &Block,
+        our_sigs: usize,
+        their_sigs: usize,
+        finality_threshold: usize,
+    ) -> ForkChoice {
+        let our_height = our_block.header.height;
+        let their_height = their_block.header.height;
+
+        // WHY: Fork resolution only applies to blocks at the same height.
+        // Different heights are handled by normal chain selection (highest wins).
+        if our_height != their_height {
+            if their_height > our_height {
+                return ForkChoice::SwitchToTheirs;
+            } else {
+                return ForkChoice::KeepOurs;
+            }
+        }
+
+        // Rule 1: More signatures wins (stronger finality evidence).
+        if their_sigs > our_sigs && their_sigs >= finality_threshold {
+            info!(
+                height = our_height,
+                our_sigs = our_sigs,
+                their_sigs = their_sigs,
+                "Fork resolved: switching to block with more signatures"
+            );
+            return ForkChoice::SwitchToTheirs;
+        }
+
+        if our_sigs > their_sigs && our_sigs >= finality_threshold {
+            return ForkChoice::KeepOurs;
+        }
+
+        // Rule 2: Tie-break by block hash (deterministic).
+        if our_sigs == their_sigs && our_sigs >= finality_threshold {
+            let our_hash = our_block.header.hash().unwrap_or_default();
+            let their_hash = their_block.header.hash().unwrap_or_default();
+
+            // WHY: Lower hash wins. Since block hashes include VRF output and
+            // timestamps, this is effectively random but deterministic — all
+            // nodes seeing the same two blocks will pick the same winner.
+            if their_hash.0 < our_hash.0 {
+                info!(
+                    height = our_height,
+                    "Fork resolved: switching to block with lower hash (tie-break)"
+                );
+                return ForkChoice::SwitchToTheirs;
+            } else {
+                return ForkChoice::KeepOurs;
+            }
+        }
+
+        // Neither block has reached finality — need more signatures.
+        ForkChoice::NeedMoreInfo
     }
 }
 

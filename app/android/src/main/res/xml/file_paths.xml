@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider path configuration for securely sharing files with other apps.
+     WHY cache-path: CSV exports are temporary files that Android can reclaim
+     when storage is low. No need to persist them in permanent storage. -->
+<paths>
+    <cache-path name="csv_exports" path="csv_exports/" />
+</paths>

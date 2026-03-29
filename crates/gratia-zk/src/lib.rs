@@ -32,6 +32,10 @@ pub mod shielded_tx;
 
 // Re-export primary types for convenience
 pub use bulletproofs::{ProofOfLifeProof, prove_daily_attestation, verify_daily_attestation};
+pub use bulletproofs::{
+    PolRangeProof, PolProofInput, PolThresholds, ZkError,
+    generate_pol_proof, verify_pol_proof,
+};
 pub use groth16::{
     Groth16Proof, Groth16Error, Circuit, ConstraintSystem, SetupParameters, VerificationKey,
     prove_range, prove_merkle_inclusion, prove_balance_conservation,

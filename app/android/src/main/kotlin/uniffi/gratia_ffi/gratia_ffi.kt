@@ -814,6 +814,30 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -891,6 +915,30 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_list_contracts(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_lux_create_post(`ptr`: Pointer,`content`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_lux_follow(`ptr`: Pointer,`targetAddress`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_gratia_ffi_fn_method_gratianode_lux_get_global_feed(`ptr`: Pointer,`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_lux_get_post_count(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Long
+    fun uniffi_gratia_ffi_fn_method_gratianode_lux_get_post_fee(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Long
+    fun uniffi_gratia_ffi_fn_method_gratianode_lux_get_profile(`ptr`: Pointer,`address`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_lux_get_total_burned(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Long
+    fun uniffi_gratia_ffi_fn_method_gratianode_lux_like_post(`ptr`: Pointer,`postHash`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_gratia_ffi_fn_method_gratianode_lux_reply(`ptr`: Pointer,`parentHash`: RustBuffer.ByValue,`content`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_lux_repost(`ptr`: Pointer,`originalHash`: RustBuffer.ByValue,`quote`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_lux_set_profile(`ptr`: Pointer,`displayName`: RustBuffer.ByValue,`bio`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_gratia_ffi_fn_method_gratianode_lux_unfollow(`ptr`: Pointer,`targetAddress`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_gratia_ffi_fn_method_gratianode_mesh_broadcast_transaction(`ptr`: Pointer,`txHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_poll_network_events(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -1101,6 +1149,30 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_list_contracts(
     ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_lux_create_post(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_lux_follow(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_lux_get_global_feed(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_lux_get_post_count(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_lux_get_post_fee(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_lux_get_profile(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_lux_get_total_burned(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_lux_like_post(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_lux_reply(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_lux_repost(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_lux_set_profile(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_lux_unfollow(
+    ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_mesh_broadcast_transaction(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_poll_network_events(
@@ -1242,6 +1314,42 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_list_contracts() != 47931.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_lux_create_post() != 49132.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_lux_follow() != 59328.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_lux_get_global_feed() != 31275.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_lux_get_post_count() != 5908.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_lux_get_post_fee() != 24811.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_lux_get_profile() != 63628.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_lux_get_total_burned() != 31356.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_lux_like_post() != 48260.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_lux_reply() != 9240.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_lux_repost() != 53626.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_lux_set_profile() != 23739.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_lux_unfollow() != 6375.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_mesh_broadcast_transaction() != 3163.toShort()) {
@@ -1995,6 +2103,66 @@ public interface GratiaNodeInterface {
      * List deployed contracts.
      */
     fun `listContracts`(): List<kotlin.String>
+    
+    /**
+     * Create a new Lux text post. Returns the post hash.
+     */
+    fun `luxCreatePost`(`content`: kotlin.String): kotlin.String
+    
+    /**
+     * Follow a user.
+     */
+    fun `luxFollow`(`targetAddress`: kotlin.String)
+    
+    /**
+     * Get the global feed: all posts, newest first.
+     */
+    fun `luxGetGlobalFeed`(`limit`: kotlin.UInt): FfiLuxFeed
+    
+    /**
+     * Get the number of posts in the local store.
+     */
+    fun `luxGetPostCount`(): kotlin.ULong
+    
+    /**
+     * Get the current posting fee in Lux.
+     */
+    fun `luxGetPostFee`(): kotlin.ULong
+    
+    /**
+     * Get a user's profile info.
+     */
+    fun `luxGetProfile`(`address`: kotlin.String): FfiLuxProfile
+    
+    /**
+     * Get total Lux burned from social activity.
+     */
+    fun `luxGetTotalBurned`(): kotlin.ULong
+    
+    /**
+     * Like a post. Costs 1 Lux (burned).
+     */
+    fun `luxLikePost`(`postHash`: kotlin.String)
+    
+    /**
+     * Create a reply to an existing post.
+     */
+    fun `luxReply`(`parentHash`: kotlin.String, `content`: kotlin.String): kotlin.String
+    
+    /**
+     * Repost a post with optional quote text. Costs 1 Lux (burned).
+     */
+    fun `luxRepost`(`originalHash`: kotlin.String, `quote`: kotlin.String?): kotlin.String
+    
+    /**
+     * Set the current user's display name and bio.
+     */
+    fun `luxSetProfile`(`displayName`: kotlin.String, `bio`: kotlin.String)
+    
+    /**
+     * Unfollow a user.
+     */
+    fun `luxUnfollow`(`targetAddress`: kotlin.String)
     
     /**
      * Broadcast a transaction via the mesh layer for offline use.
@@ -2819,6 +2987,194 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
 
     
     /**
+     * Create a new Lux text post. Returns the post hash.
+     */
+    @Throws(FfiException::class)override fun `luxCreatePost`(`content`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_lux_create_post(
+        it, FfiConverterString.lower(`content`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Follow a user.
+     */
+    @Throws(FfiException::class)override fun `luxFollow`(`targetAddress`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_lux_follow(
+        it, FfiConverterString.lower(`targetAddress`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Get the global feed: all posts, newest first.
+     */
+    @Throws(FfiException::class)override fun `luxGetGlobalFeed`(`limit`: kotlin.UInt): FfiLuxFeed {
+            return FfiConverterTypeFfiLuxFeed.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_lux_get_global_feed(
+        it, FfiConverterUInt.lower(`limit`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Get the number of posts in the local store.
+     */
+    @Throws(FfiException::class)override fun `luxGetPostCount`(): kotlin.ULong {
+            return FfiConverterULong.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_lux_get_post_count(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Get the current posting fee in Lux.
+     */
+    @Throws(FfiException::class)override fun `luxGetPostFee`(): kotlin.ULong {
+            return FfiConverterULong.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_lux_get_post_fee(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Get a user's profile info.
+     */
+    @Throws(FfiException::class)override fun `luxGetProfile`(`address`: kotlin.String): FfiLuxProfile {
+            return FfiConverterTypeFfiLuxProfile.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_lux_get_profile(
+        it, FfiConverterString.lower(`address`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Get total Lux burned from social activity.
+     */
+    @Throws(FfiException::class)override fun `luxGetTotalBurned`(): kotlin.ULong {
+            return FfiConverterULong.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_lux_get_total_burned(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Like a post. Costs 1 Lux (burned).
+     */
+    @Throws(FfiException::class)override fun `luxLikePost`(`postHash`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_lux_like_post(
+        it, FfiConverterString.lower(`postHash`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Create a reply to an existing post.
+     */
+    @Throws(FfiException::class)override fun `luxReply`(`parentHash`: kotlin.String, `content`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_lux_reply(
+        it, FfiConverterString.lower(`parentHash`),FfiConverterString.lower(`content`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Repost a post with optional quote text. Costs 1 Lux (burned).
+     */
+    @Throws(FfiException::class)override fun `luxRepost`(`originalHash`: kotlin.String, `quote`: kotlin.String?): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_lux_repost(
+        it, FfiConverterString.lower(`originalHash`),FfiConverterOptionalString.lower(`quote`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Set the current user's display name and bio.
+     */
+    @Throws(FfiException::class)override fun `luxSetProfile`(`displayName`: kotlin.String, `bio`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_lux_set_profile(
+        it, FfiConverterString.lower(`displayName`),FfiConverterString.lower(`bio`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Unfollow a user.
+     */
+    @Throws(FfiException::class)override fun `luxUnfollow`(`targetAddress`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_lux_unfollow(
+        it, FfiConverterString.lower(`targetAddress`),_status)
+}
+    }
+    
+    
+
+    
+    /**
      * Broadcast a transaction via the mesh layer for offline use.
      *
      * The transaction is serialized and broadcast to all mesh peers.
@@ -3439,6 +3795,163 @@ public object FfiConverterTypeFfiContractResult: FfiConverterRustBuffer<FfiContr
             FfiConverterULong.write(value.`gasRemaining`, buf)
             FfiConverterSequenceString.write(value.`events`, buf)
             FfiConverterOptionalString.write(value.`error`, buf)
+    }
+}
+
+
+
+/**
+ * Lux feed result returned to the mobile app.
+ */
+data class FfiLuxFeed (
+    var `posts`: List<FfiLuxPost>, 
+    var `postFeeLux`: kotlin.ULong, 
+    var `totalBurnedLux`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiLuxFeed: FfiConverterRustBuffer<FfiLuxFeed> {
+    override fun read(buf: ByteBuffer): FfiLuxFeed {
+        return FfiLuxFeed(
+            FfiConverterSequenceTypeFfiLuxPost.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiLuxFeed) = (
+            FfiConverterSequenceTypeFfiLuxPost.allocationSize(value.`posts`) +
+            FfiConverterULong.allocationSize(value.`postFeeLux`) +
+            FfiConverterULong.allocationSize(value.`totalBurnedLux`)
+    )
+
+    override fun write(value: FfiLuxFeed, buf: ByteBuffer) {
+            FfiConverterSequenceTypeFfiLuxPost.write(value.`posts`, buf)
+            FfiConverterULong.write(value.`postFeeLux`, buf)
+            FfiConverterULong.write(value.`totalBurnedLux`, buf)
+    }
+}
+
+
+
+/**
+ * A Lux post as returned to the mobile app.
+ */
+data class FfiLuxPost (
+    var `hash`: kotlin.String, 
+    var `author`: kotlin.String, 
+    var `authorDisplayName`: kotlin.String, 
+    var `content`: kotlin.String, 
+    var `timestampMillis`: kotlin.Long, 
+    var `likes`: kotlin.ULong, 
+    var `reposts`: kotlin.ULong, 
+    var `replies`: kotlin.ULong, 
+    var `likedByMe`: kotlin.Boolean, 
+    var `repostedByMe`: kotlin.Boolean
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiLuxPost: FfiConverterRustBuffer<FfiLuxPost> {
+    override fun read(buf: ByteBuffer): FfiLuxPost {
+        return FfiLuxPost(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiLuxPost) = (
+            FfiConverterString.allocationSize(value.`hash`) +
+            FfiConverterString.allocationSize(value.`author`) +
+            FfiConverterString.allocationSize(value.`authorDisplayName`) +
+            FfiConverterString.allocationSize(value.`content`) +
+            FfiConverterLong.allocationSize(value.`timestampMillis`) +
+            FfiConverterULong.allocationSize(value.`likes`) +
+            FfiConverterULong.allocationSize(value.`reposts`) +
+            FfiConverterULong.allocationSize(value.`replies`) +
+            FfiConverterBoolean.allocationSize(value.`likedByMe`) +
+            FfiConverterBoolean.allocationSize(value.`repostedByMe`)
+    )
+
+    override fun write(value: FfiLuxPost, buf: ByteBuffer) {
+            FfiConverterString.write(value.`hash`, buf)
+            FfiConverterString.write(value.`author`, buf)
+            FfiConverterString.write(value.`authorDisplayName`, buf)
+            FfiConverterString.write(value.`content`, buf)
+            FfiConverterLong.write(value.`timestampMillis`, buf)
+            FfiConverterULong.write(value.`likes`, buf)
+            FfiConverterULong.write(value.`reposts`, buf)
+            FfiConverterULong.write(value.`replies`, buf)
+            FfiConverterBoolean.write(value.`likedByMe`, buf)
+            FfiConverterBoolean.write(value.`repostedByMe`, buf)
+    }
+}
+
+
+
+/**
+ * Lux user profile.
+ */
+data class FfiLuxProfile (
+    var `address`: kotlin.String, 
+    var `displayName`: kotlin.String, 
+    var `bio`: kotlin.String, 
+    var `followerCount`: kotlin.ULong, 
+    var `followingCount`: kotlin.ULong, 
+    var `postCount`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiLuxProfile: FfiConverterRustBuffer<FfiLuxProfile> {
+    override fun read(buf: ByteBuffer): FfiLuxProfile {
+        return FfiLuxProfile(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiLuxProfile) = (
+            FfiConverterString.allocationSize(value.`address`) +
+            FfiConverterString.allocationSize(value.`displayName`) +
+            FfiConverterString.allocationSize(value.`bio`) +
+            FfiConverterULong.allocationSize(value.`followerCount`) +
+            FfiConverterULong.allocationSize(value.`followingCount`) +
+            FfiConverterULong.allocationSize(value.`postCount`)
+    )
+
+    override fun write(value: FfiLuxProfile, buf: ByteBuffer) {
+            FfiConverterString.write(value.`address`, buf)
+            FfiConverterString.write(value.`displayName`, buf)
+            FfiConverterString.write(value.`bio`, buf)
+            FfiConverterULong.write(value.`followerCount`, buf)
+            FfiConverterULong.write(value.`followingCount`, buf)
+            FfiConverterULong.write(value.`postCount`, buf)
     }
 }
 
@@ -4460,6 +4973,15 @@ sealed class FfiNetworkEvent {
         companion object
     }
     
+    /**
+     * A Lux social post was received from the network.
+     */
+    data class LuxPostReceived(
+        val `hash`: kotlin.String, 
+        val `author`: kotlin.String) : FfiNetworkEvent() {
+        companion object
+    }
+    
 
     
     companion object
@@ -4482,6 +5004,10 @@ public object FfiConverterTypeFfiNetworkEvent : FfiConverterRustBuffer<FfiNetwor
                 FfiConverterString.read(buf),
                 )
             4 -> FfiNetworkEvent.TransactionReceived(
+                FfiConverterString.read(buf),
+                )
+            5 -> FfiNetworkEvent.LuxPostReceived(
+                FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
@@ -4518,6 +5044,14 @@ public object FfiConverterTypeFfiNetworkEvent : FfiConverterRustBuffer<FfiNetwor
                 + FfiConverterString.allocationSize(value.`hashHex`)
             )
         }
+        is FfiNetworkEvent.LuxPostReceived -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`hash`)
+                + FfiConverterString.allocationSize(value.`author`)
+            )
+        }
     }
 
     override fun write(value: FfiNetworkEvent, buf: ByteBuffer) {
@@ -4541,6 +5075,12 @@ public object FfiConverterTypeFfiNetworkEvent : FfiConverterRustBuffer<FfiNetwor
             is FfiNetworkEvent.TransactionReceived -> {
                 buf.putInt(4)
                 FfiConverterString.write(value.`hashHex`, buf)
+                Unit
+            }
+            is FfiNetworkEvent.LuxPostReceived -> {
+                buf.putInt(5)
+                FfiConverterString.write(value.`hash`, buf)
+                FfiConverterString.write(value.`author`, buf)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -4844,6 +5384,34 @@ public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.Str
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterString.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeFfiLuxPost: FfiConverterRustBuffer<List<FfiLuxPost>> {
+    override fun read(buf: ByteBuffer): List<FfiLuxPost> {
+        val len = buf.getInt()
+        return List<FfiLuxPost>(len) {
+            FfiConverterTypeFfiLuxPost.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FfiLuxPost>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFfiLuxPost.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FfiLuxPost>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFfiLuxPost.write(it, buf)
         }
     }
 }

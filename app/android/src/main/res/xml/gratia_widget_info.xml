@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Widget metadata for GratiaWidget.
+    - 180dp x 60dp minimum size fits ~3x1 cells on most launchers.
+    - 30-minute update interval (1800000ms) is the Android minimum for
+      updatePeriodMillis; shorter values are clamped to 30 min anyway.
+    - Resizable in both directions so the user can expand it if desired.
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="180dp"
+    android:minHeight="60dp"
+    android:updatePeriodMillis="1800000"
+    android:initialLayout="@layout/widget_gratia"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen" />

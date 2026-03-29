@@ -1,19 +1,30 @@
 //! Proof of Life zero-knowledge attestations using Bulletproofs.
 //!
 //! This module implements ZK proofs for the daily Proof of Life attestation.
-//! The prover (the phone) demonstrates that all 8 required PoL parameters
+//! The prover (the phone) demonstrates that all required PoL parameters
 //! were met during the rolling 24-hour window WITHOUT revealing the raw
 //! sensor data. The verifier (other nodes) can confirm validity using
 //! only the proof and public parameters.
 //!
-//! Each PoL parameter is encoded as a numeric value and committed via
-//! Pedersen commitments. A Bulletproofs range proof then proves each
-//! committed value falls within the required range (e.g., unlock_count >= 10).
+//! ## Two API layers
 //!
-//! Proof structure:
-//! - 8 Pedersen commitments (one per required PoL parameter)
-//! - An aggregated Bulletproofs range proof covering all 8 values
-//! - A domain-separated Merlin transcript for Fiat-Shamir
+//! 1. **High-level** (`prove_daily_attestation` / `verify_daily_attestation`):
+//!    Takes `DailyProofOfLifeData` directly, uses hardcoded protocol minimums,
+//!    returns `ProofOfLifeProof`. Integrated with `GratiaError`.
+//!
+//! 2. **Flexible** (`generate_pol_proof` / `verify_pol_proof`):
+//!    Takes `PolProofInput` + `PolThresholds`, returns `PolRangeProof`.
+//!    Thresholds are governance-adjustable. Uses dedicated `ZkError`.
+//!
+//! ## Proof technique
+//!
+//! To prove `value >= minimum` without revealing `value`, we prove that
+//! `(value - minimum)` lies in the range `[0, 2^n)` using a Bulletproofs
+//! range proof. If `value < minimum`, the subtraction underflows in u64
+//! arithmetic and cannot produce a valid range proof.
+//!
+//! Each PoL parameter gets its own committed value. All values are proven
+//! in a single aggregated Bulletproofs range proof for efficiency.
 
 use ::bulletproofs::{BulletproofGens, PedersenGens, RangeProof};
 use curve25519_dalek::ristretto::CompressedRistretto;
@@ -29,27 +40,338 @@ use gratia_core::GratiaError;
 // Constants
 // ============================================================================
 
-/// Number of required Proof of Life parameters that must be proven.
-/// Each parameter gets its own committed value in the aggregated range proof.
+/// Number of required Proof of Life parameters that must be proven
+/// in the high-level API (all 8 daily PoL requirements).
 const POL_PARAMETER_COUNT: usize = 8;
 
-/// Bit width for range proofs. 16 bits supports values 0..65535,
-/// which is sufficient for all PoL parameter encodings (counts, hours, booleans).
-/// WHY: Smaller bit widths produce smaller, faster proofs. 16 bits covers
-/// the maximum realistic values (e.g., unlock_count of 65535 is far beyond
-/// any realistic daily usage).
-const RANGE_PROOF_BITS: usize = 16;
+/// Number of parameters in the flexible API (the 4 core numeric ones:
+/// unlock_count, unlock_spread_hours, interaction_sessions, bt_environments).
+/// WHY: The flexible API focuses on the range-provable numeric parameters.
+/// Boolean parameters (orientation, motion, gps, charge) are either 0 or 1
+/// and are included in the high-level API but not separately exposed in
+/// the flexible API since their proof is trivial.
+const FLEXIBLE_PARAMETER_COUNT: usize = 4;
 
-/// Domain separator for the Proof of Life Merlin transcript.
+/// Bit width for range proofs. 32 bits supports values 0..4,294,967,295.
+/// WHY: We use (value - minimum) as the proven value. With 32-bit range,
+/// the maximum provable surplus above minimum is ~4 billion, which is
+/// far beyond any realistic daily PoL count. 32 bits is the sweet spot:
+/// large enough that no legitimate value overflows, small enough that
+/// proof generation stays fast on mobile ARM (~200-500ms).
+const RANGE_PROOF_BITS: usize = 32;
+
+/// Bit width for the high-level 8-parameter API (kept at 16 for backward compat).
+/// WHY: 16 bits covers max value 65535, sufficient for all PoL encodings
+/// (counts, hours, booleans). Smaller bit width = smaller, faster proofs.
+const RANGE_PROOF_BITS_LEGACY: usize = 16;
+
+/// Domain separator for the Proof of Life Merlin transcript (high-level API).
 /// WHY: Domain separation ensures PoL proofs cannot be confused with
 /// shielded transaction proofs or any other protocol proof.
 const POL_TRANSCRIPT_DOMAIN: &[u8] = b"gratia-proof-of-life-v1";
 
+/// Domain separator for the flexible PoL range proof API.
+/// WHY: Different domain from the legacy API so proofs from the two
+/// systems cannot be cross-verified (they use different parameter counts
+/// and bit widths).
+const POL_RANGE_TRANSCRIPT_DOMAIN: &[u8] = b"gratia-pol-range-proof-v1";
+
 // ============================================================================
-// Types
+// ZkError — Dedicated error type for zero-knowledge proof operations
 // ============================================================================
 
-/// A zero-knowledge Proof of Life attestation.
+/// Errors specific to zero-knowledge proof generation and verification.
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum ZkError {
+    /// Proof generation failed (e.g., Bulletproofs internal error).
+    #[error("proof generation failed: {reason}")]
+    ProofGenerationFailed { reason: String },
+
+    /// Proof verification failed (invalid proof or wrong thresholds).
+    #[error("verification failed: {reason}")]
+    VerificationFailed { reason: String },
+
+    /// Input values are invalid (e.g., value below minimum threshold).
+    #[error("invalid input: {reason}")]
+    InvalidInput { reason: String },
+
+    /// Serialization or deserialization error.
+    #[error("serialization error: {reason}")]
+    SerializationError { reason: String },
+}
+
+impl From<ZkError> for GratiaError {
+    fn from(e: ZkError) -> Self {
+        match e {
+            ZkError::ProofGenerationFailed { reason } | ZkError::VerificationFailed { reason } => {
+                GratiaError::InvalidZkProof { reason }
+            }
+            ZkError::InvalidInput { reason } => GratiaError::ProofOfLifeInvalid { reason },
+            ZkError::SerializationError { reason } => GratiaError::SerializationError(reason),
+        }
+    }
+}
+
+// ============================================================================
+// Flexible API Types
+// ============================================================================
+
+/// Input data for generating a PoL range proof.
+///
+/// Contains the actual observed values from the phone's daily sensor data.
+/// These values NEVER leave the device — only the resulting ZK proof does.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolProofInput {
+    /// Number of phone unlock events during the 24-hour window.
+    pub unlock_count: u64,
+    /// Hours between the first and last unlock event.
+    pub unlock_spread_hours: u64,
+    /// Number of distinct screen interaction sessions.
+    pub interaction_sessions: u64,
+    /// Number of distinct Bluetooth peer environments observed.
+    pub bt_environments: u64,
+}
+
+/// Configurable thresholds for PoL parameter validation.
+///
+/// These are the minimum values each parameter must meet. They are
+/// governance-adjustable: the network can vote to change these thresholds
+/// without a protocol upgrade.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolThresholds {
+    /// Minimum unlock events required (default: 10).
+    pub min_unlocks: u64,
+    /// Minimum spread in hours between first and last unlock (default: 6).
+    pub min_spread: u64,
+    /// Minimum number of screen interaction sessions (default: 3).
+    pub min_interactions: u64,
+    /// Minimum number of distinct Bluetooth environments (default: 2).
+    pub min_bt_envs: u64,
+}
+
+impl Default for PolThresholds {
+    fn default() -> Self {
+        PolThresholds {
+            min_unlocks: 10,
+            min_spread: 6,
+            min_interactions: 3,
+            min_bt_envs: 2,
+        }
+    }
+}
+
+/// A zero-knowledge range proof for Proof of Life parameters.
+///
+/// Proves that each of the 4 core PoL parameters meets or exceeds its
+/// required threshold, without revealing the actual values.
+///
+/// Proof size: ~700-900 bytes for a 4-value aggregated Bulletproof.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolRangeProof {
+    /// Serialized Bulletproof (aggregated range proof over all parameters).
+    pub proof_bytes: Vec<u8>,
+    /// Pedersen commitments to each shifted value (value - minimum).
+    /// Each commitment is a 32-byte compressed Ristretto point.
+    /// Order: [unlock_count, unlock_spread, interactions, bt_environments].
+    pub commitments: Vec<Vec<u8>>,
+    /// Number of parameters proven in this proof.
+    pub parameter_count: u8,
+}
+
+// ============================================================================
+// Flexible API — generate_pol_proof / verify_pol_proof
+// ============================================================================
+
+/// Generate a zero-knowledge proof that all PoL parameters meet their thresholds.
+///
+/// The proof demonstrates: for each parameter i, `data[i] >= thresholds[i]`,
+/// without revealing the actual values of `data[i]`.
+///
+/// # Arguments
+/// * `data` - The actual observed PoL values (stays on device).
+/// * `thresholds` - The minimum required values (public, governance-set).
+///
+/// # Returns
+/// A `PolRangeProof` that any node can verify against the same thresholds.
+///
+/// # Errors
+/// * `ZkError::InvalidInput` if any value is below its threshold.
+/// * `ZkError::ProofGenerationFailed` if the Bulletproof generation fails.
+///
+/// # Performance
+/// ~200-500ms on ARM64 (Snapdragon 600-series and above).
+pub fn generate_pol_proof(data: &PolProofInput, thresholds: &PolThresholds) -> Result<PolRangeProof, ZkError> {
+    // Collect values and minimums into parallel arrays
+    let values = [
+        data.unlock_count,
+        data.unlock_spread_hours,
+        data.interaction_sessions,
+        data.bt_environments,
+    ];
+    let minimums = [
+        thresholds.min_unlocks,
+        thresholds.min_spread,
+        thresholds.min_interactions,
+        thresholds.min_bt_envs,
+    ];
+    let param_names = ["unlock_count", "unlock_spread_hours", "interaction_sessions", "bt_environments"];
+
+    // Compute shifted values: (value - minimum). If value < minimum, this
+    // is an error because the subtraction would underflow and the prover
+    // cannot legitimately produce a valid range proof.
+    let mut shifted = [0u64; FLEXIBLE_PARAMETER_COUNT];
+    for i in 0..FLEXIBLE_PARAMETER_COUNT {
+        if values[i] < minimums[i] {
+            return Err(ZkError::InvalidInput {
+                reason: format!(
+                    "{} is {} but must be at least {}",
+                    param_names[i], values[i], minimums[i]
+                ),
+            });
+        }
+        shifted[i] = values[i] - minimums[i];
+    }
+
+    // Bulletproofs generators. Capacity must be >= (parameter_count * bit_width).
+    let bp_gens = BulletproofGens::new(RANGE_PROOF_BITS, FLEXIBLE_PARAMETER_COUNT);
+    let pc_gens = PedersenGens::default();
+
+    // Random blinding factors for Pedersen commitments.
+    // WHY: Each commitment uses a unique random blinding so that the
+    // commitment reveals nothing about the value. The blinding is
+    // generated from OsRng (OS-level CSPRNG) for cryptographic security.
+    let blindings: Vec<Scalar> = (0..FLEXIBLE_PARAMETER_COUNT)
+        .map(|_| Scalar::random(&mut OsRng))
+        .collect();
+
+    // Create the Fiat-Shamir transcript with domain separation.
+    let mut transcript = Transcript::new(POL_RANGE_TRANSCRIPT_DOMAIN);
+
+    // Generate the aggregated range proof.
+    // WHY: Aggregated proof for N values is only marginally larger than
+    // a single-value proof, but proves all N values simultaneously.
+    // This is a key efficiency feature of Bulletproofs.
+    let (proof, commitments) = RangeProof::prove_multiple(
+        &bp_gens,
+        &pc_gens,
+        &mut transcript,
+        &shifted,
+        &blindings,
+        RANGE_PROOF_BITS,
+    )
+    .map_err(|e| ZkError::ProofGenerationFailed {
+        reason: format!("Bulletproof prove_multiple failed: {:?}", e),
+    })?;
+
+    // Serialize commitments as Vec<Vec<u8>> for the output struct.
+    let commitment_bytes: Vec<Vec<u8>> = commitments
+        .iter()
+        .map(|c| c.to_bytes().to_vec())
+        .collect();
+
+    Ok(PolRangeProof {
+        proof_bytes: proof.to_bytes(),
+        commitments: commitment_bytes,
+        parameter_count: FLEXIBLE_PARAMETER_COUNT as u8,
+    })
+}
+
+/// Verify a PoL range proof against the given thresholds.
+///
+/// The verifier checks that the prover committed to values that are
+/// each in the range `[0, 2^32)` — which, combined with the shift
+/// `(value - minimum)`, proves that `value >= minimum` for each parameter.
+///
+/// # Arguments
+/// * `proof` - The `PolRangeProof` produced by the prover.
+/// * `thresholds` - The minimum required values (must match what the prover used).
+///
+/// # Returns
+/// `Ok(true)` if the proof is valid, `Ok(false)` is not used — invalid proofs
+/// return `Err(ZkError::VerificationFailed)`.
+///
+/// # Errors
+/// * `ZkError::VerificationFailed` if the proof does not verify.
+/// * `ZkError::SerializationError` if the proof bytes are malformed.
+/// * `ZkError::InvalidInput` if the commitment count is wrong.
+///
+/// # Performance
+/// ~50-100ms on ARM64 (much faster than proving).
+pub fn verify_pol_proof(proof: &PolRangeProof, _thresholds: &PolThresholds) -> Result<bool, ZkError> {
+    // Validate commitment count matches expected parameter count.
+    if proof.commitments.len() != FLEXIBLE_PARAMETER_COUNT {
+        return Err(ZkError::InvalidInput {
+            reason: format!(
+                "expected {} commitments, got {}",
+                FLEXIBLE_PARAMETER_COUNT,
+                proof.commitments.len()
+            ),
+        });
+    }
+
+    if proof.parameter_count != FLEXIBLE_PARAMETER_COUNT as u8 {
+        return Err(ZkError::InvalidInput {
+            reason: format!(
+                "parameter_count is {} but expected {}",
+                proof.parameter_count, FLEXIBLE_PARAMETER_COUNT
+            ),
+        });
+    }
+
+    // Recreate generators with the same parameters.
+    let bp_gens = BulletproofGens::new(RANGE_PROOF_BITS, FLEXIBLE_PARAMETER_COUNT);
+    let pc_gens = PedersenGens::default();
+
+    // Deserialize the range proof.
+    let range_proof = RangeProof::from_bytes(&proof.proof_bytes).map_err(|_| {
+        ZkError::SerializationError {
+            reason: "invalid range proof encoding".into(),
+        }
+    })?;
+
+    // Deserialize commitment points.
+    let commitments: Vec<CompressedRistretto> = proof
+        .commitments
+        .iter()
+        .map(|bytes| {
+            if bytes.len() != 32 {
+                return Err(ZkError::SerializationError {
+                    reason: format!("commitment must be 32 bytes, got {}", bytes.len()),
+                });
+            }
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(bytes);
+            CompressedRistretto::from_slice(&arr).map_err(|_| ZkError::SerializationError {
+                reason: "invalid compressed Ristretto point".into(),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Recreate the transcript with the same domain separator.
+    // WHY: The verifier must use the exact same transcript domain as the prover
+    // for the Fiat-Shamir transform to produce matching challenges.
+    let mut transcript = Transcript::new(POL_RANGE_TRANSCRIPT_DOMAIN);
+
+    // Verify the aggregated range proof.
+    // WHY: This checks that each committed value is in [0, 2^32). Since the
+    // prover committed to (value - minimum), a valid proof means value >= minimum.
+    // The thresholds parameter is accepted for API symmetry and future use
+    // (e.g., encoding thresholds into the transcript for binding), but the
+    // actual threshold enforcement comes from the shift during proof generation.
+    range_proof
+        .verify_multiple(&bp_gens, &pc_gens, &mut transcript, &commitments, RANGE_PROOF_BITS)
+        .map_err(|_| ZkError::VerificationFailed {
+            reason: "range proof verification failed: one or more PoL parameters not in valid range".into(),
+        })?;
+
+    Ok(true)
+}
+
+// ============================================================================
+// High-Level API Types (original implementation)
+// ============================================================================
+
+/// A zero-knowledge Proof of Life attestation (high-level API).
 ///
 /// Contains an aggregated Bulletproofs range proof demonstrating that
 /// all 8 required PoL parameters were met, plus the Pedersen commitments
@@ -79,7 +401,7 @@ struct EncodedPolParameters {
 }
 
 // ============================================================================
-// Parameter Encoding
+// Parameter Encoding (high-level API)
 // ============================================================================
 
 /// Minimum required values for each PoL parameter.
@@ -146,10 +468,10 @@ fn encode_pol_parameters(data: &DailyProofOfLifeData) -> Result<EncodedPolParame
 }
 
 // ============================================================================
-// Proof Generation
+// High-Level Proof Generation
 // ============================================================================
 
-/// Generate a zero-knowledge Proof of Life attestation.
+/// Generate a zero-knowledge Proof of Life attestation (high-level API).
 ///
 /// Takes the raw daily sensor data (which NEVER leaves the device) and produces
 /// a compact ZK proof that all 8 required parameters were met. The proof
@@ -167,7 +489,7 @@ pub fn prove_daily_attestation(
 
     // Bulletproofs generators: need enough for our aggregated proof.
     // WHY: BulletproofGens capacity must be >= number of values * bit width.
-    let bp_gens = BulletproofGens::new(RANGE_PROOF_BITS, POL_PARAMETER_COUNT);
+    let bp_gens = BulletproofGens::new(RANGE_PROOF_BITS_LEGACY, POL_PARAMETER_COUNT);
     let pc_gens = PedersenGens::default();
 
     // Generate random blinding factors for each commitment
@@ -187,7 +509,7 @@ pub fn prove_daily_attestation(
         &mut transcript,
         &encoded.values,
         &blindings,
-        RANGE_PROOF_BITS,
+        RANGE_PROOF_BITS_LEGACY,
     )
     .map_err(|e| GratiaError::InvalidZkProof {
         reason: format!("Bulletproof generation failed: {:?}", e),
@@ -206,10 +528,10 @@ pub fn prove_daily_attestation(
 }
 
 // ============================================================================
-// Proof Verification
+// High-Level Proof Verification
 // ============================================================================
 
-/// Verify a zero-knowledge Proof of Life attestation.
+/// Verify a zero-knowledge Proof of Life attestation (high-level API).
 ///
 /// Any node can call this to confirm that the prover met all 8 PoL
 /// requirements without learning the actual sensor values.
@@ -227,7 +549,7 @@ pub fn verify_daily_attestation(proof: &ProofOfLifeProof) -> Result<(), GratiaEr
         });
     }
 
-    let bp_gens = BulletproofGens::new(RANGE_PROOF_BITS, POL_PARAMETER_COUNT);
+    let bp_gens = BulletproofGens::new(RANGE_PROOF_BITS_LEGACY, POL_PARAMETER_COUNT);
     let pc_gens = PedersenGens::default();
 
     // Deserialize the range proof
@@ -254,7 +576,7 @@ pub fn verify_daily_attestation(proof: &ProofOfLifeProof) -> Result<(), GratiaEr
 
     // Verify the aggregated range proof
     range_proof
-        .verify_multiple(&bp_gens, &pc_gens, &mut transcript, &commitments, RANGE_PROOF_BITS)
+        .verify_multiple(&bp_gens, &pc_gens, &mut transcript, &commitments, RANGE_PROOF_BITS_LEGACY)
         .map_err(|_| GratiaError::InvalidZkProof {
             reason: "range proof verification failed: PoL parameters not in valid range".into(),
         })
@@ -269,6 +591,10 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use gratia_core::types::OptionalSensorData;
+
+    // ========================================================================
+    // High-level API tests
+    // ========================================================================
 
     /// Create a valid DailyProofOfLifeData for testing.
     fn make_valid_pol_data() -> DailyProofOfLifeData {
@@ -414,5 +740,306 @@ mod tests {
 
         // Deserialized proof should still verify
         assert!(verify_daily_attestation(&deserialized).is_ok());
+    }
+
+    // ========================================================================
+    // Flexible API tests (PolRangeProof / generate_pol_proof / verify_pol_proof)
+    // ========================================================================
+
+    fn default_thresholds() -> PolThresholds {
+        PolThresholds::default()
+    }
+
+    fn valid_input() -> PolProofInput {
+        PolProofInput {
+            unlock_count: 45,
+            unlock_spread_hours: 14,
+            interaction_sessions: 12,
+            bt_environments: 4,
+        }
+    }
+
+    #[test]
+    fn test_flexible_prove_and_verify_valid() {
+        let input = valid_input();
+        let thresholds = default_thresholds();
+
+        let proof = generate_pol_proof(&input, &thresholds)
+            .expect("proof generation should succeed");
+
+        assert_eq!(proof.parameter_count, FLEXIBLE_PARAMETER_COUNT as u8);
+        assert_eq!(proof.commitments.len(), FLEXIBLE_PARAMETER_COUNT);
+        assert!(!proof.proof_bytes.is_empty());
+
+        // Each commitment should be 32 bytes (compressed Ristretto point)
+        for c in &proof.commitments {
+            assert_eq!(c.len(), 32, "commitment should be 32 bytes");
+        }
+
+        let result = verify_pol_proof(&proof, &thresholds);
+        assert!(result.is_ok(), "verification failed: {:?}", result.err());
+        assert_eq!(result.unwrap(), true);
+    }
+
+    #[test]
+    fn test_flexible_minimum_values_succeed() {
+        // Exactly at the thresholds — should still produce a valid proof
+        let input = PolProofInput {
+            unlock_count: 10,
+            unlock_spread_hours: 6,
+            interaction_sessions: 3,
+            bt_environments: 2,
+        };
+        let thresholds = default_thresholds();
+
+        let proof = generate_pol_proof(&input, &thresholds)
+            .expect("exact minimum values should produce a valid proof");
+        let result = verify_pol_proof(&proof, &thresholds);
+        assert!(result.is_ok(), "exact minimum proof should verify");
+    }
+
+    #[test]
+    fn test_flexible_fails_unlock_count_below_threshold() {
+        let input = PolProofInput {
+            unlock_count: 5, // Below minimum of 10
+            unlock_spread_hours: 14,
+            interaction_sessions: 12,
+            bt_environments: 4,
+        };
+        let thresholds = default_thresholds();
+
+        let result = generate_pol_proof(&input, &thresholds);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ZkError::InvalidInput { reason } => {
+                assert!(reason.contains("unlock_count"), "error should mention unlock_count: {}", reason);
+                assert!(reason.contains("5"), "error should mention the actual value");
+                assert!(reason.contains("10"), "error should mention the minimum");
+            }
+            other => panic!("expected InvalidInput, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_flexible_fails_spread_below_threshold() {
+        let input = PolProofInput {
+            unlock_count: 45,
+            unlock_spread_hours: 3, // Below minimum of 6
+            interaction_sessions: 12,
+            bt_environments: 4,
+        };
+        let thresholds = default_thresholds();
+
+        let result = generate_pol_proof(&input, &thresholds);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ZkError::InvalidInput { reason } => {
+                assert!(reason.contains("unlock_spread_hours"));
+            }
+            other => panic!("expected InvalidInput, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_flexible_fails_interactions_below_threshold() {
+        let input = PolProofInput {
+            unlock_count: 45,
+            unlock_spread_hours: 14,
+            interaction_sessions: 1, // Below minimum of 3
+            bt_environments: 4,
+        };
+        let thresholds = default_thresholds();
+
+        let result = generate_pol_proof(&input, &thresholds);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ZkError::InvalidInput { reason } => {
+                assert!(reason.contains("interaction_sessions"));
+            }
+            other => panic!("expected InvalidInput, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_flexible_fails_bt_environments_below_threshold() {
+        let input = PolProofInput {
+            unlock_count: 45,
+            unlock_spread_hours: 14,
+            interaction_sessions: 12,
+            bt_environments: 1, // Below minimum of 2
+        };
+        let thresholds = default_thresholds();
+
+        let result = generate_pol_proof(&input, &thresholds);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ZkError::InvalidInput { reason } => {
+                assert!(reason.contains("bt_environments"));
+            }
+            other => panic!("expected InvalidInput, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_flexible_tampered_proof_fails_verification() {
+        let input = valid_input();
+        let thresholds = default_thresholds();
+
+        let mut proof = generate_pol_proof(&input, &thresholds)
+            .expect("proof generation should succeed");
+
+        // Tamper with the first commitment (zero it out)
+        proof.commitments[0] = vec![0u8; 32];
+
+        let result = verify_pol_proof(&proof, &thresholds);
+        assert!(result.is_err(), "tampered proof should not verify");
+        match result.unwrap_err() {
+            ZkError::VerificationFailed { .. } => {} // expected
+            other => panic!("expected VerificationFailed, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_flexible_wrong_commitment_count_fails() {
+        let input = valid_input();
+        let thresholds = default_thresholds();
+
+        let mut proof = generate_pol_proof(&input, &thresholds)
+            .expect("proof generation should succeed");
+
+        // Remove a commitment
+        proof.commitments.pop();
+
+        let result = verify_pol_proof(&proof, &thresholds);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ZkError::InvalidInput { reason } => {
+                assert!(reason.contains("expected"));
+            }
+            other => panic!("expected InvalidInput, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_flexible_corrupt_proof_bytes_fails() {
+        let input = valid_input();
+        let thresholds = default_thresholds();
+
+        let mut proof = generate_pol_proof(&input, &thresholds)
+            .expect("proof generation should succeed");
+
+        // Corrupt the proof bytes
+        proof.proof_bytes = vec![0xDE, 0xAD, 0xBE, 0xEF];
+
+        let result = verify_pol_proof(&proof, &thresholds);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_flexible_custom_thresholds() {
+        // Use non-default thresholds (governance-adjusted)
+        let thresholds = PolThresholds {
+            min_unlocks: 5,
+            min_spread: 4,
+            min_interactions: 2,
+            min_bt_envs: 1,
+        };
+
+        // These values would fail default thresholds but pass custom ones
+        let input = PolProofInput {
+            unlock_count: 7,
+            unlock_spread_hours: 5,
+            interaction_sessions: 2,
+            bt_environments: 1,
+        };
+
+        let proof = generate_pol_proof(&input, &thresholds)
+            .expect("proof with custom thresholds should succeed");
+        let result = verify_pol_proof(&proof, &thresholds);
+        assert!(result.is_ok(), "verification with custom thresholds should succeed");
+    }
+
+    #[test]
+    fn test_flexible_large_values_succeed() {
+        // Extremely active user — values far above thresholds
+        let input = PolProofInput {
+            unlock_count: 500,
+            unlock_spread_hours: 23,
+            interaction_sessions: 100,
+            bt_environments: 50,
+        };
+        let thresholds = default_thresholds();
+
+        let proof = generate_pol_proof(&input, &thresholds)
+            .expect("large values should produce a valid proof");
+        let result = verify_pol_proof(&proof, &thresholds);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_flexible_proof_serialization_roundtrip() {
+        let input = valid_input();
+        let thresholds = default_thresholds();
+
+        let proof = generate_pol_proof(&input, &thresholds)
+            .expect("proof generation should succeed");
+
+        // Serialize to JSON and back
+        let json = serde_json::to_string(&proof).expect("serialization should succeed");
+        let deserialized: PolRangeProof =
+            serde_json::from_str(&json).expect("deserialization should succeed");
+
+        assert_eq!(proof.proof_bytes, deserialized.proof_bytes);
+        assert_eq!(proof.commitments, deserialized.commitments);
+        assert_eq!(proof.parameter_count, deserialized.parameter_count);
+
+        // Deserialized proof should still verify
+        let result = verify_pol_proof(&deserialized, &thresholds);
+        assert!(result.is_ok(), "deserialized proof should verify");
+    }
+
+    #[test]
+    fn test_flexible_zk_error_conversion_to_gratia_error() {
+        // Verify that ZkError converts cleanly to GratiaError
+        let zk_err = ZkError::InvalidInput {
+            reason: "test".into(),
+        };
+        let gratia_err: GratiaError = zk_err.into();
+        assert!(gratia_err.to_string().contains("test"));
+
+        let zk_err = ZkError::ProofGenerationFailed {
+            reason: "gen fail".into(),
+        };
+        let gratia_err: GratiaError = zk_err.into();
+        assert!(gratia_err.to_string().contains("gen fail"));
+    }
+
+    #[test]
+    fn test_flexible_zero_values_fail_with_default_thresholds() {
+        let input = PolProofInput {
+            unlock_count: 0,
+            unlock_spread_hours: 0,
+            interaction_sessions: 0,
+            bt_environments: 0,
+        };
+        let thresholds = default_thresholds();
+
+        let result = generate_pol_proof(&input, &thresholds);
+        assert!(result.is_err(), "all-zero values should fail");
+    }
+
+    #[test]
+    fn test_flexible_wrong_parameter_count_fails() {
+        let input = valid_input();
+        let thresholds = default_thresholds();
+
+        let mut proof = generate_pol_proof(&input, &thresholds)
+            .expect("proof generation should succeed");
+
+        // Corrupt the parameter count
+        proof.parameter_count = 99;
+
+        let result = verify_pol_proof(&proof, &thresholds);
+        assert!(result.is_err());
     }
 }

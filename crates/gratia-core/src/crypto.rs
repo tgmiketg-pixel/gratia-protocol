@@ -58,6 +58,19 @@ impl Keypair {
     pub fn public_key_bytes(&self) -> Vec<u8> {
         self.verifying_key.as_bytes().to_vec()
     }
+
+    /// Reconstruct a Keypair from the 32-byte Ed25519 secret key seed.
+    /// WHY: Needed for real block signing in consensus — the FFI layer holds
+    /// the signing key bytes from the wallet keystore and needs to produce
+    /// a Keypair to call sign_block().
+    pub fn from_secret_key_bytes(bytes: &[u8; 32]) -> Self {
+        let signing_key = SigningKey::from_bytes(bytes);
+        let verifying_key = signing_key.verifying_key();
+        Keypair {
+            signing_key,
+            verifying_key,
+        }
+    }
 }
 
 /// Verify an Ed25519 signature.
