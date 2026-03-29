@@ -5256,6 +5256,43 @@ sealed class FfiSensorEvent {
         companion object
     }
     
+    /**
+     * Barometric pressure reading (hPa).
+     * WHY: Enables environmental oracle contracts and weather-aware smart contracts.
+     * Aggregated across thousands of phones, this creates a decentralized weather network.
+     */
+    data class BarometerReading(
+        val `hpa`: kotlin.Float) : FfiSensorEvent() {
+        companion object
+    }
+    
+    /**
+     * Ambient light level reading (lux — photometric unit, not GRAT Lux).
+     * WHY: Indoor/outdoor detection for location-triggered contracts without GPS.
+     */
+    data class LightReading(
+        val `lux`: kotlin.Float) : FfiSensorEvent() {
+        companion object
+    }
+    
+    /**
+     * Magnetometer heading (degrees, 0-360).
+     * WHY: Orientation-aware contracts and compass-based proximity verification.
+     */
+    data class MagnetometerReading(
+        val `degrees`: kotlin.Float) : FfiSensorEvent() {
+        companion object
+    }
+    
+    /**
+     * Accelerometer magnitude reading (m/s^2, scalar).
+     * WHY: Activity-level detection for fitness contracts and proof-of-movement.
+     */
+    data class AccelerometerReading(
+        val `magnitude`: kotlin.Float) : FfiSensorEvent() {
+        companion object
+    }
+    
 
     
     companion object
@@ -5285,6 +5322,18 @@ public object FfiConverterTypeFfiSensorEvent : FfiConverterRustBuffer<FfiSensorE
                 )
             8 -> FfiSensorEvent.ChargeEvent(
                 FfiConverterBoolean.read(buf),
+                )
+            9 -> FfiSensorEvent.BarometerReading(
+                FfiConverterFloat.read(buf),
+                )
+            10 -> FfiSensorEvent.LightReading(
+                FfiConverterFloat.read(buf),
+                )
+            11 -> FfiSensorEvent.MagnetometerReading(
+                FfiConverterFloat.read(buf),
+                )
+            12 -> FfiSensorEvent.AccelerometerReading(
+                FfiConverterFloat.read(buf),
                 )
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
         }
@@ -5345,6 +5394,34 @@ public object FfiConverterTypeFfiSensorEvent : FfiConverterRustBuffer<FfiSensorE
                 + FfiConverterBoolean.allocationSize(value.`isCharging`)
             )
         }
+        is FfiSensorEvent.BarometerReading -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterFloat.allocationSize(value.`hpa`)
+            )
+        }
+        is FfiSensorEvent.LightReading -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterFloat.allocationSize(value.`lux`)
+            )
+        }
+        is FfiSensorEvent.MagnetometerReading -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterFloat.allocationSize(value.`degrees`)
+            )
+        }
+        is FfiSensorEvent.AccelerometerReading -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterFloat.allocationSize(value.`magnitude`)
+            )
+        }
     }
 
     override fun write(value: FfiSensorEvent, buf: ByteBuffer) {
@@ -5385,6 +5462,26 @@ public object FfiConverterTypeFfiSensorEvent : FfiConverterRustBuffer<FfiSensorE
             is FfiSensorEvent.ChargeEvent -> {
                 buf.putInt(8)
                 FfiConverterBoolean.write(value.`isCharging`, buf)
+                Unit
+            }
+            is FfiSensorEvent.BarometerReading -> {
+                buf.putInt(9)
+                FfiConverterFloat.write(value.`hpa`, buf)
+                Unit
+            }
+            is FfiSensorEvent.LightReading -> {
+                buf.putInt(10)
+                FfiConverterFloat.write(value.`lux`, buf)
+                Unit
+            }
+            is FfiSensorEvent.MagnetometerReading -> {
+                buf.putInt(11)
+                FfiConverterFloat.write(value.`degrees`, buf)
+                Unit
+            }
+            is FfiSensorEvent.AccelerometerReading -> {
+                buf.putInt(12)
+                FfiConverterFloat.write(value.`magnitude`, buf)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
