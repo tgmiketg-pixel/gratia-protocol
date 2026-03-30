@@ -96,7 +96,7 @@ All three must be satisfied simultaneously:
 - Maximum supply: TBD
 - Transaction fees: minimal, burned (deflationary)
 - Smart contract gas: denominated in Lux, based on ARM compute cycles
-- NFC transactions: zero-fee below threshold amount
+- NFC/Bluetooth: transport layers only (deliver signed transactions to the network, NOT offline-confirmed payments)
 - Intrinsic floor value: energy cost to produce each token
 - GRAT classified as a commodity (not a security)
 
@@ -117,8 +117,8 @@ All three must be satisfied simultaneously:
 - Testing on real phones via DevKit app
 
 ### Network Architecture
-- Layer 0: Mesh (Bluetooth + Wi-Fi Direct)
-- Layer 1: Consensus (cellular/Wi-Fi)
+- Layer 0: Mesh (Bluetooth + Wi-Fi Direct) — transport only, relays signed transactions to network
+- Layer 1: Consensus (cellular/Wi-Fi) — all transactions require BFT finality before confirmation
 - Layer 2: Application (smart contracts, dApps)
 - Layer 3: Oracle (sensor data aggregation)
 - Block size: 256 KB
@@ -127,6 +127,13 @@ All three must be satisfied simultaneously:
 - Scaling: geographic sharding (10 shards = ~2,000 TPS)
 - Block production: Weighted Random Selection via VRF, 21 validator committee, 14/21 (67%) finality
 - Archive nodes (servers) can store history but CANNOT participate in consensus
+
+### Transaction Finality: No Offline Payments
+- **All transactions require BFT consensus confirmation.** A transaction is not final until it is included in a block with committee signatures (14/21 finality threshold).
+- **No offline-confirmed payments.** NFC, Bluetooth, and Wi-Fi Direct are transport layers only — they deliver signed transactions between phones, but the transaction is NOT confirmed until the network validates it.
+- **WHY:** Offline payments enable double-spend attacks. A malicious user can disconnect, send GRAT to a merchant on a local fork, reconnect, and the fork is abandoned — the merchant loses the payment. No amount of trust scoring, stake collateral, or hardware attestation can make offline confirmation trustless.
+- **NFC tap-to-pay flow:** Alice taps Bob's phone → signed transaction is transferred via NFC → Bob's phone broadcasts to the network → BFT finality confirms it → Bob sees "Confirmed." Both phones need internet access (at least one must relay to the network).
+- **Bluetooth mesh relay:** Phones without direct internet can relay transactions through nearby phones that DO have connectivity. The mesh is a transport bridge, not a confirmation mechanism.
 
 ### App Store Strategy
 - Position as "wallet with rewards" not "crypto mining app"
@@ -160,7 +167,7 @@ All three must be satisfied simultaneously:
 - NFC (+5)
 - Secure enclave/TEE (+8)
 - Fingerprint/biometric sensor (+5)
-- Wi-Fi Direct (offline transactions)
+- Wi-Fi Direct (transaction relay between nearby phones)
 
 ### Enhanced (Opt-in):
 - Camera environment hash (+4)
@@ -498,7 +505,7 @@ gratia/
 6. Basic wallet: Ed25519 key generation in Android Keystore/StrongBox, send/receive transactions
 7. Bulletproofs integration for PoL zero-knowledge attestations
 8. Phone-to-phone consensus demonstration via libp2p (2-3 devices on same Wi-Fi)
-9. NFC tap-to-transact prototype
+9. NFC tap-to-relay prototype (NFC delivers signed transaction to recipient's phone, which broadcasts to network for BFT confirmation — no offline-only payments)
 10. Basic Jetpack Compose UI: wallet balance, mining status, transaction history
 11. Optional shielded transaction: Bulletproofs + Pedersen commitment for hidden amounts
 
@@ -518,7 +525,7 @@ gratia/
 2. Geographic sharding implementation
 3. iOS app via Swift + same Rust core (UniFFI Swift bindings)
 4. Bluetooth mesh transport adapter for libp2p
-5. Wi-Fi Direct offline transaction layer
+5. Wi-Fi Direct transaction relay layer (phone-to-phone transport, NOT offline confirmation)
 6. Environmental oracle layer (aggregated barometer, light, magnetometer data)
 7. Groth16 proofs for complex ZK smart contract interactions
 8. Security audit of Rust core, ZK proofs, and consensus mechanism

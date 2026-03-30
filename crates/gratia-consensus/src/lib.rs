@@ -99,9 +99,27 @@ pub struct ConsensusEngine {
     /// initialization (e.g., how many nodes are committee-eligible at 30+ days).
     /// Can be disabled in test harnesses that don't need trust-tier awareness.
     pub trust_aware: bool,
+    /// Number of slots spent in Syncing state. Used for timeout detection.
+    /// WHY: If the sync protocol fails to deliver blocks, the engine would
+    /// be stuck in Syncing forever, unable to produce blocks. After 5 slots
+    /// (~20 seconds), we resume production to keep the chain moving.
+    syncing_slots: u64,
     /// Timestamp when the engine started. Used for uptime tracking (Phase 2).
     #[allow(dead_code)]
     started_at: DateTime<Utc>,
+}
+
+/// The result of processing an incoming block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockProcessResult {
+    /// Block accepted and applied to our chain.
+    Accepted,
+    /// Block skipped (already have it, or it's ahead with a gap).
+    Skipped,
+    /// Fork detected: block is at the expected height but has a different
+    /// parent hash. The peer is on a different chain. The caller should
+    /// compare chain lengths and potentially reorg.
+    ForkDetected,
 }
 
 impl ConsensusEngine {
@@ -127,6 +145,7 @@ impl ConsensusEngine {
             state: ConsensusState::Syncing,
             presence_score,
             trust_aware: true,
+            syncing_slots: 0,
             started_at: Utc::now(),
         }
     }
@@ -216,6 +235,28 @@ impl ConsensusEngine {
     pub fn advance_slot(&mut self) -> bool {
         self.current_slot += 1;
         self.block_producer.set_slot(self.current_slot);
+
+        // WHY: Don't produce blocks while syncing (e.g., after fork resolution
+        // rollback). Producing blocks would create a new divergent chain instead
+        // of downloading the peer's longer chain. The sync protocol will set
+        // state back to Active once we've caught up.
+        //
+        // Safety timeout: if stuck in Syncing for 5+ slots (20 seconds),
+        // resume producing. This prevents a permanent stall if the sync
+        // protocol fails to deliver blocks (e.g., peer went offline).
+        if self.state == ConsensusState::Syncing {
+            self.syncing_slots += 1;
+            if self.syncing_slots > 5 {
+                warn!(
+                    slots = self.syncing_slots,
+                    "Syncing timeout — resuming block production"
+                );
+                self.state = ConsensusState::Active;
+                self.syncing_slots = 0;
+            } else {
+                return false;
+            }
+        }
 
         // Check if committee rotation is needed
         if let Some(ref committee) = self.current_committee {
@@ -405,85 +446,74 @@ impl ConsensusEngine {
     /// Process an incoming block from the network.
     ///
     /// Validates the block and, if valid, updates the chain state.
-    pub fn process_incoming_block(&mut self, block: Block) -> Result<(), GratiaError> {
+    /// Only accepts blocks at the exact next expected height with full
+    /// validation (correct parent hash, valid producer, finality sigs).
+    /// Blocks ahead of us are skipped — the sync protocol is responsible
+    /// for fetching missing blocks so we can apply them sequentially.
+    ///
+    /// Returns `ForkDetected` if the block is at the correct height but
+    /// has a different parent hash — indicating the peer is on a different
+    /// fork. The caller should compare chain lengths and initiate reorg
+    /// if the peer's chain is longer.
+    pub fn process_incoming_block(&mut self, block: Block) -> Result<BlockProcessResult, GratiaError> {
         let incoming_height = block.header.height;
-
-        // WHY: In a multi-node demo where both phones produce blocks independently,
-        // chains can diverge. Rather than strict validation that rejects all out-of-
-        // sequence blocks, we handle common cases gracefully:
-        //
-        // 1. Block at expected height → full validation and accept
-        // 2. Block at or below our height → skip (we're ahead or already have it)
-        // 3. Block ahead of us → accept with relaxed validation (fast-forward sync)
-        //
-        // This makes the 2-phone demo work smoothly without a full sync protocol.
-
         let expected_height = self.current_height + 1;
 
         if incoming_height <= self.current_height {
-            // Already at or past this height — skip silently.
             debug!(
                 incoming = incoming_height,
                 local = self.current_height,
                 "Skipping incoming block at or below our height",
             );
-            return Ok(());
+            return Ok(BlockProcessResult::Skipped);
         }
 
+        if incoming_height > expected_height {
+            // WHY: The peer sent a block ahead of our expected height. This
+            // means they have blocks we don't have. Report as ForkDetected
+            // so the caller can decide whether to reorg. The FFI layer guards
+            // against startup race conditions separately (our_height >= 5).
+            let gap = incoming_height - self.current_height;
+            warn!(
+                incoming = incoming_height,
+                local = self.current_height,
+                gap = gap,
+                "Peer is ahead — fork detected",
+            );
+            return Ok(BlockProcessResult::ForkDetected);
+        }
+
+        // Block is at expected height. Check parent hash before full validation.
+        // WHY: If the parent hash doesn't match, the peer is on a different fork.
+        // Instead of rejecting with an error (which hides the fork), return
+        // ForkDetected so the caller can compare chain lengths and reorg.
+        if block.header.parent_hash != self.last_finalized_hash {
+            warn!(
+                height = incoming_height,
+                our_parent = %self.last_finalized_hash,
+                their_parent = %block.header.parent_hash,
+                "Fork detected: block at expected height but different parent hash",
+            );
+            return Ok(BlockProcessResult::ForkDetected);
+        }
+
+        // Normal case: block at expected next height with correct parent. Full validation.
         let committee = self.current_committee.as_ref().ok_or_else(|| {
             GratiaError::BlockValidationFailed {
                 reason: "No active committee for validation".into(),
             }
         })?;
 
-        if incoming_height == expected_height {
-            // Normal case: block at expected next height.
-            let ctx = ValidationContext {
-                current_height: expected_height,
-                previous_block_hash: self.last_finalized_hash.0,
-                committee: committee.clone(),
-                max_block_size: validation::MAX_BLOCK_SIZE,
-                min_transaction_fee: validation::MIN_TRANSACTION_FEE,
-                previous_block_timestamp: self.last_finalized_timestamp,
-                pol_thresholds: gratia_zk::PolThresholds::default(),
-            };
-            validation::validate_block(&block, &ctx)?;
-        } else {
-            // WHY: Block is ahead of us (height gap). In Phase 1 demo mode,
-            // accept with relaxed validation — just check producer is in
-            // committee, finality signatures exist, and size is OK. Skip
-            // strict height/parent hash checks. A full sync protocol (Phase 2)
-            // would request the intermediate blocks.
-            let block_bytes = bincode::serialize(&block)
-                .map_err(|e| GratiaError::SerializationError(e.to_string()))?;
-            if block_bytes.len() > validation::MAX_BLOCK_SIZE {
-                return Err(GratiaError::BlockValidationFailed {
-                    reason: "Block too large".into(),
-                });
-            }
-            if !committee.is_committee_member(&block.header.producer) {
-                return Err(GratiaError::BlockValidationFailed {
-                    reason: format!(
-                        "Block producer {} is not a committee member",
-                        block.header.producer,
-                    ),
-                });
-            }
-            let sig_count = block.validator_signatures.len();
-            if !committee.has_finality(sig_count) {
-                return Err(GratiaError::InsufficientSignatures {
-                    count: sig_count,
-                    required: crate::committee::FINALITY_THRESHOLD,
-                });
-            }
-            info!(
-                incoming = incoming_height,
-                local = self.current_height,
-                gap = incoming_height - self.current_height,
-                "Fast-forwarding to peer block (skipping {} heights)",
-                incoming_height - self.current_height,
-            );
-        }
+        let ctx = ValidationContext {
+            current_height: expected_height,
+            previous_block_hash: self.last_finalized_hash.0,
+            committee: committee.clone(),
+            max_block_size: validation::MAX_BLOCK_SIZE,
+            min_transaction_fee: validation::MIN_TRANSACTION_FEE,
+            previous_block_timestamp: self.last_finalized_timestamp,
+            pol_thresholds: gratia_zk::PolThresholds::default(),
+        };
+        validation::validate_block(&block, &ctx)?;
 
         // Block is valid — update state
         let block_hash = block.header.hash()?;
@@ -515,7 +545,30 @@ impl ConsensusEngine {
             "Accepted incoming block",
         );
 
-        Ok(())
+        Ok(BlockProcessResult::Accepted)
+    }
+
+    /// Roll back the consensus engine to a specific height.
+    ///
+    /// WHY: During fork resolution, the shorter chain needs to roll back
+    /// to the common ancestor before downloading the longer chain. This
+    /// resets the engine's internal state so it can accept blocks from
+    /// the fork point onward.
+    pub fn rollback_to(&mut self, height: u64, tip_hash: BlockHash) {
+        let old_height = self.current_height;
+        self.current_height = height;
+        self.last_finalized_hash = tip_hash;
+        self.last_finalized_timestamp = None;
+        self.pending_block = None;
+        self.recent_block_hashes.clear();
+        self.state = ConsensusState::Syncing;
+        self.syncing_slots = 0;
+
+        info!(
+            old_height = old_height,
+            new_height = height,
+            "Consensus engine rolled back for fork resolution",
+        );
     }
 
     /// Rotate the committee for a new epoch.

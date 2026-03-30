@@ -211,6 +211,53 @@ impl StateManager {
         Ok(())
     }
 
+    /// Revert multiple blocks down to a target height, collecting orphaned
+    /// transactions from the reverted blocks.
+    ///
+    /// WHY: During fork resolution, the shorter chain needs to roll back
+    /// to the common ancestor. Orphaned transactions are returned so they
+    /// can be re-added to the mempool — they may still be valid on the
+    /// new canonical chain and should be re-mined.
+    pub fn revert_to_height(
+        &self,
+        target_height: u64,
+    ) -> Result<Vec<Transaction>, GratiaError> {
+        let current_height = self.db.get_block_height()?;
+        if target_height >= current_height {
+            return Ok(Vec::new());
+        }
+
+        let mut orphaned_txs = Vec::new();
+        let blocks_to_revert = current_height - target_height;
+
+        for i in 0..blocks_to_revert {
+            // Collect transactions before reverting
+            if let Some(tip) = self.db.get_chain_tip()? {
+                if let Ok(Some(block)) = self.db.get_block(&tip) {
+                    orphaned_txs.extend(block.transactions.clone());
+                }
+            }
+            self.revert_block().map_err(|e| {
+                tracing::error!(
+                    step = i,
+                    target = target_height,
+                    "Fork resolution: revert_block failed: {}",
+                    e,
+                );
+                e
+            })?;
+        }
+
+        tracing::info!(
+            from_height = current_height,
+            to_height = target_height,
+            orphaned_txs = orphaned_txs.len(),
+            "State rolled back for fork resolution",
+        );
+
+        Ok(orphaned_txs)
+    }
+
     // ========================================================================
     // Query Methods
     // ========================================================================

@@ -37,6 +37,17 @@ object GratiaCoreManager {
     var isInitialized: Boolean = false
         private set
 
+    /**
+     * Whether the user manually stopped mining via the UI.
+     * WHY: The ProofOfLifeService periodically evaluates power state and
+     * auto-starts MiningService when conditions are met. Without this flag,
+     * tapping "Stop Mining" is immediately overridden on the next power
+     * state evaluation (~every few seconds). This flag prevents auto-restart
+     * until the user taps "Start Mining" again.
+     */
+    @Volatile
+    var userStoppedMining: Boolean = false
+
     /** The UniFFI-generated Rust node instance. */
     private var node: GratiaNode? = null
 
@@ -204,6 +215,16 @@ object GratiaCoreManager {
      * @throws GratiaBridgeException if conditions are not met.
      */
     fun startMining(): MiningStatus {
+        userStoppedMining = false
+        // WHY: Restart consensus if it was stopped by a previous stopMining().
+        // Without this, the slot timer is dead and no blocks are produced.
+        try {
+            val status = callNode { it.getConsensusStatus() }
+            if (status.state == "stopped" || status.state == "unknown") {
+                callNode { it.startConsensus() }
+                Log.i(TAG, "Consensus restarted after user stop")
+            }
+        } catch (_: Exception) {}
         return callNode { it.startMining() }.toBridge()
     }
 
@@ -225,6 +246,14 @@ object GratiaCoreManager {
      * @return Updated mining status.
      */
     fun stopMining(): MiningStatus {
+        userStoppedMining = true
+        // WHY: Stop the consensus engine entirely. This kills the slot timer,
+        // so no more blocks are produced. The MiningService's monitor loop
+        // checks consensus state and calls stopSelf() when it sees "stopped".
+        // This is the only reliable way to stop mining — in-memory flags get
+        // overridden by Android service lifecycle (START_STICKY, PoL service
+        // auto-restart, etc).
+        try { callNode { it.stopConsensus() } } catch (_: Exception) {}
         return callNode { it.stopMining() }.toBridge()
     }
 

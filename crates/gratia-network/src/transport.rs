@@ -63,7 +63,13 @@ impl Default for TransportConfig {
             max_inbound: 30,
             max_outbound: 20,
             // 5 minutes — balances reconnection cost vs idle resource usage on mobile
-            idle_timeout_secs: 300,
+            // WHY: 30 seconds is aggressive but appropriate for mobile. Dead
+            // peers (phone disconnected, app killed) should be detected quickly
+            // so the UI shows accurate peer count and the sync manager doesn't
+            // make decisions based on stale peer data. libp2p's QUIC transport
+            // sends keep-alive pings; if no response within this window, the
+            // connection is closed and PeerDisconnected fires.
+            idle_timeout_secs: 30,
             // 30 seconds — frequent enough to detect dead connections on flaky mobile networks
             keepalive_interval_secs: 30,
             // WHY: Mesh is None by default — enabled explicitly on mobile devices

@@ -48,8 +48,11 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import io.gratia.app.GratiaLogo
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -165,7 +168,13 @@ private fun MiningContent(
     ) {
         // Mining state indicator
         item {
-            MiningStateCard(mining, onStartMining, onStopMining)
+            MiningStateCard(
+                status = mining,
+                onStartMining = onStartMining,
+                onStopMining = onStopMining,
+                blockHeight = state.blockHeight,
+                currentSlot = state.currentSlot,
+            )
         }
 
         // Consensus & network status
@@ -227,6 +236,8 @@ private fun MiningStateCard(
     status: MiningStatus,
     onStartMining: () -> Unit,
     onStopMining: () -> Unit,
+    blockHeight: Long = 0L,
+    currentSlot: Long = 0L,
 ) {
     // WHY: Mining animation should only show when consensus is actively
     // running AND power conditions are met. Without the consensus check,
@@ -262,58 +273,87 @@ private fun MiningStateCard(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             if (isMining) {
-                val infiniteTransition = rememberInfiniteTransition(label = "mining_anim")
+                // ── Block Pulse Ring Animation ─────────────────────────
+                // WHY: Shows real consensus data instead of a generic spinner.
+                // The ring fills over 4 seconds (one slot), then pulses when
+                // a block is finalized. Green pulse = BFT finality (peer
+                // co-signed). The user can see the blockchain's heartbeat.
 
-                // Pulsing outer ring
-                val pulseScale by infiniteTransition.animateFloat(
-                    initialValue = 1.0f,
-                    targetValue = 1.4f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(1200, easing = androidx.compose.animation.core.EaseOut),
-                        repeatMode = RepeatMode.Restart,
+                // Track block height changes to trigger finality pulse
+                var lastFinalizedHeight by remember { mutableLongStateOf(0L) }
+                var pulseTriggered by remember { mutableStateOf(false) }
+                var pulseStartTime by remember { mutableLongStateOf(0L) }
+
+                // WHY: When blockHeight increases, a new block was finalized.
+                // Trigger a radial pulse outward to visually confirm consensus.
+                LaunchedEffect(blockHeight) {
+                    if (blockHeight > lastFinalizedHeight && lastFinalizedHeight > 0L) {
+                        pulseTriggered = true
+                        pulseStartTime = System.currentTimeMillis()
+                    }
+                    lastFinalizedHeight = blockHeight
+                }
+
+                // Slot progress: fills from 0 to 1 over 4 seconds, then resets
+                val slotProgress by animateFloatAsState(
+                    targetValue = if (currentSlot % 2 == 0L) 1f else 0f,
+                    animationSpec = tween(
+                        durationMillis = 3800,
+                        easing = LinearEasing,
                     ),
-                    label = "pulse_scale",
-                )
-                val pulseAlpha by infiniteTransition.animateFloat(
-                    initialValue = 0.5f,
-                    targetValue = 0.0f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(1200, easing = androidx.compose.animation.core.EaseOut),
-                        repeatMode = RepeatMode.Restart,
-                    ),
-                    label = "pulse_alpha",
+                    label = "slot_fill",
                 )
 
-                // Spinning ring rotation
-                val rotation by infiniteTransition.animateFloat(
+                // Continuous slot fill using infinite transition
+                val infiniteTransition = rememberInfiniteTransition(label = "slot_ring")
+                val slotFill by infiniteTransition.animateFloat(
                     initialValue = 0f,
-                    targetValue = 360f,
+                    targetValue = 1f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(4000, easing = LinearEasing),
+                        repeatMode = RepeatMode.Restart,
+                    ),
+                    label = "slot_fill_continuous",
+                )
+
+                // Finality pulse: expands outward when a block is finalized
+                val pulseScale by animateFloatAsState(
+                    targetValue = if (pulseTriggered) 1.6f else 1.0f,
+                    animationSpec = tween(
+                        durationMillis = 600,
+                        easing = androidx.compose.animation.core.EaseOut,
+                    ),
+                    finishedListener = { pulseTriggered = false },
+                    label = "finality_pulse_scale",
+                )
+                val pulseAlpha by animateFloatAsState(
+                    targetValue = if (pulseTriggered) 0f else 0.6f,
+                    animationSpec = tween(
+                        durationMillis = 600,
+                        easing = androidx.compose.animation.core.EaseOut,
+                    ),
+                    label = "finality_pulse_alpha",
+                )
+
+                // Inner glow pulses gently
+                val glow by infiniteTransition.animateFloat(
+                    initialValue = 0.4f,
+                    targetValue = 0.8f,
                     animationSpec = infiniteRepeatable(
                         animation = tween(2000, easing = LinearEasing),
-                        repeatMode = RepeatMode.Restart,
-                    ),
-                    label = "ring_rotation",
-                )
-
-                // Glow brightness cycle
-                val glow by infiniteTransition.animateFloat(
-                    initialValue = 0.6f,
-                    targetValue = 1.0f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(800, easing = LinearEasing),
                         repeatMode = RepeatMode.Reverse,
                     ),
-                    label = "glow",
+                    label = "inner_glow",
                 )
 
                 Box(
-                    modifier = Modifier.size(120.dp),
+                    modifier = Modifier.size(140.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    // Expanding pulse ring
+                    // Layer 1: Finality pulse ring (expands on block finalization)
                     Canvas(
                         modifier = Modifier
-                            .size(120.dp)
+                            .size(130.dp)
                             .graphicsLayer {
                                 scaleX = pulseScale
                                 scaleY = pulseScale
@@ -323,40 +363,55 @@ private fun MiningStateCard(
                         drawCircle(
                             color = stateColor,
                             radius = size.minDimension / 2,
-                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3.dp.toPx()),
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 4.dp.toPx()),
                         )
                     }
 
-                    // Spinning arc
-                    Canvas(
-                        modifier = Modifier
-                            .size(90.dp)
-                            .graphicsLayer { rotationZ = rotation },
-                    ) {
+                    // Layer 2: Slot progress ring (fills over 4 seconds)
+                    Canvas(modifier = Modifier.size(110.dp)) {
+                        // Background track
                         drawArc(
-                            color = stateColor,
-                            startAngle = 0f,
-                            sweepAngle = 120f,
+                            color = stateColor.copy(alpha = 0.15f),
+                            startAngle = -90f,
+                            sweepAngle = 360f,
                             useCenter = false,
                             style = androidx.compose.ui.graphics.drawscope.Stroke(
-                                width = 3.dp.toPx(),
+                                width = 6.dp.toPx(),
+                                cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                            ),
+                        )
+                        // Fill arc — sweeps 360 degrees over one slot (4 seconds)
+                        drawArc(
+                            color = stateColor,
+                            startAngle = -90f,
+                            sweepAngle = slotFill * 360f,
+                            useCenter = false,
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                width = 6.dp.toPx(),
                                 cap = androidx.compose.ui.graphics.StrokeCap.Round,
                             ),
                         )
                     }
 
-                    // Inner glowing circle
-                    Canvas(modifier = Modifier.size(60.dp)) {
-                        drawCircle(color = stateColor.copy(alpha = glow * 0.3f))
+                    // Layer 3: Inner glow
+                    Canvas(modifier = Modifier.size(70.dp)) {
+                        drawCircle(color = stateColor.copy(alpha = glow * 0.25f))
                     }
 
-                    // Battery icon
-                    Icon(
-                        Icons.Default.BatteryChargingFull,
-                        contentDescription = null,
-                        tint = stateColor,
-                        modifier = Modifier.size(32.dp),
-                    )
+                    // Layer 4: Block height number in center
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "$blockHeight",
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = stateColor,
+                        )
+                        Text(
+                            text = "blocks",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = stateColor.copy(alpha = 0.7f),
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -380,7 +435,7 @@ private fun MiningStateCard(
                     text = "${formatGrat(status.earnedThisSessionLux)} GRAT",
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold,
-                    color = stateColor.copy(alpha = glow),
+                    color = stateColor,
                 )
                 Text(
                     text = "earned so far",

@@ -173,18 +173,22 @@ class GratiaApplication : Application() {
                     GratiaCoreManager.updatePowerState(isCharging, batteryPct)
                     Log.i(TAG, "Power state updated: charging=$isCharging, battery=$batteryPct%")
 
-                    // Start mining in the Rust core
-                    GratiaCoreManager.startMining()
-                    Log.i(TAG, "Mining auto-started")
+                    // Start mining in the Rust core and MiningService (unless user previously stopped)
+                    if (!GratiaCoreManager.userStoppedMining) {
+                        GratiaCoreManager.startMining()
+                        Log.i(TAG, "Mining auto-started")
 
-                    // Start the Android MiningService for the persistent notification
-                    val miningIntent = Intent(this@GratiaApplication, io.gratia.app.service.MiningService::class.java)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        startForegroundService(miningIntent)
+                        // Start the Android MiningService for the persistent notification
+                        val miningIntent = Intent(this@GratiaApplication, io.gratia.app.service.MiningService::class.java)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            startForegroundService(miningIntent)
+                        } else {
+                            startService(miningIntent)
+                        }
+                        Log.i(TAG, "MiningService started")
                     } else {
-                        startService(miningIntent)
+                        Log.i(TAG, "Mining skipped — user previously stopped")
                     }
-                    Log.i(TAG, "MiningService started")
                 } catch (e: Exception) {
                     Log.w(TAG, "Auto-start mining failed: ${e.message}")
                 }

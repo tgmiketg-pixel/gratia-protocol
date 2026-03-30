@@ -122,6 +122,7 @@ class MiningService : Service() {
 
     /** Job for the power/thermal monitoring loop. */
     private var monitorJob: Job? = null
+    private var networkPollJob: Job? = null
 
     /** Job for the notification update loop. */
     private var notificationJob: Job? = null
@@ -197,6 +198,16 @@ class MiningService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // WHY: If the user stopped mining, don't keep the service alive.
+        // START_NOT_STICKY tells Android NOT to restart the service after
+        // stopSelf(). Without this, START_STICKY causes Android to recreate
+        // the service immediately after stopSelf(), restarting mining.
+        if (GratiaCoreManager.userStoppedMining) {
+            Log.i(TAG, "MiningService onStartCommand — user stopped, not restarting")
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
         if (isMiningActive) {
             // WHY: onStartCommand can fire multiple times if the service is started
             // redundantly (e.g., ProofOfLifeService triggers while already running).
@@ -249,6 +260,13 @@ class MiningService : Service() {
             return
         }
 
+        // WHY: If the user manually stopped mining, don't auto-restart.
+        if (GratiaCoreManager.userStoppedMining) {
+            Log.i(TAG, "User stopped mining — MiningService not starting")
+            stopSelf()
+            return
+        }
+
         // Attempt to start mining in the Rust core via the bridge.
         try {
             val status = GratiaCoreManager.startMining()
@@ -271,6 +289,16 @@ class MiningService : Service() {
         notificationJob = serviceScope.launch {
             updateNotificationLoop()
         }
+
+        // WHY: Poll network events continuously so blocks, transactions,
+        // node announcements, and BFT signatures from peers are processed.
+        // Without this, the FFI event channel is never drained and the
+        // phones can't sync blocks, exchange signatures, or rebuild the
+        // committee — even when they're connected via libp2p. Previously
+        // this only ran when the user was on the Network screen.
+        networkPollJob = serviceScope.launch(Dispatchers.IO) {
+            pollNetworkEvents()
+        }
     }
 
     /**
@@ -284,6 +312,9 @@ class MiningService : Service() {
 
         notificationJob?.cancel()
         notificationJob = null
+
+        networkPollJob?.cancel()
+        networkPollJob = null
 
         if (GratiaCoreManager.isInitialized) {
             try {
@@ -342,6 +373,14 @@ class MiningService : Service() {
                 val isPaused = cpuTemp >= THERMAL_PAUSE_TEMP_C
 
                 when {
+                    // WHY: User tapped "Stop Mining" — stop the service immediately.
+                    // Without this check, the service keeps running and showing
+                    // "Mining" in the UI even though the Rust side is stopped.
+                    GratiaCoreManager.userStoppedMining -> {
+                        Log.i(TAG, "User stopped mining — stopping MiningService")
+                        stopSelf()
+                        return
+                    }
                     !isPluggedIn -> {
                         Log.i(TAG, "Phone unplugged — stopping mining")
                         stopSelf()
@@ -389,6 +428,38 @@ class MiningService : Service() {
             }
 
             delay(POWER_CHECK_INTERVAL_MS)
+        }
+    }
+
+    // -- Network Event Polling --------------------------------------------
+
+    /**
+     * Continuously poll the Rust core for network events.
+     *
+     * WHY: The FFI event channel buffers incoming blocks, transactions,
+     * node announcements, and BFT signatures from peers. Without polling,
+     * these events pile up and are never processed — meaning the phones
+     * can't sync blocks, exchange BFT signatures, or discover each other
+     * for committee selection. This must run continuously, not just when
+     * the user is on a specific screen.
+     */
+    private suspend fun pollNetworkEvents() {
+        // WHY: 500ms interval — fast enough to process blocks within the
+        // 4-second slot time, slow enough to avoid burning CPU on mobile.
+        val POLL_INTERVAL_MS = 500L
+
+        while (serviceScope.isActive) {
+            try {
+                if (GratiaCoreManager.isInitialized) {
+                    val events = GratiaCoreManager.pollNetworkEvents()
+                    if (events.isNotEmpty()) {
+                        Log.d(TAG, "Processed ${events.size} network events")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Network poll error: ${e.message}")
+            }
+            delay(POLL_INTERVAL_MS)
         }
     }
 
@@ -503,20 +574,19 @@ class MiningService : Service() {
         while (serviceScope.isActive) {
             delay(NOTIFICATION_UPDATE_INTERVAL_MS)
 
-            // Credit mining reward for this minute.
+            // WHY: Rewards come ONLY from BFT-finalized blocks, not from
+            // per-minute ticks. The old 1 GRAT/minute tick was a Phase 1
+            // placeholder that allowed solo phones to earn without consensus.
+            // Now we just read the current wallet balance (which is updated
+            // by the consensus engine when blocks are BFT-finalized).
             try {
-                val newBalanceLux = GratiaCoreManager.tickMiningReward()
+                val currentBalanceLux = GratiaCoreManager.tickMiningReward()
+                sessionEarningsLux = currentBalanceLux
+                prefs.edit().putLong(PREF_KEY_BALANCE_LUX, currentBalanceLux).apply()
                 val elapsedMinutes = (System.currentTimeMillis() - sessionStartTimeMs) / 60_000
-                sessionEarningsLux += 1_000_000L // 1 GRAT per minute
-
-                // WHY: Persist balance after every tick so it survives app restarts.
-                // SharedPreferences.apply() is async and non-blocking — safe to call
-                // on every tick without impacting mining performance.
-                prefs.edit().putLong(PREF_KEY_BALANCE_LUX, newBalanceLux).apply()
-
-                Log.d(TAG, "Mining reward tick: +1 GRAT, balance=$newBalanceLux Lux, session=${elapsedMinutes}m")
+                Log.d(TAG, "Balance check: $currentBalanceLux Lux, session=${elapsedMinutes}m")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to tick mining reward: ${e.message}")
+                Log.e(TAG, "Failed to check balance: ${e.message}")
             }
 
             val elapsedMinutes = (System.currentTimeMillis() - sessionStartTimeMs) / 60_000

@@ -453,11 +453,18 @@ pub fn select_committee_with_network_size(
         });
     }
 
-    // Sort by selection value (lowest first = highest priority)
+    // Sort by selection value (lowest first = highest priority).
+    // WHY: Tie-break by node_id for determinism. Without this, two nodes
+    // with identical selection values (common with synthetic padding nodes
+    // or similar presence scores) can sort differently depending on input
+    // order — causing phones to disagree on who produces which slot.
     candidates.sort_by(|a, b| {
-        a.selection_value
-            .partial_cmp(&b.selection_value)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        match a.selection_value.partial_cmp(&b.selection_value) {
+            Some(std::cmp::Ordering::Equal) | None => {
+                a.node_id.0.cmp(&b.node_id.0)
+            }
+            Some(ord) => ord,
+        }
     });
 
     // Take the top committee_size (or fewer if not enough eligible nodes)

@@ -264,6 +264,15 @@ pub enum NetworkCommand {
     /// WHY: Called by the FFI layer when the app wants to force a sync (e.g.,
     /// on startup, after network reconnect, or when the user taps "refresh").
     RequestSync,
+    /// Reset the network layer's SyncManager to a specific height.
+    /// WHY: After fork resolution rolls back the consensus engine, the
+    /// network-level SyncManager still thinks we're at the old height.
+    /// Without this update, next_sync_request() returns None (thinks
+    /// we're synced) and we never download the peer's longer chain.
+    ResetLocalHeight {
+        height: u64,
+        tip_hash: BlockHash,
+    },
     /// Send a sync response back to a peer (internal, from event loop).
     SendSyncResponse {
         target_peer_bytes: Vec<u8>,
@@ -643,6 +652,17 @@ impl NetworkManager {
         Ok(())
     }
 
+    /// Reset the network SyncManager's local height after fork resolution.
+    /// WHY: After rollback, the consensus engine is at height 0 but the
+    /// network SyncManager still thinks we're at the old height. This
+    /// sends a command to update it so it generates sync requests.
+    pub fn try_reset_local_height(&self, height: u64, tip_hash: BlockHash) -> Result<(), NetworkError> {
+        let tx = self.command_tx.as_ref().ok_or(NetworkError::NotStarted)?;
+        tx.try_send(NetworkCommand::ResetLocalHeight { height, tip_hash })
+            .map_err(|e| NetworkError::ChannelError(e.to_string()))?;
+        Ok(())
+    }
+
     /// Get the current sync state.
     pub fn sync_state(&self) -> SyncState {
         self.sync_manager.state()
@@ -924,8 +944,23 @@ async fn run_swarm_event_loop(
                                 let _ = writeln!(f, "[{}] {}", chrono::Utc::now().format("%H:%M:%S"), log_msg);
                             }
                             swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
-                            if let Err(e) = swarm.dial(addr.clone()) {
-                                tracing::debug!(%peer_id, %addr, "Failed to dial mDNS peer: {}", e);
+                            match swarm.dial(addr.clone()) {
+                                Ok(()) => {
+                                    let log_msg = format!("mDNS: dialing peer {} at {}", peer_id, addr);
+                                    let log_path = "/data/user/0/io.gratia.app.debug/files/gratia-rust.log";
+                                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log_path) {
+                                        use std::io::Write;
+                                        let _ = writeln!(f, "[{}] {}", chrono::Utc::now().format("%H:%M:%S"), log_msg);
+                                    }
+                                }
+                                Err(e) => {
+                                    let log_msg = format!("mDNS: FAILED to dial peer {} at {}: {}", peer_id, addr, e);
+                                    let log_path = "/data/user/0/io.gratia.app.debug/files/gratia-rust.log";
+                                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log_path) {
+                                        use std::io::Write;
+                                        let _ = writeln!(f, "[{}] {}", chrono::Utc::now().format("%H:%M:%S"), log_msg);
+                                    }
+                                }
                             }
                         }
                     }
@@ -1046,10 +1081,30 @@ async fn run_swarm_event_loop(
                             direction = if is_inbound { "inbound" } else { "outbound" },
                             "Connection established"
                         );
+                        // WHY: Log to file since tracing doesn't reach Android logcat
+                        let log_msg = format!("PEER CONNECTED: {} ({})", peer_id, if is_inbound { "inbound" } else { "outbound" });
+                        let log_path = "/data/user/0/io.gratia.app.debug/files/gratia-rust.log";
+                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log_path) {
+                            use std::io::Write;
+                            let _ = writeln!(f, "[{}] {}", chrono::Utc::now().format("%H:%M:%S"), log_msg);
+                        }
                         let _ = event_tx.send(NetworkEvent::PeerConnected {
                             peer_id,
                             node_id: None,
                         }).await;
+                    }
+                    SwarmEvent::OutgoingConnectionError {
+                        peer_id,
+                        error,
+                        connection_id: _,
+                    } => {
+                        let log_msg = format!("CONNECTION FAILED: peer={:?} error={}", peer_id, error);
+                        let log_path = "/data/user/0/io.gratia.app.debug/files/gratia-rust.log";
+                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log_path) {
+                            use std::io::Write;
+                            let _ = writeln!(f, "[{}] {}", chrono::Utc::now().format("%H:%M:%S"), log_msg);
+                        }
+                        tracing::warn!(?peer_id, %error, "Outgoing connection failed");
                     }
 
                     // Connection closed
@@ -1207,6 +1262,24 @@ async fn run_swarm_event_loop(
                     Some(NetworkCommand::RequestSync) => {
                         // WHY: The application/FFI layer wants to trigger a sync.
                         // Ask the SyncManager what to request next.
+                        try_send_next_sync_request(
+                            &mut sync_manager,
+                            &local_peer_bytes,
+                            &mut swarm,
+                        );
+                    }
+                    Some(NetworkCommand::ResetLocalHeight { height, tip_hash }) => {
+                        // WHY: After fork resolution rollback, the consensus
+                        // engine is at height 0 but the network SyncManager
+                        // still thinks we're at the old height. Update it so
+                        // next_sync_request() detects we're behind and
+                        // generates block requests to catch up.
+                        tracing::info!(
+                            height = height,
+                            "Network SyncManager: local height reset for fork resolution"
+                        );
+                        sync_manager.update_local_state(height, tip_hash);
+                        // Immediately try to generate sync requests
                         try_send_next_sync_request(
                             &mut sync_manager,
                             &local_peer_bytes,

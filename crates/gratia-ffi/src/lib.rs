@@ -34,7 +34,7 @@ use tracing::{debug, error, info, warn};
 use gratia_consensus::committee::EligibleNode;
 use gratia_consensus::validation::{validate_block_transactions, MIN_TRANSACTION_FEE};
 use gratia_consensus::vrf::{VrfPublicKey, VrfSecretKey};
-use gratia_consensus::ConsensusEngine;
+use gratia_consensus::{BlockProcessResult, ConsensusEngine};
 use gratia_core::emission::EmissionSchedule;
 use gratia_core::config::Config;
 use gratia_core::types::{Block, BlockHash, Lux, MiningState, NodeId, PowerState};
@@ -628,6 +628,12 @@ struct GratiaNodeInner {
     /// has elapsed. This field only exists in debug builds.
     #[cfg(debug_assertions)]
     debug_bypass_checks: bool,
+    /// WHY: When the user taps "Stop Mining", this flag prevents
+    /// update_power_state from automatically re-enabling mining.
+    /// Without it, debug bypass + plugged in + ≥80% battery causes
+    /// update_power_state to immediately override the user's stop.
+    /// Cleared when the user taps "Start Mining" again.
+    user_stopped_mining: bool,
     /// Block pending broadcast to network. Set inside the mutex, broadcast
     /// after the lock is released (async broadcast can't hold the lock).
     pending_broadcast_block: Option<Block>,
@@ -691,6 +697,12 @@ struct GratiaNodeInner {
     /// enough signatures within 2 slot durations (8 seconds), we finalize with
     /// whatever signatures we have (bootstrap mode) or warn about weak finality.
     pending_block_created_at: Option<std::time::Instant>,
+    /// WHY: Cooldown after fork resolution to prevent infinite reorg loops.
+    /// After rolling back, incoming gossip blocks trigger ForkDetected again
+    /// (peer is ahead of our rolled-back height). Without a cooldown, we
+    /// reorg → timeout → produce → reorg → forever. 60-second cooldown gives
+    /// the sync protocol time to deliver blocks and catch us up.
+    last_reorg_at: Option<std::time::Instant>,
     /// Block hash of the pending block awaiting signatures.
     /// WHY: Needed to match incoming ValidatorSignatureReceived events to our
     /// pending block. If the hash doesn't match, the signature is for a different
@@ -731,20 +743,57 @@ impl GratiaNodeInner {
 
     /// Get a human-readable sync status string for the UI.
     fn get_sync_status_string(&self) -> String {
-        match &self.sync_manager {
-            Some(sm) => {
-                match sm.state() {
-                    SyncState::Synced => "synced".to_string(),
-                    SyncState::Syncing { local_height, target_height } => {
-                        format!("syncing {}/{}", local_height, target_height)
-                    }
-                    SyncState::Behind { local_height, network_height } => {
-                        format!("behind {}/{}", local_height, network_height)
-                    }
-                    SyncState::Unknown => "unknown".to_string(),
+        // WHY: The network-level SyncManager often stays in Unknown state
+        // because its peer chain tip tracking isn't wired end-to-end.
+        // Instead, derive sync status from observable state: do we have
+        // peers and is consensus running? This gives accurate results
+        // that the user can actually see on the Mining screen.
+        let has_peers = self.network.as_ref()
+            .map(|n| n.connected_peer_count() > 0)
+            .unwrap_or(false);
+        let has_consensus = self.consensus.is_some();
+
+        if !has_consensus {
+            return "not_started".to_string();
+        }
+
+        // Check network-level sync state first for active sync operations
+        if let Some(ref sm) = self.sync_manager {
+            match sm.state() {
+                SyncState::Syncing { local_height, target_height } => {
+                    return format!("syncing {}/{}", local_height, target_height);
+                }
+                SyncState::Behind { local_height, network_height } => {
+                    return format!("behind {}/{}", local_height, network_height);
+                }
+                SyncState::Synced => {
+                    return "synced".to_string();
+                }
+                SyncState::Unknown => {
+                    // Fall through to peer-based heuristic
                 }
             }
-            None => "not_started".to_string(),
+        }
+
+        // WHY: If SyncManager is Unknown, derive sync status from
+        // consensus height vs what we know about peer heights.
+        // "Synced" requires peers AND our height matching the network.
+        if !has_peers {
+            return "no_peers".to_string();
+        }
+
+        // Compare our height against the best known network height
+        let our_height = self.consensus.as_ref()
+            .map(|e| e.current_height())
+            .unwrap_or(0);
+        let network_height = self.sync_manager.as_ref()
+            .and_then(|sm| sm.best_network_height())
+            .unwrap_or(0);
+
+        if network_height > 0 && our_height < network_height {
+            format!("behind {}/{}", our_height, network_height)
+        } else {
+            "synced".to_string()
         }
     }
 
@@ -851,6 +900,7 @@ impl GratiaNode {
             slot_timer_handle: None,
             #[cfg(debug_assertions)]
             debug_bypass_checks: false,
+            user_stopped_mining: false,
             pending_broadcast_block: None,
             known_peer_nodes: Vec::new(),
             recent_blocks: VecDeque::with_capacity(100),
@@ -874,6 +924,7 @@ impl GratiaNode {
             },
             lux_fees: gratia_lux::FeeCalculator::new(),
             pending_block_created_at: None,
+            last_reorg_at: None,
             pending_block_hash: None,
             last_gps: None,
             last_barometer: None,
@@ -1154,6 +1205,21 @@ impl GratiaNode {
         inner.power_state.is_plugged_in = is_plugged_in;
         inner.power_state.battery_percent = battery_percent;
 
+        // WHY: If the user tapped "Stop Mining", don't auto-restart.
+        // Return current status without recalculating mining state.
+        if inner.user_stopped_mining {
+            return Ok(FfiMiningStatus {
+                state: mining_state_to_string(&inner.mining_state),
+                battery_percent: inner.power_state.battery_percent,
+                is_plugged_in: inner.power_state.is_plugged_in,
+                current_day_pol_valid: inner.is_debug_bypass()
+                    || inner.pol.is_onboarding()
+                    || inner.pol.current_day_valid()
+                    || inner.pol.in_grace_period(),
+                presence_score: inner.presence_score,
+            });
+        }
+
         // Recalculate mining state based on new power conditions.
         // WHY: During onboarding (day 0), skip the stake check — genesis has
         // minimum_stake=0. After onboarding, require real stake or debug bypass.
@@ -1213,6 +1279,7 @@ impl GratiaNode {
     /// conditions are met (plugged in, battery >= 80%, valid PoL, minimum stake).
     pub fn start_mining(&self) -> Result<FfiMiningStatus, FfiError> {
         let mut inner = self.lock_inner()?;
+        inner.user_stopped_mining = false;
 
         if !inner.power_state.is_plugged_in {
             return Err(FfiError::MiningNotAvailable {
@@ -1311,7 +1378,8 @@ impl GratiaNode {
     pub fn stop_mining(&self) -> Result<FfiMiningStatus, FfiError> {
         let mut inner = self.lock_inner()?;
         inner.mining_state = MiningState::ProofOfLife;
-        info!("FFI: mining stopped");
+        inner.user_stopped_mining = true;
+        info!("FFI: mining stopped by user");
 
         Ok(FfiMiningStatus {
             state: mining_state_to_string(&inner.mining_state),
@@ -1626,7 +1694,9 @@ impl GratiaNode {
         // or participate in consensus. If the bootstrap node is down, phones
         // on the same LAN still find each other via mDNS.
         net_config.bootstrap_peers = vec![
-            "/ip4/45.77.95.111/udp/9000/quic-v1/p2p/12D3KooWH21iAdpGgfaKUshnuCPQZ2XUqNLByAt7Rpu5gK3SD1K3".to_string(),
+            // WHY: Peer ID updated 2026-03-29 — server regenerated its key.
+            // Old ID (12D3KooWH21i...) caused "Unexpected peer ID" dial errors.
+            "/ip4/45.77.95.111/udp/9000/quic-v1/p2p/12D3KooWMVsRYkWa8WvsQhnekx1SXQf6pz73CKPhaJJpJSzfFY61".to_string(),
         ];
 
         let mut network = NetworkManager::new(net_config);
@@ -1836,19 +1906,146 @@ impl GratiaNode {
                             // they can catch up quickly.
                             let block_clone = (*block).clone();
 
-                            let block_result = if let Some(ref mut consensus) = inner.consensus {
+                            // WHY: Notify consensus sync protocol of EVERY gossip
+                            // block's height, even if we can't process it yet
+                            // (because we're behind). This ensures the sync system
+                            // knows the network height and will request missing
+                            // blocks. Without this, skipped ahead-blocks would
+                            // leave the sync protocol unaware we're behind.
+                            if let Some(ref mut sp) = inner.sync_protocol {
+                                sp.on_block_received(height);
+                            }
+
+                            let process_result = if let Some(ref mut consensus) = inner.consensus {
                                 match consensus.process_incoming_block(*block) {
-                                    Ok(()) => {
+                                    Ok(BlockProcessResult::Accepted) => {
                                         let h = consensus.current_height();
                                         let tip = consensus.last_finalized_hash().0;
-                                        Some((h, tip))
+                                        Some((Some((h, tip)), false))
+                                    }
+                                    Ok(BlockProcessResult::Skipped) => Some((None, false)),
+                                    Ok(BlockProcessResult::ForkDetected) => {
+                                        let our_height = consensus.current_height();
+                                        // WHY: Check cooldown — don't reorg if we
+                                        // already reorged in the last 60 seconds.
+                                        // Without this, after rollback every gossip
+                                        // block triggers another reorg (infinite loop).
+                                        let in_cooldown = inner.last_reorg_at
+                                            .map(|t| t.elapsed().as_secs() < 60)
+                                            .unwrap_or(false);
+
+                                        if in_cooldown {
+                                            // Skip — let sync protocol catch us up
+                                            Some((None, false))
+                                        } else if height > our_height {
+                                            rust_log(&format!(
+                                                "FORK DETECTED: peer at height {} > our height {} — triggering reorg",
+                                                height, our_height,
+                                            ));
+                                            Some((None, true))
+                                        } else {
+                                            rust_log(&format!(
+                                                "FORK DETECTED: peer block at height {}, our height {} — we're not behind, ignoring",
+                                                height, our_height,
+                                            ));
+                                            Some((None, false))
+                                        }
                                     }
                                     Err(e) => {
                                         warn!(height = height, error = %e, "Failed to process incoming block");
-                                        None
+                                        Some((None, false))
                                     }
                                 }
                             } else { None };
+
+                            // WHY: peer_height_hint not available yet, use the incoming
+                            // block height as a proxy. If the peer sent a block at our
+                            // expected height, they're building a chain at least as long.
+                            let should_reorg = process_result.map(|(_, reorg)| reorg).unwrap_or(false);
+                            let block_result = process_result.and_then(|(accepted, _)| accepted);
+
+                            // ── Fork resolution ─────────────────────────────────
+                            if should_reorg {
+                                let our_height = inner.consensus.as_ref()
+                                    .map(|e| e.current_height())
+                                    .unwrap_or(0);
+
+                                rust_log(&format!(
+                                    "FORK RESOLUTION: peer has block at height {} (our height={}), initiating reorg",
+                                    height, our_height,
+                                ));
+
+                                // Step 1: Collect orphaned transactions from state
+                                let orphaned_txs = if let Some(ref sm) = inner.state_manager {
+                                    match sm.revert_to_height(0) {
+                                        Ok(txs) => {
+                                            rust_log(&format!(
+                                                "FORK RESOLUTION: reverted state to genesis, {} orphaned txs",
+                                                txs.len(),
+                                            ));
+                                            txs
+                                        }
+                                        Err(e) => {
+                                            rust_log(&format!("FORK RESOLUTION: revert failed: {}", e));
+                                            Vec::new()
+                                        }
+                                    }
+                                } else { Vec::new() };
+
+                                // Step 2: Roll back consensus engine to genesis
+                                if let Some(ref mut consensus) = inner.consensus {
+                                    consensus.rollback_to(0, BlockHash([0u8; 32]));
+                                }
+
+                                // Set cooldown to prevent reorg loop
+                                inner.last_reorg_at = Some(std::time::Instant::now());
+
+                                // Step 3: Clear local caches
+                                inner.recent_blocks.clear();
+                                inner.pending_block_hash = None;
+                                inner.pending_block_created_at = None;
+
+                                // Step 4: Re-add orphaned transactions to mempool
+                                let tx_count = orphaned_txs.len();
+                                for tx in orphaned_txs {
+                                    inner.mempool.push(tx);
+                                }
+
+                                // Step 5: Update sync manager to request blocks from peer
+                                if let Some(ref mut sync) = inner.sync_manager {
+                                    sync.update_local_state(0, BlockHash([0u8; 32]));
+                                }
+
+                                // Step 6: Persist the rollback
+                                if let Some(ref persistence) = inner.chain_persistence {
+                                    persistence.save(0, &[0u8; 32], inner.blocks_produced);
+                                }
+
+                                // Step 7: Sync wallet balance from state
+                                if let (Some(ref sm), Ok(our_addr)) = (&inner.state_manager, inner.wallet.address()) {
+                                    let acct = sm.get_account(&our_addr).unwrap_or_default();
+                                    inner.wallet.sync_balance(acct.balance);
+                                }
+
+                                // Step 8: Reset network SyncManager height and trigger sync
+                                // WHY: The network layer's SyncManager still thinks we're
+                                // at the old height. Without resetting it, next_sync_request()
+                                // returns None (thinks we're synced) and we never download
+                                // the peer's chain. This was the missing piece that caused
+                                // all previous fork resolution attempts to fail.
+                                if let Some(ref network) = inner.network {
+                                    if let Err(e) = network.try_reset_local_height(0, BlockHash([0u8; 32])) {
+                                        rust_log(&format!("FORK RESOLUTION: reset height failed: {}", e));
+                                    } else {
+                                        rust_log("FORK RESOLUTION: network SyncManager reset to height 0, requesting blocks");
+                                    }
+                                }
+
+                                rust_log(&format!(
+                                    "FORK RESOLUTION: rolled back to genesis, {} orphaned txs re-queued, awaiting sync",
+                                    tx_count,
+                                ));
+                            }
 
                             if let Some((new_height, tip_hash)) = block_result {
                                 info!(height = new_height, "Processed incoming block from network");
@@ -1856,12 +2053,6 @@ impl GratiaNode {
                                     if let Some(hash) = block_hash {
                                         sync.update_local_state(new_height, hash);
                                     }
-                                }
-                                // WHY: Notify consensus sync protocol of each block
-                                // received via gossip so it can track network height
-                                // and detect when we fall behind.
-                                if let Some(ref mut sp) = inner.sync_protocol {
-                                    sp.on_block_received(height);
                                 }
                                 if let Some(ref persistence) = inner.chain_persistence {
                                     persistence.save(
@@ -2218,6 +2409,13 @@ impl GratiaNode {
                                         }
                                     }
 
+                                    // WHY: Sort by node_id so all phones build the committee
+                                    // in the same canonical order. Without this, Phone A has
+                                    // [A, B, Synthetic] and Phone B has [B, A, Synthetic] —
+                                    // different orderings cause different slot assignments
+                                    // and both phones produce for the same slot.
+                                    all_eligible.sort_by(|a, b| a.node_id.0.cmp(&b.node_id.0));
+
                                     rust_log(&format!(
                                         "Rebuilding committee: {} real + {} synthetic = {} total",
                                         real_count,
@@ -2411,8 +2609,22 @@ impl GratiaNode {
                                 let h = block.header.height;
                                 if let Some(ref mut consensus) = inner.consensus {
                                     match consensus.process_incoming_block(block.clone()) {
-                                        Ok(()) => {
+                                        Ok(BlockProcessResult::Accepted) => {
                                             applied_height = consensus.current_height();
+                                        }
+                                        Ok(BlockProcessResult::Skipped) => {
+                                            // Skip but continue processing remaining blocks
+                                        }
+                                        Ok(BlockProcessResult::ForkDetected) => {
+                                            // WHY: During sync, a fork means the blocks we
+                                            // received are from a different chain. Log and
+                                            // break — the BlockReceived handler will handle
+                                            // fork resolution when the next gossip block arrives.
+                                            rust_log(&format!(
+                                                "Sync: fork detected at height {}, stopping sync batch",
+                                                h,
+                                            ));
+                                            break;
                                         }
                                         Err(e) => {
                                             warn!(height = h, error = %e, "Failed to apply sync block");
@@ -2599,6 +2811,10 @@ impl GratiaNode {
             }
         }
 
+        // WHY: Sort by node_id so all phones build the committee in the same
+        // canonical order, regardless of which phone is "self" vs "peer".
+        all_eligible.sort_by(|a, b| a.node_id.0.cmp(&b.node_id.0));
+
         rust_log(&format!(
             "Committee: {} real + {} synthetic = {} total, local score={}",
             real_count,
@@ -2752,26 +2968,12 @@ impl GratiaNode {
     /// Called periodically from the mobile app or automatically after peer connect.
     /// Returns the current sync state.
     pub fn request_sync(&self) -> Result<String, FfiError> {
-        let mut inner = self.lock_inner()?;
-
-        let sync_mgr = inner.sync_manager.as_mut().ok_or(FfiError::InternalError {
-            reason: "sync manager not initialized (start consensus first)".into(),
-        })?;
-
-        // Check sync state
-        let state = sync_mgr.state();
-        let state_str = match state {
-            SyncState::Synced => "synced".to_string(),
-            SyncState::Syncing { local_height, target_height } => {
-                format!("syncing {}/{}", local_height, target_height)
-            }
-            SyncState::Behind { local_height, network_height } => {
-                format!("behind {}/{}", local_height, network_height)
-            }
-            SyncState::Unknown => "unknown".to_string(),
-        };
-
-        Ok(state_str)
+        let inner = self.lock_inner()?;
+        // WHY: Reuse the same logic as get_sync_status_string() which
+        // falls back to a peer-based heuristic when the SyncManager is
+        // in Unknown state. Without this, the Mining screen always shows
+        // "Unknown" even when both phones are synced.
+        Ok(inner.get_sync_status_string())
     }
 
     /// Get detailed sync status from the consensus-level sync protocol.
@@ -3939,6 +4141,16 @@ fn consensus_status(engine: &ConsensusEngine, blocks_produced: u64) -> FfiConsen
 /// it produces an empty block (no transactions for the demo), serializes it,
 /// and broadcasts it to the network.
 async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
+    // WHY: Wait 10 seconds before producing any blocks. This gives mDNS
+    // time to discover peers (~1-2 seconds) and exchange NodeAnnouncements
+    // so the committee includes all connected phones. Without this delay,
+    // both phones produce block 1 simultaneously with different hashes
+    // (startup race), causing immediate chain divergence that fork
+    // resolution can't cleanly fix. 10 seconds is conservative — mDNS
+    // typically discovers peers within 1-2 seconds on the same WiFi.
+    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+    rust_log("Slot timer: startup delay complete, beginning block production");
+
     // WHY: 4-second slot time, middle of the 3-5 second target range.
     let slot_duration = tokio::time::Duration::from_secs(4);
     let mut slot_count: u64 = 0;
@@ -3992,18 +4204,16 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                 let network_height = sync.best_network_height().unwrap_or(0);
                 net_height_for_sp = Some((local_height, network_height));
 
+                // WHY: Log sync state for debugging. The actual sync requests
+                // are generated and sent by the network layer's event loop
+                // (try_send_next_sync_request), which has direct access to the
+                // swarm. The FFI-level SyncManager tracks state for UI reporting.
                 match sync.state() {
                     gratia_network::sync::SyncState::Behind { local_height, network_height } => {
                         rust_log(&format!(
-                            "Sync: behind network ({}/{}), requesting blocks",
+                            "Sync: behind network ({}/{}), network layer requesting blocks",
                             local_height, network_height
                         ));
-                        // WHY: Request blocks from multiple peers in parallel when behind.
-                        // next_sync_request() returns None when at max concurrent requests
-                        // or no suitable peer is available, so the loop self-limits.
-                        while let Some((_peer, request)) = sync.next_sync_request() {
-                            rust_log(&format!("Sync: generated request {:?}", request));
-                        }
                     }
                     _ => {}
                 }
@@ -4059,7 +4269,7 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
 
         // WHY: We check consensus existence and advance the slot in a
         // scoped block, then operate on the result outside the borrow.
-        let should_produce = {
+        let mut should_produce = {
             match guard.consensus.as_mut() {
                 Some(engine) => {
                     let result = engine.advance_slot();
@@ -4079,25 +4289,22 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
             }
         };
 
-        // ── BFT timeout check ───────────────────────────────────────
-        // WHY: If we have a pending block awaiting peer signatures and
-        // 2 slot durations (8 seconds) have passed without reaching
-        // finality, force-finalize with whatever signatures we have.
-        // This prevents blocks from being stuck indefinitely when the
-        // network has too few active committee members. In bootstrap
-        // mode (< 3 nodes), 2 signatures are sufficient; otherwise
-        // log a warning about weak finality.
+        // ── BFT pending block expiry ─────────────────────────────────
+        // WHY: If a pending block hasn't reached BFT finality within 12
+        // seconds (3 slot durations), discard it. Unlike the old approach
+        // which force-finalized with insufficient signatures (allowing
+        // solo phones to mint fake blocks), we now REQUIRE real peer
+        // signatures. No BFT finality = block is invalid and discarded.
+        // This is how Bitcoin works — if you can't prove your block is
+        // valid (via PoW hash / BFT sigs), it doesn't count.
         {
             let has_pending = guard.pending_block_created_at.is_some();
             if has_pending {
-                // WHY: 8 seconds = 2 slot durations at 4-second slots.
-                // Generous timeout for mobile network latency.
-                let timeout_secs = 8;
-                let timed_out = guard.pending_block_created_at
-                    .map(|t| t.elapsed().as_secs() >= timeout_secs)
+                let expired = guard.pending_block_created_at
+                    .map(|t| t.elapsed().as_secs() >= 12)
                     .unwrap_or(false);
 
-                if timed_out {
+                if expired {
                     let sig_count = guard.consensus.as_ref()
                         .and_then(|e| e.pending_block.as_ref())
                         .map(|p| p.signatures.len())
@@ -4106,118 +4313,15 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                         .map(|e| e.pending_finality_threshold())
                         .unwrap_or(0);
 
-                    // WHY: In bootstrap mode with very few nodes, accept 2+
-                    // signatures as sufficient. For larger networks, accept
-                    // anything >= 1 signature (our own) to avoid stuck blocks,
-                    // but warn loudly about weak finality.
-                    if sig_count >= 1 {
-                        if sig_count < threshold {
-                            rust_log(&format!(
-                                "BFT TIMEOUT: force-finalizing block with {}/{} sigs (weak finality)",
-                                sig_count, threshold
-                            ));
-                            warn!(
-                                sigs = sig_count,
-                                threshold = threshold,
-                                "BFT timeout: finalizing with insufficient signatures"
-                            );
-                        } else {
-                            rust_log(&format!(
-                                "BFT TIMEOUT: finalizing block with {}/{} sigs (threshold met during wait)",
-                                sig_count, threshold
-                            ));
-                        }
+                    rust_log(&format!(
+                        "BFT EXPIRED: discarding block with {}/{} sigs (insufficient finality)",
+                        sig_count, threshold
+                    ));
 
-                        // WHY: Use force_finalize to bypass threshold check on timeout.
-                        // Normal finalize requires threshold signatures, but during
-                        // bootstrap or when peers are slow, we force-finalize with
-                        // whatever we have to keep the chain moving.
-                        match guard.consensus.as_mut().unwrap().force_finalize_pending_block() {
-                            Ok(finalized_block) => {
-                                let finalized_height = finalized_block.header.height;
-                                let new_chain_height = guard.consensus.as_ref().map(|e| e.current_height()).unwrap_or(0);
-                                rust_log(&format!("BLOCK FINALIZED (timeout) height={} new_chain_height={}", finalized_height, new_chain_height));
-
-                                // Persist chain state.
-                                if let Some(ref persistence) = guard.chain_persistence {
-                                    if let Some(ref engine) = guard.consensus {
-                                        let tip_hash = engine.last_finalized_hash().0;
-                                        persistence.save(engine.current_height(), &tip_hash, guard.blocks_produced);
-                                    }
-                                }
-
-                                // Apply block transactions to on-chain state.
-                                if let Some(ref sm) = guard.state_manager {
-                                    let mut applied = 0u32;
-                                    let mut failed = 0u32;
-                                    for tx in &finalized_block.transactions {
-                                        let sender_addr = gratia_core::types::Address::from_pubkey(&tx.sender_pubkey);
-                                        match &tx.payload {
-                                            gratia_core::types::TransactionPayload::Transfer { to, amount } => {
-                                                let mut sender_acct = sm.get_account(&sender_addr).unwrap_or_default();
-                                                let total = amount + tx.fee;
-                                                if sender_acct.balance >= total && sender_acct.nonce == tx.nonce {
-                                                    sender_acct.balance -= total;
-                                                    sender_acct.nonce += 1;
-                                                    let _ = sm.db().put_account(&sender_addr, &sender_acct);
-                                                    let mut recv_acct = sm.get_account(to).unwrap_or_default();
-                                                    recv_acct.balance += amount;
-                                                    let _ = sm.db().put_account(to, &recv_acct);
-                                                    applied += 1;
-                                                } else {
-                                                    failed += 1;
-                                                }
-                                            }
-                                            _ => { applied += 1; }
-                                        }
-                                    }
-                                    if applied > 0 || failed > 0 {
-                                        rust_log(&format!(
-                                            "State: timeout block {} — {} txs applied, {} rejected",
-                                            finalized_height, applied, failed
-                                        ));
-                                    }
-                                }
-
-                                guard.pending_broadcast_block = Some(finalized_block.clone());
-                                guard.recent_blocks.push_back(finalized_block.clone());
-                                if guard.recent_blocks.len() > 100 {
-                                    guard.recent_blocks.pop_front();
-                                }
-
-                                // Credit mining reward.
-                                {
-                                    let active_miners = 1u64.max(guard.staking.staker_count() as u64).max(1);
-                                    let reward: Lux = gratia_core::emission::EmissionSchedule
-                                        ::per_miner_block_reward_lux(finalized_height, active_miners);
-                                    let current = guard.wallet.balance();
-                                    guard.wallet.sync_balance(current + reward);
-                                    if let (Some(ref sm), Ok(our_addr)) = (&guard.state_manager, guard.wallet.address()) {
-                                        let mut acct = sm.get_account(&our_addr).unwrap_or_default();
-                                        acct.balance += reward;
-                                        let _ = sm.db().put_account(&our_addr, &acct);
-                                    }
-                                }
-
-                                // Persist on-chain state.
-                                if let Some(ref backend) = guard.storage_backend {
-                                    let _ = backend.persist();
-                                }
-                            }
-                            Err(e) => {
-                                rust_log(&format!("TIMEOUT FINALIZE FAILED: {}", e));
-                                warn!("Failed to finalize block on timeout: {}", e);
-                            }
-                        }
-                    } else {
-                        rust_log("BFT TIMEOUT: no signatures at all, discarding pending block");
-                        // WHY: If we couldn't even self-sign, something is wrong.
-                        // Discard the pending block and let the next slot try again.
-                        if let Some(ref mut engine) = guard.consensus {
-                            engine.stop();
-                            // Re-activate so next slot works.
-                            // Actually, just clear the pending block by forcing state back.
-                        }
+                    // WHY: Clear the pending block without finalizing it.
+                    // The block never happened. No state changes, no rewards.
+                    if let Some(ref mut engine) = guard.consensus {
+                        engine.pending_block = None;
                     }
                     guard.pending_block_hash = None;
                     guard.pending_block_created_at = None;
@@ -4225,7 +4329,34 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
             }
         }
 
+        // WHY: Don't produce blocks without peers. A solo phone produces
+        // blocks that no one can co-sign, so they'll never reach BFT
+        // finality and will be discarded. This prevents fake chains from
+        // accumulating during offline periods. Like Bitcoin: you CAN mine
+        // solo, but without the network your blocks are worthless.
         if should_produce {
+            let has_peers = guard.network.as_ref()
+                .map(|n| n.connected_peer_count() > 0)
+                .unwrap_or(false);
+            if !has_peers {
+                should_produce = false;
+                rust_log("Skipping block production — no peers connected");
+            }
+        }
+
+        if should_produce {
+            // WHY: Sort the mempool deterministically before draining so that
+            // ALL nodes produce identical blocks from the same transaction set.
+            // Without deterministic ordering, two nodes with the same mempool
+            // contents could produce blocks with transactions in different
+            // order, causing chain divergence. Sorting by (sender_pubkey, nonce)
+            // ensures canonical ordering: same sender's txs are sequential by
+            // nonce, and different senders are ordered by public key bytes.
+            guard.mempool.sort_by(|a, b| {
+                a.sender_pubkey.cmp(&b.sender_pubkey)
+                    .then(a.nonce.cmp(&b.nonce))
+            });
+
             // WHY: Drain the mempool into the block. This is how user transactions
             // (sent locally or received via gossip) become on-chain. Cap at 512
             // per block to match MAX_TRANSACTIONS_PER_BLOCK.

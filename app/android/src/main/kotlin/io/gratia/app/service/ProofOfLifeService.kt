@@ -572,31 +572,38 @@ class ProofOfLifeService : Service(), SensorEventListener {
 
                 val status = GratiaCoreManager.updatePowerState(isPluggedIn, batteryPercent)
 
-                when (status.state) {
-                    "mining" -> startMiningService()
-                    "battery_low" -> stopMiningService()
-                    "proof_of_life" -> {
-                        // WHY: During genesis / early network, PoL may not be
-                        // complete yet but mining is allowed (zero-delay onboarding).
-                        // If plugged in + above 80%, keep MiningService running.
-                        // The Rust consensus engine is producing blocks regardless;
-                        // the Android service just shows the notification.
-                        if (isPluggedIn && batteryPercent >= 80) {
-                            Log.d(TAG, "PoL incomplete but plugged in + charged — keeping MiningService")
-                            startMiningService()
-                        } else {
-                            stopMiningService()
+                // WHY: If the user tapped "Stop Mining", don't auto-restart
+                // the MiningService regardless of power state. The flag is
+                // cleared when the user taps "Start Mining" again.
+                if (GratiaCoreManager.userStoppedMining) {
+                    Log.d(TAG, "User stopped mining — skipping auto-start")
+                } else {
+                    when (status.state) {
+                        "mining" -> startMiningService()
+                        "battery_low" -> stopMiningService()
+                        "proof_of_life" -> {
+                            // WHY: During genesis / early network, PoL may not be
+                            // complete yet but mining is allowed (zero-delay onboarding).
+                            // If plugged in + above 80%, keep MiningService running.
+                            // The Rust consensus engine is producing blocks regardless;
+                            // the Android service just shows the notification.
+                            if (isPluggedIn && batteryPercent >= 80) {
+                                Log.d(TAG, "PoL incomplete but plugged in + charged — keeping MiningService")
+                                startMiningService()
+                            } else {
+                                stopMiningService()
+                            }
                         }
-                    }
-                    "throttled" -> {
-                        // WHY: Keep MiningService running but in throttled state.
-                        // The MiningService handles throttle internally.
-                        Log.d(TAG, "Mining throttled due to thermal conditions")
-                    }
-                    "pending_activation" -> {
-                        // WHY: Same as proof_of_life — keep mining if conditions met.
-                        if (isPluggedIn && batteryPercent >= 80) {
-                            startMiningService()
+                        "throttled" -> {
+                            // WHY: Keep MiningService running but in throttled state.
+                            // The MiningService handles throttle internally.
+                            Log.d(TAG, "Mining throttled due to thermal conditions")
+                        }
+                        "pending_activation" -> {
+                            // WHY: Same as proof_of_life — keep mining if conditions met.
+                            if (isPluggedIn && batteryPercent >= 80) {
+                                startMiningService()
+                            }
                         }
                     }
                 }

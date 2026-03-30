@@ -247,9 +247,11 @@ fn test_committee_rotation_with_offline_nodes() {
 }
 
 /// SCENARIO: Engine receives a block that is ahead of its current height.
-/// VERIFY: Fast-forward sync accepts the block with relaxed validation.
+/// VERIFY: Blocks ahead of our height are skipped (not fast-forwarded).
+/// The sync protocol is responsible for fetching missing blocks so we
+/// can apply them sequentially with full validation.
 #[test]
-fn test_fast_forward_sync_on_rejoin() {
+fn test_ahead_block_skipped_for_sync() {
     let nodes = make_eligible_nodes(25);
     let seed = [0xAB; 32];
 
@@ -263,7 +265,7 @@ fn test_fast_forward_sync_on_rejoin() {
 
     let mut block = make_block(5, BlockHash([0; 32]), producer);
 
-    // Add fake finality signatures — need enough to pass finality check.
+    // Add fake finality signatures.
     for member in committee.members {
         block.validator_signatures.push(ValidatorSignature {
             validator: member.node_id,
@@ -273,14 +275,19 @@ fn test_fast_forward_sync_on_rejoin() {
 
     let result = engine.process_incoming_block(block);
 
-    // WHY: The engine should accept the block via fast-forward sync mode
-    // (relaxed validation for height gaps).
+    // WHY: Block should be skipped (not rejected) — returns Ok(()) but
+    // does NOT advance height. The sync protocol will fetch blocks 1-5
+    // sequentially so we can validate each one with correct parent hash.
     assert!(
         result.is_ok(),
-        "Fast-forward sync should accept ahead-of-height block: {:?}",
+        "Ahead block should be skipped (not error): {:?}",
         result
     );
-    assert_eq!(engine.current_height(), 5);
+    assert_eq!(
+        engine.current_height(),
+        0,
+        "Height should NOT advance for ahead blocks — sync fetches them"
+    );
 }
 
 /// SCENARIO: Engine receives a block at or below its current height.
@@ -352,18 +359,11 @@ fn test_reject_block_from_non_committee_producer() {
     engine.trust_aware = false;
     engine.initialize_committee(&nodes, &seed, 0, 0).unwrap();
 
-    // Create a block from a node that is NOT in the committee.
+    // WHY: Send block at height 1 (expected next height) so it reaches
+    // full validation. Blocks at height > expected are skipped before
+    // validation, so they wouldn't test the producer check.
     let fake_producer = test_node(99);
-    let mut block = make_block(5, BlockHash([0; 32]), fake_producer);
-
-    // Add signatures so it passes the signature count check.
-    let committee = engine.committee().unwrap().clone();
-    for member in committee.members {
-        block.validator_signatures.push(ValidatorSignature {
-            validator: member.node_id,
-            signature: vec![0; 64],
-        });
-    }
+    let block = make_block(1, BlockHash([0; 32]), fake_producer);
 
     let result = engine.process_incoming_block(block);
 
