@@ -234,7 +234,15 @@ impl ConsensusEngine {
     /// Returns `true` if this node should produce a block in the new slot.
     pub fn advance_slot(&mut self) -> bool {
         self.current_slot += 1;
-        self.block_producer.set_slot(self.current_slot);
+        // WHY: Use next_block_height as the "slot" for producer selection,
+        // not the local slot counter. Both phones agree on current_height
+        // (shared chain), so current_height + 1 is deterministic across
+        // all nodes. The local slot counter drifts because each phone's
+        // timer runs independently — phone A might be on slot 50 while
+        // phone B is on slot 48. But both agree on height 25, so both
+        // compute the same producer for height 26.
+        let next_height = self.current_height + 1;
+        self.block_producer.set_slot(next_height);
 
         // WHY: Don't produce blocks while syncing (e.g., after fork resolution
         // rollback). Producing blocks would create a new divergent chain instead
@@ -482,20 +490,29 @@ impl ConsensusEngine {
         }
 
         // Normal case: block at expected next height with correct parent.
-        // WHY: Skip full VRF/committee validation for Phase 2 testnet.
-        // Full validate_block() checks VRF proofs and slot assignments, which
-        // require globally synchronized slot counters. On testnet, each phone
-        // has an independent slot counter (no NTP-synced global clock), so VRF
-        // proof verification fails for blocks from other producers. The height
-        // and parent_hash checks above ensure chain continuity, and BFT
-        // co-signing (2/2 threshold) provides the security guarantee. Full
-        // validation will be re-enabled when slot synchronization is implemented.
-        //
-        // Security: This is safe for testnet because:
-        // 1. Both phones must co-sign each block (BFT 2/2 finality)
-        // 2. Height and parent hash are checked (chain continuity)
-        // 3. Block hash integrity is verified below
-        // 4. Transaction validation happens at the FFI layer before state update
+        // WHY: Validate that the block producer is a legitimate committee
+        // member for this height. Now that slot = height (not a local
+        // timer counter), both nodes agree on who should produce each
+        // block. Full VRF proof verification is skipped (would require
+        // verifying the producer's VRF output matches the slot seed),
+        // but committee membership is checked.
+        if let Some(ref committee) = self.current_committee {
+            let expected_producer = committee.block_producer_for_slot(expected_height);
+            if let Some(producer) = expected_producer {
+                if producer.node_id != block.header.producer {
+                    // WHY: Don't hard-reject — the other node's slot counter
+                    // might still be slightly out of sync during the transition.
+                    // Log and accept for now. For mainnet, this should be a
+                    // hard rejection.
+                    debug!(
+                        height = expected_height,
+                        expected = ?producer.node_id,
+                        actual = ?block.header.producer,
+                        "Block producer doesn't match expected for this height (accepting anyway)",
+                    );
+                }
+            }
+        }
 
         // Block is valid — update state
         let block_hash = block.header.hash()?;

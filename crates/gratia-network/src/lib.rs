@@ -413,6 +413,15 @@ impl NetworkManager {
         let quic_keepalive = Duration::from_secs(self.config.transport.keepalive_interval_secs);
         let mut swarm = SwarmBuilder::with_existing_identity(identity)
             .with_tokio()
+            .with_tcp(
+                // WHY: TCP fallback for devices that can't do UDP/QUIC
+                // (Samsung A06 without SIM card, restrictive NATs, corporate firewalls).
+                // TCP is slower but universally available.
+                libp2p::tcp::Config::default().nodelay(true),
+                libp2p::noise::Config::new,
+                libp2p::yamux::Config::default,
+            )
+            .map_err(|e| NetworkError::Transport(format!("TCP setup failed: {}", e)))?
             .with_quic_config(|mut cfg| {
                 // WHY: Samsung's network stack closes NAT mappings for UDP sockets
                 // that haven't sent traffic in ~30s. 15s keepalive sends QUIC PING
@@ -422,7 +431,7 @@ impl NetworkManager {
                 cfg.keep_alive_interval = quic_keepalive;
                 cfg
             })
-            .with_behaviour(|key| {
+            .with_behaviour(|key: &libp2p::identity::Keypair| {
                 // Gossipsub configuration tuned for mobile
                 let gossipsub_config = gossipsub::ConfigBuilder::default()
                     // WHY: Custom message ID function — dedup by content hash
@@ -1202,10 +1211,43 @@ async fn run_swarm_event_loop(
                                     SyncResponse::Blocks(blocks) => {
                                         match sync_manager.handle_blocks_response(&peer, blocks) {
                                             Ok(validated_blocks) => {
-                                                for block in validated_blocks {
+                                                if !validated_blocks.is_empty() {
+                                                    tracing::info!(
+                                                        count = validated_blocks.len(),
+                                                        from = validated_blocks.first().map(|b| b.header.height),
+                                                        to = validated_blocks.last().map(|b| b.header.height),
+                                                        "Sync v2: received blocks"
+                                                    );
+
+                                                    // WHY: Update local state based on last block
+                                                    // so SyncManager knows our new height and can
+                                                    // request the next batch.
+                                                    if let Some(last) = validated_blocks.last() {
+                                                        if let Ok(hash) = last.header.hash() {
+                                                            sync_manager.update_local_state(
+                                                                last.header.height,
+                                                                hash,
+                                                            );
+                                                        }
+                                                    }
+
+                                                    // WHY: Send as SyncBlocksReceived (batch) not
+                                                    // individual BlockReceived. The FFI handler
+                                                    // processes sync blocks sequentially and updates
+                                                    // chain state, recent_blocks cache, and wallet
+                                                    // balances. Individual BlockReceived would skip
+                                                    // the batch processing path.
                                                     let _ = event_tx.send(
-                                                        NetworkEvent::BlockReceived(Box::new(block))
+                                                        NetworkEvent::SyncBlocksReceived(validated_blocks)
                                                     ).await;
+
+                                                    // WHY: After receiving a batch, immediately
+                                                    // request the next batch if we're still behind.
+                                                    try_send_next_sync_request(
+                                                        &mut sync_manager,
+                                                        &local_peer_bytes,
+                                                        &mut swarm,
+                                                    );
                                                 }
                                             }
                                             Err(e) => {
@@ -1215,6 +1257,19 @@ async fn run_swarm_event_loop(
                                     }
                                     SyncResponse::ChainTip { height, hash } => {
                                         sync_manager.update_peer_state(peer, height, hash);
+
+                                        // WHY: After learning about a new chain tip via v2,
+                                        // check if we should start syncing blocks.
+                                        try_send_next_sync_request(
+                                            &mut sync_manager,
+                                            &local_peer_bytes,
+                                            &mut swarm,
+                                        );
+
+                                        // Notify application of sync state changes
+                                        let _ = event_tx.send(NetworkEvent::SyncStateChanged(
+                                            sync_manager.state()
+                                        )).await;
                                     }
                                     SyncResponse::Headers(_) => {
                                         tracing::debug!(%peer, "Sync v2: headers response (not yet used)");

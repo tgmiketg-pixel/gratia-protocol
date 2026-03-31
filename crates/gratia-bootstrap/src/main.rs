@@ -54,6 +54,7 @@ async fn main() {
 
     tracing::info!("=== Gratia Bootstrap Node ===");
     tracing::info!("QUIC listen port: {}", port);
+    tracing::info!("TCP listen port: {}", port + 1);
     tracing::info!("Health check port: {}", health_port);
 
     let node_id = bootstrap_node_id();
@@ -65,8 +66,12 @@ async fn main() {
     // handshake fails because libp2p rejects PeerId mismatches. This was
     // causing the A06 to fail every bootstrap connection attempt.
     config.data_dir = Some("/opt/gratia-bootstrap".to_string());
+    // WHY: Listen on both QUIC (UDP) and TCP. Some phones (Samsung A06 without
+    // SIM card) can't do UDP/QUIC to external IPs. TCP works everywhere.
+    // UFW firewall rules needed: sudo ufw allow 9000/udp && sudo ufw allow 9001/tcp
     config.transport.listen_addresses = vec![
         format!("/ip4/0.0.0.0/udp/{}/quic-v1", port),
+        format!("/ip4/0.0.0.0/tcp/{}", port + 1),
     ];
     // WHY: Bootstrap node doesn't need to connect to other bootstraps — it IS the bootstrap.
     config.bootstrap_peers = Vec::new();

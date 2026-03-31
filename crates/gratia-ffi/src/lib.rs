@@ -1714,8 +1714,12 @@ impl GratiaNode {
         net_config.data_dir = data_dir;
         // WHY: Use the caller-specified port. Port 0 lets the OS pick a free port,
         // which is the default for mobile (avoids port conflicts).
-        net_config.transport.listen_addresses =
-            vec![format!("/ip4/0.0.0.0/udp/{}/quic-v1", listen_port)];
+        net_config.transport.listen_addresses = vec![
+            format!("/ip4/0.0.0.0/udp/{}/quic-v1", listen_port),
+            // WHY: TCP fallback for devices that can't do UDP/QUIC
+            // (Samsung A06 without SIM card, restrictive NATs, corporate firewalls).
+            format!("/ip4/0.0.0.0/tcp/{}", listen_port),
+        ];
 
         // WHY: Connect to the Gratia bootstrap node on startup. This enables
         // peer discovery beyond the local Wi-Fi network. The bootstrap node
@@ -1728,6 +1732,9 @@ impl GratiaNode {
             // identity (saved to /opt/gratia-bootstrap/libp2p_identity.key).
             // This PeerId will survive server restarts.
             "/ip4/45.77.95.111/udp/9000/quic-v1/p2p/12D3KooWRUqRqDGpQwLtxMP6iGfKEjZYWnkgkiW5BLPyxAeB8gLF".to_string(),
+            // WHY: TCP fallback — Samsung A06 without SIM can't do UDP/QUIC to
+            // external IPs. TCP works everywhere. Port 9001 = bootstrap TCP port.
+            "/ip4/45.77.95.111/tcp/9001/p2p/12D3KooWRUqRqDGpQwLtxMP6iGfKEjZYWnkgkiW5BLPyxAeB8gLF".to_string(),
         ];
 
         let mut network = NetworkManager::new(net_config);
@@ -2776,8 +2783,10 @@ impl GratiaNode {
                         }
                         NetworkEvent::SyncBlocksReceived(blocks) => {
                             // WHY: The network layer received and validated a batch of
-                            // sync blocks. Process them through consensus and update
-                            // the consensus-level sync protocol's state machine.
+                            // sync blocks. Process them through consensus, apply
+                            // transactions to state, credit mining rewards, and update
+                            // the recent_blocks cache. This mirrors BlockReceived
+                            // processing but handles an ordered batch sequentially.
                             let block_count = blocks.len();
                             let first_h = blocks.first().map(|b| b.header.height).unwrap_or(0);
                             let last_h = blocks.last().map(|b| b.header.height).unwrap_or(0);
@@ -2788,21 +2797,17 @@ impl GratiaNode {
                             ));
 
                             let mut applied_height = 0u64;
+                            let mut total_txs_applied = 0u32;
                             for block in &blocks {
                                 let h = block.header.height;
-                                if let Some(ref mut consensus) = inner.consensus {
+                                let accepted = if let Some(ref mut consensus) = inner.consensus {
                                     match consensus.process_incoming_block(block.clone()) {
                                         Ok(BlockProcessResult::Accepted) => {
                                             applied_height = consensus.current_height();
+                                            true
                                         }
-                                        Ok(BlockProcessResult::Skipped) => {
-                                            // Skip but continue processing remaining blocks
-                                        }
+                                        Ok(BlockProcessResult::Skipped) => false,
                                         Ok(BlockProcessResult::ForkDetected) => {
-                                            // WHY: During sync, a fork means the blocks we
-                                            // received are from a different chain. Log and
-                                            // break — the BlockReceived handler will handle
-                                            // fork resolution when the next gossip block arrives.
                                             rust_log(&format!(
                                                 "Sync: fork detected at height {}, stopping sync batch",
                                                 h,
@@ -2814,6 +2819,91 @@ impl GratiaNode {
                                             break;
                                         }
                                     }
+                                } else { false };
+
+                                if !accepted {
+                                    continue;
+                                }
+
+                                // ── Validate and apply transactions ──────────────
+                                // WHY: Same validation as BlockReceived — reject blocks
+                                // with invalid transactions to prevent state corruption.
+                                if !block.transactions.is_empty() {
+                                    if let Err(e) = validate_block_transactions(
+                                        &block.transactions,
+                                        MIN_TRANSACTION_FEE,
+                                    ) {
+                                        warn!(
+                                            "Sync: rejecting block {} — invalid txs: {}",
+                                            h, e,
+                                        );
+                                        continue;
+                                    }
+
+                                    // Apply transactions to on-chain state
+                                    if let Some(ref sm) = inner.state_manager {
+                                        let our_addr = inner.wallet.address().ok();
+                                        let mut incoming_lux: Lux = 0;
+                                        for tx in &block.transactions {
+                                            let sender_addr = gratia_core::types::Address::from_pubkey(&tx.sender_pubkey);
+                                            match &tx.payload {
+                                                gratia_core::types::TransactionPayload::Transfer { to, amount } => {
+                                                    let mut sender_acct = sm.get_account(&sender_addr).unwrap_or_default();
+                                                    let total = amount + tx.fee;
+                                                    if sender_acct.balance >= total && sender_acct.nonce == tx.nonce {
+                                                        sender_acct.balance -= total;
+                                                        sender_acct.nonce += 1;
+                                                        let _ = sm.db().put_account(&sender_addr, &sender_acct);
+                                                    }
+                                                    let mut recv_acct = sm.get_account(to).unwrap_or_default();
+                                                    recv_acct.balance += amount;
+                                                    let _ = sm.db().put_account(to, &recv_acct);
+                                                    if let Some(ref our) = our_addr {
+                                                        if to == our {
+                                                            incoming_lux += amount;
+                                                        }
+                                                    }
+                                                    total_txs_applied += 1;
+                                                }
+                                                _ => { total_txs_applied += 1; }
+                                            }
+                                        }
+                                        // Sync wallet from on-chain state after transfers
+                                        if incoming_lux > 0 {
+                                            if let (Some(ref sm2), Ok(our_addr2)) = (&inner.state_manager, inner.wallet.address()) {
+                                                let acct = sm2.get_account(&our_addr2).unwrap_or_default();
+                                                inner.wallet.sync_balance(acct.balance);
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // ── Credit mining reward to block producer ───────
+                                // WHY: Same as BlockReceived — credit the producer's
+                                // account so balances reflect the true chain state.
+                                if let Some(ref sm) = inner.state_manager {
+                                    let producer_addr = gratia_core::types::Address(block.header.producer.0);
+                                    let our_addr = inner.wallet.address().ok();
+                                    let is_self = our_addr.as_ref() == Some(&producer_addr);
+
+                                    if !is_self {
+                                        let active_miners = (block.header.active_miners as u64).max(1);
+                                        let reward: Lux = EmissionSchedule
+                                            ::per_miner_block_reward_lux(h, active_miners);
+                                        let mut acct = sm.get_account(&producer_addr).unwrap_or_default();
+                                        acct.balance += reward;
+                                        let _ = sm.db().put_account(&producer_addr, &acct);
+                                    }
+                                }
+
+                                // ── Update recent_blocks cache ───────────────────
+                                // WHY: Without this, synced blocks don't get cached and
+                                // can't be served to peers that connect later. The cache
+                                // is the primary source for the BlockProvider when state
+                                // store doesn't have the block yet.
+                                inner.recent_blocks.push_back(block.clone());
+                                if inner.recent_blocks.len() > 100 {
+                                    inner.recent_blocks.pop_front();
                                 }
                             }
 
@@ -2839,9 +2929,23 @@ impl GratiaNode {
                                     persistence.save(applied_height, &tip, inner.blocks_produced);
                                 }
 
+                                // Persist state to disk periodically during sync
+                                if applied_height % 10 == 0 {
+                                    if let Some(ref backend) = inner.storage_backend {
+                                        let _ = backend.persist();
+                                    }
+                                }
+
+                                // WHY: Trigger network to request the next batch if
+                                // we're still behind. Without this, the sync stalls
+                                // until the next 32-second maintenance tick.
+                                if let Some(ref network) = inner.network {
+                                    let _ = network.try_request_sync();
+                                }
+
                                 rust_log(&format!(
-                                    "Sync: applied {} blocks, height now {}",
-                                    block_count, applied_height,
+                                    "Sync: applied {} blocks ({} txs), height now {}",
+                                    block_count, total_txs_applied, applied_height,
                                 ));
                             }
 
@@ -3154,10 +3258,12 @@ impl GratiaNode {
     /// Returns the current sync state.
     pub fn request_sync(&self) -> Result<String, FfiError> {
         let inner = self.lock_inner()?;
-        // WHY: Reuse the same logic as get_sync_status_string() which
-        // falls back to a peer-based heuristic when the SyncManager is
-        // in Unknown state. Without this, the Mining screen always shows
-        // "Unknown" even when both phones are synced.
+        // WHY: Actually trigger the network layer to generate and send sync
+        // requests. Previously this was a no-op that only returned status.
+        // Now it kicks off block downloads when the node is behind peers.
+        if let Some(ref network) = inner.network {
+            let _ = network.try_request_sync();
+        }
         Ok(inner.get_sync_status_string())
     }
 
@@ -4549,15 +4655,27 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                 let network_height = sync.best_network_height().unwrap_or(0);
                 net_height_for_sp = Some((local_height, network_height));
 
-                // WHY: Log sync state for debugging. The actual sync requests
-                // are generated and sent by the network layer's event loop
-                // (try_send_next_sync_request), which has direct access to the
-                // swarm. The FFI-level SyncManager tracks state for UI reporting.
+                // WHY: When we detect we're behind, actively trigger the
+                // network layer to generate and send sync requests. The
+                // network event loop has its own periodic chain tip poll
+                // (every 30s) but that only fires on its timer. This
+                // ensures the FFI maintenance tick (every 32s) also kicks
+                // off sync, so a reconnecting phone doesn't wait up to
+                // 30+32=62 seconds to start downloading missing blocks.
                 match sync.state() {
                     gratia_network::sync::SyncState::Behind { local_height, network_height } => {
                         rust_log(&format!(
-                            "Sync: behind network ({}/{}), network layer requesting blocks",
+                            "Sync: behind network ({}/{}), triggering sync request",
                             local_height, network_height
+                        ));
+                        if let Some(ref network) = guard.network {
+                            let _ = network.try_request_sync();
+                        }
+                    }
+                    gratia_network::sync::SyncState::Syncing { local_height, target_height } => {
+                        rust_log(&format!(
+                            "Sync: downloading ({}/{})",
+                            local_height, target_height
                         ));
                     }
                     _ => {}
