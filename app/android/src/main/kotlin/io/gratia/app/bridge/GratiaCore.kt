@@ -303,7 +303,12 @@ object GratiaCoreManager {
      * @return True if the day was valid (all PoL parameters met).
      */
     fun finalizeDay(): Boolean {
-        return callNode { it.finalizeDay() }
+        // WHY: epoch_day = days since 2026-01-01 (Gratia epoch start).
+        // Bound into ZK proofs to prevent replay across days.
+        val epochStart = java.time.LocalDate.of(2026, 1, 1)
+        val today = java.time.LocalDate.now()
+        val epochDay = java.time.temporal.ChronoUnit.DAYS.between(epochStart, today).toUInt()
+        return callNode { it.finalizeDay(epochDay) }
     }
 
     // ========================================================================

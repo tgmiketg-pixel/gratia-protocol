@@ -881,7 +881,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_gratia_ffi_fn_method_gratianode_export_seed_phrase(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_gratia_ffi_fn_method_gratianode_finalize_day(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_gratia_ffi_fn_method_gratianode_finalize_day(`ptr`: Pointer,`epochDay`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     fun uniffi_gratia_ffi_fn_method_gratianode_generate_range_proof(`ptr`: Pointer,`value`: Long,`bitWidth`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1268,7 +1268,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_export_seed_phrase() != 28164.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_finalize_day() != 29277.toShort()) {
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_finalize_day() != 30023.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_generate_range_proof() != 62923.toShort()) {
@@ -1981,7 +1981,7 @@ public interface GratiaNodeInterface {
      *
      * Returns `true` if the day was valid (all PoL parameters met).
      */
-    fun `finalizeDay`(): kotlin.Boolean
+    fun `finalizeDay`(`epochDay`: kotlin.UInt): kotlin.Boolean
     
     /**
      * Generate a Groth16 range proof for a value.
@@ -2673,12 +2673,12 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
      *
      * Returns `true` if the day was valid (all PoL parameters met).
      */
-    @Throws(FfiException::class)override fun `finalizeDay`(): kotlin.Boolean {
+    @Throws(FfiException::class)override fun `finalizeDay`(`epochDay`: kotlin.UInt): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
     uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_finalize_day(
-        it, _status)
+        it, FfiConverterUInt.lower(`epochDay`),_status)
 }
     }
     )

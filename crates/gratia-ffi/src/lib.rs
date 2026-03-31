@@ -4772,6 +4772,16 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
 
         // WHY: We check consensus existence and advance the slot in a
         // scoped block, then operate on the result outside the borrow.
+        // WHY: Extract values needed for synthetic override BEFORE borrowing
+        // consensus mutably. Avoids borrow conflict with guard.known_peer_nodes.
+        let real_count = guard.real_committee_members;
+        let our_id_for_slot = guard.wallet.address()
+            .map(|a| a.0)
+            .unwrap_or([0xFF; 32]);
+        let peer_ids_for_slot: Vec<[u8; 32]> = guard.known_peer_nodes.iter()
+            .map(|p| p.node_id.0)
+            .collect();
+
         let mut should_produce = {
             match guard.consensus.as_mut() {
                 Some(engine) => {
@@ -4783,7 +4793,21 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                             "Slot timer: this node should produce a block"
                         );
                     }
-                    result
+                    // WHY: When the committee has synthetic padding (real < 3),
+                    // the VRF assigns some slots to synthetics that can't
+                    // produce, stalling the chain. Override: when < 3 real
+                    // members, ALWAYS produce. Both phones produce for
+                    // every height, and BFT ensures only one block per
+                    // height gets finalized (first to collect co-signatures
+                    // wins). This is less efficient than alternation but
+                    // guaranteed to work. Once the network has 3+ real
+                    // members, the VRF handles slot assignment properly
+                    // without synthetics.
+                    if !result && real_count < 3 {
+                        true
+                    } else {
+                        result
+                    }
                 }
                 None => {
                     debug!("Slot timer: consensus stopped, exiting");
