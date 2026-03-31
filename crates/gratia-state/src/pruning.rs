@@ -638,6 +638,7 @@ mod tests {
                 nullifier: [nullifier_byte; 32],
                 zk_proof: vec![0u8; 32],
                 zk_commitments: None,
+                epoch_day: 1,
                 presence_score: 50,
                 sensor_flags: gratia_core::types::SensorFlags {
                     gps: true,
@@ -690,6 +691,7 @@ mod tests {
                 nullifier: [nullifier_byte; 32],
                 zk_proof: vec![0u8; 32],
                 zk_commitments: None,
+                epoch_day: 1,
                 presence_score: 50,
                 sensor_flags: gratia_core::types::SensorFlags {
                     gps: true,

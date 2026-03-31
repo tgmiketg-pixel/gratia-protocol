@@ -124,8 +124,12 @@ impl PolValidator {
             // variation requirement only applies when the device actually reports
             // BT peers. If distinct_bt_environments == 0, the device uses Wi-Fi
             // for connectivity and this check passes.
+            // The temporal check (bt_environment_change_count >= 1) ensures
+            // the peer set actually changed at different times during the day,
+            // not just that multiple distinct sets exist.
             bt_environment_variation: data.distinct_bt_environments == 0
-                || data.distinct_bt_environments >= self.config.min_distinct_bt_environments,
+                || (data.distinct_bt_environments >= self.config.min_distinct_bt_environments
+                    && data.bt_environment_change_count >= 1),
             // 8b. At least one charge cycle event
             charge_cycle: data.charge_cycle_event,
         };
@@ -333,6 +337,7 @@ mod tests {
             approximate_location: None,
             distinct_wifi_networks: 3,
             distinct_bt_environments: 4,
+            bt_environment_change_count: 3,
             charge_cycle_event: true,
             optional_sensors: OptionalSensorData::default(),
         }
@@ -489,6 +494,7 @@ mod tests {
             approximate_location: None,
             distinct_wifi_networks: 1,
             distinct_bt_environments: 2,
+            bt_environment_change_count: 1,
             charge_cycle_event: true,
             optional_sensors: OptionalSensorData::default(),
         };
@@ -514,6 +520,7 @@ mod tests {
             approximate_location: None,
             distinct_wifi_networks: 5,
             distinct_bt_environments: 8,
+            bt_environment_change_count: 7,
             charge_cycle_event: true,
             optional_sensors: OptionalSensorData::default(),
         };

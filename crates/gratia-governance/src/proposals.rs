@@ -89,7 +89,7 @@ impl EmergencyProposal {
             return false;
         }
         // threshold_bps is e.g. 7500 for 75%
-        let required = (self.committee_size as u64 * threshold_bps as u64 + 9999) / 10000;
+        let required = (self.committee_size as u64).saturating_mul(threshold_bps as u64).saturating_add(9999) / 10000;
         self.approvals.len() as u64 >= required
     }
 }

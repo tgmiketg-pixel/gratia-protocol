@@ -200,8 +200,12 @@ object GratiaCoreManager {
      * @return Updated mining status.
      */
     fun updatePowerState(isPluggedIn: Boolean, batteryPercent: Int): MiningStatus {
+        // WHY: Clamp to 0-100 before converting to UByte. Values outside this
+        // range (e.g., -1 from BatteryManager errors or >100 from firmware bugs)
+        // would wrap or truncate when cast to UByte, causing incorrect mining state.
+        val clampedBattery = batteryPercent.coerceIn(0, 100)
         return callNode {
-            it.updatePowerState(isPluggedIn, batteryPercent.toUByte())
+            it.updatePowerState(isPluggedIn, clampedBattery.toUByte())
         }.toBridge()
     }
 
@@ -359,7 +363,11 @@ object GratiaCoreManager {
      * @return Current network status.
      */
     fun startNetwork(listenPort: Int = 0): NetworkStatus {
-        val ffi = callNode { it.startNetwork(listenPort.toUShort()) }
+        // WHY: Clamp to valid port range before converting to UShort. Values
+        // outside 0-65535 would truncate silently, potentially binding to the
+        // wrong port.
+        val clampedPort = listenPort.coerceIn(0, 65535)
+        val ffi = callNode { it.startNetwork(clampedPort.toUShort()) }
         return NetworkStatus(
             isRunning = ffi.isRunning,
             peerCount = ffi.peerCount.toInt(),

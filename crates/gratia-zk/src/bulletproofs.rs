@@ -176,6 +176,10 @@ pub struct PolRangeProof {
     pub commitments: Vec<Vec<u8>>,
     /// Number of parameters proven in this proof.
     pub parameter_count: u8,
+    /// Day number since genesis. Bound into the Fiat-Shamir transcript to
+    /// prevent replay of a valid proof from one day being accepted on a
+    /// different day.
+    pub epoch_day: u32,
 }
 
 // ============================================================================
@@ -200,7 +204,7 @@ pub struct PolRangeProof {
 ///
 /// # Performance
 /// ~200-500ms on ARM64 (Snapdragon 600-series and above).
-pub fn generate_pol_proof(data: &PolProofInput, thresholds: &PolThresholds) -> Result<PolRangeProof, ZkError> {
+pub fn generate_pol_proof(data: &PolProofInput, thresholds: &PolThresholds, epoch_day: u32) -> Result<PolRangeProof, ZkError> {
     // Collect values and minimums into parallel arrays
     let values = [
         data.unlock_count,
@@ -246,6 +250,8 @@ pub fn generate_pol_proof(data: &PolProofInput, thresholds: &PolThresholds) -> R
 
     // Create the Fiat-Shamir transcript with domain separation.
     let mut transcript = Transcript::new(POL_RANGE_TRANSCRIPT_DOMAIN);
+    // Bind the epoch day into the transcript to prevent replay attacks.
+    transcript.append_u64(b"epoch_day", epoch_day as u64);
 
     // Generate the aggregated range proof.
     // WHY: Aggregated proof for N values is only marginally larger than
@@ -273,6 +279,7 @@ pub fn generate_pol_proof(data: &PolProofInput, thresholds: &PolThresholds) -> R
         proof_bytes: proof.to_bytes(),
         commitments: commitment_bytes,
         parameter_count: FLEXIBLE_PARAMETER_COUNT as u8,
+        epoch_day,
     })
 }
 
@@ -297,7 +304,16 @@ pub fn generate_pol_proof(data: &PolProofInput, thresholds: &PolThresholds) -> R
 ///
 /// # Performance
 /// ~50-100ms on ARM64 (much faster than proving).
-pub fn verify_pol_proof(proof: &PolRangeProof, _thresholds: &PolThresholds) -> Result<bool, ZkError> {
+pub fn verify_pol_proof(proof: &PolRangeProof, _thresholds: &PolThresholds, expected_epoch_day: u32) -> Result<bool, ZkError> {
+    // Reject proofs that claim a different epoch day than expected.
+    if proof.epoch_day != expected_epoch_day {
+        return Err(ZkError::VerificationFailed {
+            reason: format!(
+                "epoch_day mismatch: proof is for day {} but expected day {}",
+                proof.epoch_day, expected_epoch_day
+            ),
+        });
+    }
     // Validate commitment count matches expected parameter count.
     if proof.commitments.len() != FLEXIBLE_PARAMETER_COUNT {
         return Err(ZkError::InvalidInput {
@@ -351,6 +367,8 @@ pub fn verify_pol_proof(proof: &PolRangeProof, _thresholds: &PolThresholds) -> R
     // WHY: The verifier must use the exact same transcript domain as the prover
     // for the Fiat-Shamir transform to produce matching challenges.
     let mut transcript = Transcript::new(POL_RANGE_TRANSCRIPT_DOMAIN);
+    // Bind the same epoch day so the Fiat-Shamir challenges match the prover's.
+    transcript.append_u64(b"epoch_day", proof.epoch_day as u64);
 
     // Verify the aggregated range proof.
     // WHY: This checks that each committed value is in [0, 2^32). Since the
@@ -385,6 +403,10 @@ pub struct ProofOfLifeProof {
     ///         orientation_changed, human_motion, gps_fix,
     ///         network_connectivity, charge_cycle]
     pub commitments: Vec<[u8; 32]>,
+    /// Day number since genesis. Bound into the Fiat-Shamir transcript to
+    /// prevent replay of a valid proof from one day being accepted on a
+    /// different day.
+    pub epoch_day: u32,
 }
 
 /// Encoded PoL parameters as numeric values suitable for range proofs.
@@ -481,6 +503,7 @@ fn encode_pol_parameters(data: &DailyProofOfLifeData) -> Result<EncodedPolParame
 /// Proof size: ~1 KB (aggregated 8-value Bulletproof).
 pub fn prove_daily_attestation(
     data: &DailyProofOfLifeData,
+    epoch_day: u32,
 ) -> Result<ProofOfLifeProof, GratiaError> {
     // First validate that the data actually meets requirements.
     // WHY: We encode parameters as (value - minimum), so if any parameter
@@ -499,6 +522,9 @@ pub fn prove_daily_attestation(
 
     // Create the Fiat-Shamir transcript with domain separation
     let mut transcript = Transcript::new(POL_TRANSCRIPT_DOMAIN);
+    // Bind the epoch day into the transcript to prevent replay attacks.
+    // A valid proof from day N cannot verify against day M (M != N).
+    transcript.append_u64(b"epoch_day", epoch_day as u64);
 
     // Build the aggregated range proof for all 8 parameters simultaneously.
     // This is more efficient than 8 individual proofs — the aggregated proof
@@ -524,6 +550,7 @@ pub fn prove_daily_attestation(
     Ok(ProofOfLifeProof {
         range_proof: proof.to_bytes(),
         commitments: commitment_bytes,
+        epoch_day,
     })
 }
 
@@ -537,7 +564,16 @@ pub fn prove_daily_attestation(
 /// requirements without learning the actual sensor values.
 ///
 /// Verification time on ARM: ~50-100ms (much faster than proving).
-pub fn verify_daily_attestation(proof: &ProofOfLifeProof) -> Result<(), GratiaError> {
+pub fn verify_daily_attestation(proof: &ProofOfLifeProof, expected_epoch_day: u32) -> Result<(), GratiaError> {
+    // Reject proofs that claim a different epoch day than expected.
+    if proof.epoch_day != expected_epoch_day {
+        return Err(GratiaError::InvalidZkProof {
+            reason: format!(
+                "epoch_day mismatch: proof is for day {} but expected day {}",
+                proof.epoch_day, expected_epoch_day
+            ),
+        });
+    }
     // Validate commitment count
     if proof.commitments.len() != POL_PARAMETER_COUNT {
         return Err(GratiaError::InvalidZkProof {
@@ -573,6 +609,8 @@ pub fn verify_daily_attestation(proof: &ProofOfLifeProof) -> Result<(), GratiaEr
     // WHY: The verifier must use the exact same transcript domain as the prover
     // for the Fiat-Shamir transform to produce matching challenges.
     let mut transcript = Transcript::new(POL_TRANSCRIPT_DOMAIN);
+    // Bind the same epoch day so the Fiat-Shamir challenges match the prover's.
+    transcript.append_u64(b"epoch_day", proof.epoch_day as u64);
 
     // Verify the aggregated range proof
     range_proof
@@ -610,6 +648,7 @@ mod tests {
             approximate_location: None,
             distinct_wifi_networks: 3,
             distinct_bt_environments: 4,
+            bt_environment_change_count: 3,
             charge_cycle_event: true,
             optional_sensors: OptionalSensorData::default(),
         }
@@ -619,11 +658,11 @@ mod tests {
     fn test_prove_and_verify_valid_attestation() {
         let data = make_valid_pol_data();
 
-        let proof = prove_daily_attestation(&data).expect("proof generation should succeed");
+        let proof = prove_daily_attestation(&data, 100).expect("proof generation should succeed");
         assert_eq!(proof.commitments.len(), POL_PARAMETER_COUNT);
         assert!(!proof.range_proof.is_empty());
 
-        let result = verify_daily_attestation(&proof);
+        let result = verify_daily_attestation(&proof, 100);
         assert!(result.is_ok(), "verification failed: {:?}", result.err());
     }
 
@@ -632,7 +671,7 @@ mod tests {
         let mut data = make_valid_pol_data();
         data.unlock_count = 5; // Below minimum of 10
 
-        let result = prove_daily_attestation(&data);
+        let result = prove_daily_attestation(&data, 100);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("parameter 0"), "error should mention parameter 0 (unlock_count): {}", err);
@@ -643,7 +682,7 @@ mod tests {
         let mut data = make_valid_pol_data();
         data.orientation_changed = false;
 
-        let result = prove_daily_attestation(&data);
+        let result = prove_daily_attestation(&data, 100);
         assert!(result.is_err());
     }
 
@@ -652,7 +691,7 @@ mod tests {
         let mut data = make_valid_pol_data();
         data.charge_cycle_event = false;
 
-        let result = prove_daily_attestation(&data);
+        let result = prove_daily_attestation(&data, 100);
         assert!(result.is_err());
     }
 
@@ -664,7 +703,7 @@ mod tests {
         data.first_unlock = Some(now - chrono::Duration::hours(2));
         data.last_unlock = Some(now);
 
-        let result = prove_daily_attestation(&data);
+        let result = prove_daily_attestation(&data, 100);
         assert!(result.is_err());
     }
 
@@ -673,31 +712,31 @@ mod tests {
         let mut data = make_valid_pol_data();
         data.distinct_bt_environments = 0; // Need at least 2 for BT variation
 
-        let result = prove_daily_attestation(&data);
+        let result = prove_daily_attestation(&data, 100);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_tampered_proof_fails_verification() {
         let data = make_valid_pol_data();
-        let mut proof = prove_daily_attestation(&data).expect("proof generation should succeed");
+        let mut proof = prove_daily_attestation(&data, 100).expect("proof generation should succeed");
 
         // Tamper with a commitment
         proof.commitments[0] = [0u8; 32];
 
-        let result = verify_daily_attestation(&proof);
+        let result = verify_daily_attestation(&proof, 100);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_wrong_commitment_count_fails() {
         let data = make_valid_pol_data();
-        let mut proof = prove_daily_attestation(&data).expect("proof generation should succeed");
+        let mut proof = prove_daily_attestation(&data, 100).expect("proof generation should succeed");
 
         // Remove a commitment
         proof.commitments.pop();
 
-        let result = verify_daily_attestation(&proof);
+        let result = verify_daily_attestation(&proof, 100);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("expected"));
     }
@@ -717,18 +756,19 @@ mod tests {
             approximate_location: None,
             distinct_wifi_networks: 1,
             distinct_bt_environments: 2, // Minimum for BT variation
+            bt_environment_change_count: 1,
             charge_cycle_event: true,
             optional_sensors: OptionalSensorData::default(),
         };
 
-        let proof = prove_daily_attestation(&data).expect("minimum valid data should produce proof");
-        assert!(verify_daily_attestation(&proof).is_ok());
+        let proof = prove_daily_attestation(&data, 100).expect("minimum valid data should produce proof");
+        assert!(verify_daily_attestation(&proof, 100).is_ok());
     }
 
     #[test]
     fn test_proof_serialization_roundtrip() {
         let data = make_valid_pol_data();
-        let proof = prove_daily_attestation(&data).expect("proof generation should succeed");
+        let proof = prove_daily_attestation(&data, 100).expect("proof generation should succeed");
 
         // Serialize to JSON and back
         let json = serde_json::to_string(&proof).expect("serialization should succeed");
@@ -739,7 +779,7 @@ mod tests {
         assert_eq!(proof.commitments, deserialized.commitments);
 
         // Deserialized proof should still verify
-        assert!(verify_daily_attestation(&deserialized).is_ok());
+        assert!(verify_daily_attestation(&deserialized, 100).is_ok());
     }
 
     // ========================================================================
@@ -764,7 +804,7 @@ mod tests {
         let input = valid_input();
         let thresholds = default_thresholds();
 
-        let proof = generate_pol_proof(&input, &thresholds)
+        let proof = generate_pol_proof(&input, &thresholds, 100)
             .expect("proof generation should succeed");
 
         assert_eq!(proof.parameter_count, FLEXIBLE_PARAMETER_COUNT as u8);
@@ -776,7 +816,7 @@ mod tests {
             assert_eq!(c.len(), 32, "commitment should be 32 bytes");
         }
 
-        let result = verify_pol_proof(&proof, &thresholds);
+        let result = verify_pol_proof(&proof, &thresholds, 100);
         assert!(result.is_ok(), "verification failed: {:?}", result.err());
         assert_eq!(result.unwrap(), true);
     }
@@ -792,9 +832,9 @@ mod tests {
         };
         let thresholds = default_thresholds();
 
-        let proof = generate_pol_proof(&input, &thresholds)
+        let proof = generate_pol_proof(&input, &thresholds, 100)
             .expect("exact minimum values should produce a valid proof");
-        let result = verify_pol_proof(&proof, &thresholds);
+        let result = verify_pol_proof(&proof, &thresholds, 100);
         assert!(result.is_ok(), "exact minimum proof should verify");
     }
 
@@ -808,7 +848,7 @@ mod tests {
         };
         let thresholds = default_thresholds();
 
-        let result = generate_pol_proof(&input, &thresholds);
+        let result = generate_pol_proof(&input, &thresholds, 100);
         assert!(result.is_err());
         match result.unwrap_err() {
             ZkError::InvalidInput { reason } => {
@@ -830,7 +870,7 @@ mod tests {
         };
         let thresholds = default_thresholds();
 
-        let result = generate_pol_proof(&input, &thresholds);
+        let result = generate_pol_proof(&input, &thresholds, 100);
         assert!(result.is_err());
         match result.unwrap_err() {
             ZkError::InvalidInput { reason } => {
@@ -850,7 +890,7 @@ mod tests {
         };
         let thresholds = default_thresholds();
 
-        let result = generate_pol_proof(&input, &thresholds);
+        let result = generate_pol_proof(&input, &thresholds, 100);
         assert!(result.is_err());
         match result.unwrap_err() {
             ZkError::InvalidInput { reason } => {
@@ -870,7 +910,7 @@ mod tests {
         };
         let thresholds = default_thresholds();
 
-        let result = generate_pol_proof(&input, &thresholds);
+        let result = generate_pol_proof(&input, &thresholds, 100);
         assert!(result.is_err());
         match result.unwrap_err() {
             ZkError::InvalidInput { reason } => {
@@ -885,13 +925,13 @@ mod tests {
         let input = valid_input();
         let thresholds = default_thresholds();
 
-        let mut proof = generate_pol_proof(&input, &thresholds)
+        let mut proof = generate_pol_proof(&input, &thresholds, 100)
             .expect("proof generation should succeed");
 
         // Tamper with the first commitment (zero it out)
         proof.commitments[0] = vec![0u8; 32];
 
-        let result = verify_pol_proof(&proof, &thresholds);
+        let result = verify_pol_proof(&proof, &thresholds, 100);
         assert!(result.is_err(), "tampered proof should not verify");
         match result.unwrap_err() {
             ZkError::VerificationFailed { .. } => {} // expected
@@ -904,13 +944,13 @@ mod tests {
         let input = valid_input();
         let thresholds = default_thresholds();
 
-        let mut proof = generate_pol_proof(&input, &thresholds)
+        let mut proof = generate_pol_proof(&input, &thresholds, 100)
             .expect("proof generation should succeed");
 
         // Remove a commitment
         proof.commitments.pop();
 
-        let result = verify_pol_proof(&proof, &thresholds);
+        let result = verify_pol_proof(&proof, &thresholds, 100);
         assert!(result.is_err());
         match result.unwrap_err() {
             ZkError::InvalidInput { reason } => {
@@ -925,13 +965,13 @@ mod tests {
         let input = valid_input();
         let thresholds = default_thresholds();
 
-        let mut proof = generate_pol_proof(&input, &thresholds)
+        let mut proof = generate_pol_proof(&input, &thresholds, 100)
             .expect("proof generation should succeed");
 
         // Corrupt the proof bytes
         proof.proof_bytes = vec![0xDE, 0xAD, 0xBE, 0xEF];
 
-        let result = verify_pol_proof(&proof, &thresholds);
+        let result = verify_pol_proof(&proof, &thresholds, 100);
         assert!(result.is_err());
     }
 
@@ -953,9 +993,9 @@ mod tests {
             bt_environments: 1,
         };
 
-        let proof = generate_pol_proof(&input, &thresholds)
+        let proof = generate_pol_proof(&input, &thresholds, 100)
             .expect("proof with custom thresholds should succeed");
-        let result = verify_pol_proof(&proof, &thresholds);
+        let result = verify_pol_proof(&proof, &thresholds, 100);
         assert!(result.is_ok(), "verification with custom thresholds should succeed");
     }
 
@@ -970,9 +1010,9 @@ mod tests {
         };
         let thresholds = default_thresholds();
 
-        let proof = generate_pol_proof(&input, &thresholds)
+        let proof = generate_pol_proof(&input, &thresholds, 100)
             .expect("large values should produce a valid proof");
-        let result = verify_pol_proof(&proof, &thresholds);
+        let result = verify_pol_proof(&proof, &thresholds, 100);
         assert!(result.is_ok());
     }
 
@@ -981,7 +1021,7 @@ mod tests {
         let input = valid_input();
         let thresholds = default_thresholds();
 
-        let proof = generate_pol_proof(&input, &thresholds)
+        let proof = generate_pol_proof(&input, &thresholds, 100)
             .expect("proof generation should succeed");
 
         // Serialize to JSON and back
@@ -994,7 +1034,7 @@ mod tests {
         assert_eq!(proof.parameter_count, deserialized.parameter_count);
 
         // Deserialized proof should still verify
-        let result = verify_pol_proof(&deserialized, &thresholds);
+        let result = verify_pol_proof(&deserialized, &thresholds, 100);
         assert!(result.is_ok(), "deserialized proof should verify");
     }
 
@@ -1024,7 +1064,7 @@ mod tests {
         };
         let thresholds = default_thresholds();
 
-        let result = generate_pol_proof(&input, &thresholds);
+        let result = generate_pol_proof(&input, &thresholds, 100);
         assert!(result.is_err(), "all-zero values should fail");
     }
 
@@ -1033,13 +1073,13 @@ mod tests {
         let input = valid_input();
         let thresholds = default_thresholds();
 
-        let mut proof = generate_pol_proof(&input, &thresholds)
+        let mut proof = generate_pol_proof(&input, &thresholds, 100)
             .expect("proof generation should succeed");
 
         // Corrupt the parameter count
         proof.parameter_count = 99;
 
-        let result = verify_pol_proof(&proof, &thresholds);
+        let result = verify_pol_proof(&proof, &thresholds, 100);
         assert!(result.is_err());
     }
 }

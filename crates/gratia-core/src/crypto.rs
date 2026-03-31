@@ -242,6 +242,7 @@ mod tests {
             approximate_location: None,
             distinct_wifi_networks: 3,
             distinct_bt_environments: 4,
+            bt_environment_change_count: 3,
             charge_cycle_event: true,
             optional_sensors: OptionalSensorData::default(),
         };
@@ -288,6 +289,7 @@ mod tests {
             approximate_location: None,
             distinct_wifi_networks: 3,
             distinct_bt_environments: 4,
+            bt_environment_change_count: 3,
             charge_cycle_event: true,
             optional_sensors: OptionalSensorData::default(),
         };

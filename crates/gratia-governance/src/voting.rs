@@ -125,7 +125,7 @@ impl VotingManager {
         proposal: &Proposal,
         _config: &GovernanceConfig,
     ) -> VoteResults {
-        let total_votes = proposal.votes_yes + proposal.votes_no + proposal.votes_abstain;
+        let total_votes = proposal.votes_yes.saturating_add(proposal.votes_no).saturating_add(proposal.votes_abstain);
 
         VoteResults {
             proposal_id: proposal.id,

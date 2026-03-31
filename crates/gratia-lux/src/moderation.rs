@@ -27,6 +27,13 @@ pub const APPEAL_JURY_SIZE: usize = 11;
 /// Votes needed to uphold on appeal.
 pub const APPEAL_VOTES_TO_UPHOLD: usize = 8;
 
+/// Maximum number of appeals allowed per moderation case.
+///
+/// WHY: Without a limit, a bad actor can indefinitely delay enforcement
+/// by filing appeal after appeal. One appeal to an 11-member jury is
+/// sufficient due process. If the appeal fails, the verdict stands.
+pub const MAX_APPEALS: u32 = 1;
+
 /// Temp bans in 30 days before escalation to governance.
 ///
 /// WHY: Three strikes in a month means the community has repeatedly found
@@ -56,6 +63,9 @@ pub struct ModerationCase {
 
     /// Whether this is an appeal case.
     pub is_appeal: bool,
+
+    /// Number of appeals filed for this case.
+    pub appeal_count: u32,
 }
 
 /// The jury-based moderation system.
@@ -109,6 +119,7 @@ impl JurySystem {
             resolved: false,
             verdict: None,
             is_appeal: false,
+            appeal_count: 0,
         };
 
         self.cases.insert(post_hash.clone(), case);
@@ -216,9 +227,23 @@ impl JurySystem {
             return false; // Can't appeal a not-guilty verdict
         }
 
+        // Enforce appeal limit
+        if existing.appeal_count >= MAX_APPEALS {
+            tracing::warn!(
+                post_hash = %post_hash,
+                appeal_count = existing.appeal_count,
+                "Appeal denied: maximum appeals ({}) already filed",
+                MAX_APPEALS,
+            );
+            return false;
+        }
+
         if selected_jury.len() < APPEAL_JURY_SIZE {
             return false;
         }
+
+        // Preserve appeal count before removing old case
+        let prior_appeal_count = existing.appeal_count;
 
         // Remove old case, create appeal case
         let report = existing.report.clone();
@@ -231,6 +256,7 @@ impl JurySystem {
             resolved: false,
             verdict: None,
             is_appeal: true,
+            appeal_count: prior_appeal_count + 1,
         };
 
         self.cases.insert(post_hash.to_string(), case);

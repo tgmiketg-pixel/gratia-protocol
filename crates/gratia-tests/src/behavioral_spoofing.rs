@@ -70,6 +70,7 @@ fn valid_day_data() -> DailyProofOfLifeData {
         approximate_location: Some(GeoLocation { lat: 40.712, lon: -74.006 }),
         distinct_wifi_networks: 3,
         distinct_bt_environments: 4,
+        bt_environment_change_count: 3,
         charge_cycle_event: true,
         optional_sensors: OptionalSensorData::default(),
     }
@@ -157,6 +158,7 @@ fn test_synthetic_regular_unlock_patterns_detected() {
         approximate_location: None,
         distinct_wifi_networks: 1,
         distinct_bt_environments: 2,
+        bt_environment_change_count: 1,
         charge_cycle_event: true,
         optional_sensors: OptionalSensorData::default(),
     };
@@ -196,6 +198,7 @@ fn test_real_motion_but_missing_gps_bt_fails() {
         approximate_location: None,
         distinct_wifi_networks: 0,       // No Wi-Fi
         distinct_bt_environments: 0,     // No Bluetooth
+        bt_environment_change_count: 0,
         charge_cycle_event: true,
         optional_sensors: OptionalSensorData::default(),
     };

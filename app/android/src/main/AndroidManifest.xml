@@ -8,6 +8,10 @@
 
     <!-- Wi-Fi: required for network peer discovery and PoL Wi-Fi attestation -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- WHY: WiFi lock requires CHANGE_WIFI_STATE to keep WiFi radio in
+         high-performance mode during mining. Without this, Samsung phones
+         enter WiFi power-save and drop QUIC/UDP connections. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
 
     <!-- Bluetooth: required for peer discovery, mesh networking, and PoL BT attestation -->
     <uses-permission android:name="android.permission.BLUETOOTH" />

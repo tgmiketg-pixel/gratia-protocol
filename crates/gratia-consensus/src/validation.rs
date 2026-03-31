@@ -87,23 +87,32 @@ pub struct ValidationContext {
 /// Note: Nonce and balance checks require state access and are deferred
 /// to the block execution phase. This function validates structure only.
 pub fn validate_transaction(tx: &Transaction, min_fee: Lux) -> Result<(), GratiaError> {
-    // 1. Verify the transaction signature
+    // 1. Verify signature using the canonical signing format.
+    // WHY: The signing format MUST match gratia-wallet/transactions.rs:
+    //   payload_bytes || nonce (LE) || chain_id (LE) || fee (LE) || timestamp_millis (LE)
+    // Previously this function used a DIFFERENT format (nonce || fee || timestamp || payload)
+    // which would reject all valid transactions. The correct format includes chain_id
+    // for cross-chain replay protection.
     let payload_bytes = bincode::serialize(&tx.payload)
         .map_err(|e| GratiaError::SerializationError(e.to_string()))?;
 
-    // Build the signing message: nonce || fee || timestamp || payload
-    let mut signing_message = Vec::new();
-    signing_message.extend_from_slice(&tx.nonce.to_le_bytes());
-    signing_message.extend_from_slice(&tx.fee.to_le_bytes());
-    let timestamp_bytes = bincode::serialize(&tx.timestamp)
-        .map_err(|e| GratiaError::SerializationError(e.to_string()))?;
-    signing_message.extend_from_slice(&timestamp_bytes);
-    signing_message.extend_from_slice(&payload_bytes);
+    let mut signable = Vec::with_capacity(payload_bytes.len() + 28);
+    signable.extend_from_slice(&payload_bytes);
+    signable.extend_from_slice(&tx.nonce.to_le_bytes());
+    signable.extend_from_slice(&tx.chain_id.to_le_bytes());
+    signable.extend_from_slice(&tx.fee.to_le_bytes());
+    signable.extend_from_slice(&tx.timestamp.timestamp_millis().to_le_bytes());
 
-    verify_signature(&tx.sender_pubkey, &signing_message, &tx.signature)?;
+    verify_signature(&tx.sender_pubkey, &signable, &tx.signature)?;
 
     // 2. Verify the transaction hash matches
-    let computed_hash = sha256(&signing_message);
+    // WHY: Hash format must match gratia-wallet/transactions.rs:
+    //   SHA256(sender_pubkey || signable || signature)
+    let mut hash_input = Vec::new();
+    hash_input.extend_from_slice(&tx.sender_pubkey);
+    hash_input.extend_from_slice(&signable);
+    hash_input.extend_from_slice(&tx.signature);
+    let computed_hash = sha256(&hash_input);
     if tx.hash.0 != computed_hash {
         return Err(GratiaError::BlockValidationFailed {
             reason: format!(
@@ -416,9 +425,10 @@ pub fn validate_attestation_zk_proof(
         commitments: commitments.clone(),
         // WHY: The flexible API uses 4 core numeric parameters.
         parameter_count: 4,
+        epoch_day: attestation.epoch_day,
     };
 
-    gratia_zk::verify_pol_proof(&range_proof, thresholds).map_err(|e| {
+    gratia_zk::verify_pol_proof(&range_proof, thresholds, attestation.epoch_day).map_err(|e| {
         GratiaError::InvalidZkProof {
             reason: format!("PoL attestation ZK proof verification failed: {}", e),
         }
@@ -527,26 +537,36 @@ mod tests {
 
     fn make_signed_transaction(keypair: &Keypair, payload: TransactionPayload, fee: Lux) -> Transaction {
         let nonce = 1u64;
+        let chain_id = 2u32;
         let timestamp = Utc::now();
 
+        // WHY: Must match the canonical signing format from gratia-wallet:
+        //   payload_bytes || nonce (LE) || chain_id (LE) || fee (LE) || timestamp_millis (LE)
         let payload_bytes = bincode::serialize(&payload).unwrap();
-        let mut signing_message = Vec::new();
-        signing_message.extend_from_slice(&nonce.to_le_bytes());
-        signing_message.extend_from_slice(&fee.to_le_bytes());
-        let timestamp_bytes = bincode::serialize(&timestamp).unwrap();
-        signing_message.extend_from_slice(&timestamp_bytes);
-        signing_message.extend_from_slice(&payload_bytes);
+        let mut signable = Vec::with_capacity(payload_bytes.len() + 28);
+        signable.extend_from_slice(&payload_bytes);
+        signable.extend_from_slice(&nonce.to_le_bytes());
+        signable.extend_from_slice(&chain_id.to_le_bytes());
+        signable.extend_from_slice(&fee.to_le_bytes());
+        signable.extend_from_slice(&timestamp.timestamp_millis().to_le_bytes());
 
-        let signature = keypair.sign(&signing_message);
-        let hash = sha256(&signing_message);
+        let signature = keypair.sign(&signable);
+        let sender_pubkey = keypair.public_key_bytes();
+
+        // Hash: SHA256(sender_pubkey || signable || signature)
+        let mut hash_input = Vec::new();
+        hash_input.extend_from_slice(&sender_pubkey);
+        hash_input.extend_from_slice(&signable);
+        hash_input.extend_from_slice(&signature);
+        let hash = sha256(&hash_input);
 
         Transaction {
             hash: TxHash(hash),
             payload,
-            sender_pubkey: keypair.public_key_bytes(),
+            sender_pubkey,
             signature,
             nonce,
-            chain_id: 2,
+            chain_id,
             fee,
             timestamp,
         }

@@ -641,6 +641,11 @@ struct GratiaNodeInner {
     /// WHY: Stored here so the committee can be rebuilt with real peer data when
     /// new nodes join the network, replacing synthetic padding nodes.
     known_peer_nodes: Vec<NodeAnnouncement>,
+    /// Number of real (non-synthetic) committee members.
+    /// WHY: When all committee members except the producer are synthetic padding,
+    /// BFT finality can never be reached because synthetics can't sign. This
+    /// counter lets the slot timer auto-finalize when real_members <= 1.
+    real_committee_members: usize,
     /// Recent finalized blocks cache for sync protocol.
     /// WHY: When a new peer connects, we broadcast our recent blocks so they
     /// can catch up without a full request-response protocol. Capped at 100
@@ -703,11 +708,25 @@ struct GratiaNodeInner {
     /// reorg → timeout → produce → reorg → forever. 60-second cooldown gives
     /// the sync protocol time to deliver blocks and catch us up.
     last_reorg_at: Option<std::time::Instant>,
+    /// WHY: Prevents block production until peer discovery and chain sync
+    /// are complete. Without this, both phones produce divergent chains
+    /// before discovering each other via the bootstrap node, creating
+    /// permanent forks that trigger infinite reorg loops. Set to true
+    /// after the 30-second discovery phase completes (either synced with
+    /// peers, or no peers found and we're solo).
+    initial_sync_done: bool,
     /// Block hash of the pending block awaiting signatures.
     /// WHY: Needed to match incoming ValidatorSignatureReceived events to our
     /// pending block. If the hash doesn't match, the signature is for a different
     /// block (possibly from a fork) and should be ignored.
     pending_block_hash: Option<[u8; 32]>,
+    /// Count of consecutive blocks that expired without BFT finality.
+    /// WHY: When WiFi drops silently, QUIC connections don't close cleanly and
+    /// the node doesn't know peers are gone. Blocks keep expiring because no
+    /// co-signatures arrive. After 3 consecutive expirations (~36 seconds), we
+    /// assume peers are unreachable and rebuild to solo mode so blocks can
+    /// auto-finalize again. Reset to 0 whenever a block reaches BFT finality.
+    consecutive_bft_expirations: u32,
 
     // ── Live sensor cache for VM host functions ─────────────────────────
     // WHY: Smart contracts access sensor data via @location, @proximity,
@@ -903,6 +922,9 @@ impl GratiaNode {
             user_stopped_mining: false,
             pending_broadcast_block: None,
             known_peer_nodes: Vec::new(),
+            real_committee_members: 1,
+            initial_sync_done: false,
+            consecutive_bft_expirations: 0,
             recent_blocks: VecDeque::with_capacity(100),
             chain_persistence: Some(ChainPersistence::new(&data_dir)),
             mempool: Vec::new(),
@@ -1514,7 +1536,7 @@ impl GratiaNode {
     /// data, generates the PoL attestation, and resets the sensor buffer.
     ///
     /// Returns `true` if the day was valid (all PoL parameters met).
-    pub fn finalize_day(&self) -> Result<bool, FfiError> {
+    pub fn finalize_day(&self, epoch_day: u32) -> Result<bool, FfiError> {
         let mut inner = self.lock_inner()?;
 
         // Feed the buffered sensor data into the PoL manager.
@@ -1553,7 +1575,7 @@ impl GratiaNode {
             inner.pol.record_charge_event();
         }
 
-        let is_valid = inner.pol.finalize_day();
+        let is_valid = inner.pol.finalize_day(epoch_day);
 
         // Persist PoL state (consecutive days, total days, onboarding status).
         // WHY: Without this, the trust tier resets on every app restart.
@@ -1683,6 +1705,13 @@ impl GratiaNode {
         let node_id = self.get_node_id_or_default(&inner);
 
         let mut net_config = NetworkConfig::new(node_id);
+        // WHY: Persist libp2p identity across restarts so the PeerId is stable.
+        // Without this, each restart creates a new PeerId, causing peers to see
+        // us as a new node — triggering committee rebuilds and chain resets.
+        let data_dir = inner.chain_persistence
+            .as_ref()
+            .map(|p| p.data_dir().to_string());
+        net_config.data_dir = data_dir;
         // WHY: Use the caller-specified port. Port 0 lets the OS pick a free port,
         // which is the default for mobile (avoids port conflicts).
         net_config.transport.listen_addresses =
@@ -1695,8 +1724,10 @@ impl GratiaNode {
         // on the same LAN still find each other via mDNS.
         net_config.bootstrap_peers = vec![
             // WHY: Peer ID updated 2026-03-29 — server regenerated its key.
-            // Old ID (12D3KooWH21i...) caused "Unexpected peer ID" dial errors.
-            "/ip4/45.77.95.111/udp/9000/quic-v1/p2p/12D3KooWMVsRYkWa8WvsQhnekx1SXQf6pz73CKPhaJJpJSzfFY61".to_string(),
+            // WHY: PeerId updated 2026-03-31 — bootstrap now uses persistent
+            // identity (saved to /opt/gratia-bootstrap/libp2p_identity.key).
+            // This PeerId will survive server restarts.
+            "/ip4/45.77.95.111/udp/9000/quic-v1/p2p/12D3KooWRUqRqDGpQwLtxMP6iGfKEjZYWnkgkiW5BLPyxAeB8gLF".to_string(),
         ];
 
         let mut network = NetworkManager::new(net_config);
@@ -1723,17 +1754,22 @@ impl GratiaNode {
 
     /// Stop the peer-to-peer network layer.
     pub fn stop_network(&self) -> Result<(), FfiError> {
-        let mut inner = self.lock_inner()?;
+        // WHY: Extract network from inner and drop the lock BEFORE calling
+        // block_on. Holding the mutex during block_on can deadlock if the
+        // async task needs to acquire the same lock.
+        let mut taken_network = {
+            let mut inner = self.lock_inner()?;
+            inner.network_event_rx = None;
+            inner.pending_network_events.clear();
+            inner.listen_address = None;
+            inner.network.take()
+        };
 
-        if let Some(mut network) = inner.network.take() {
+        if let Some(ref mut network) = taken_network {
             self.runtime.block_on(async {
                 let _ = network.stop().await;
             });
         }
-
-        inner.network_event_rx = None;
-        inner.pending_network_events.clear();
-        inner.listen_address = None;
 
         info!("FFI: network stopped");
         Ok(())
@@ -1751,10 +1787,11 @@ impl GratiaNode {
             reason: "network not started".into(),
         })?;
 
-        rust_log("network is present, calling dial_peer...");
-        self.runtime.block_on(async {
-            network.dial_peer(&addr).await
-        }).map_err(|e| {
+        // WHY: Use non-blocking try_dial_peer_sync instead of block_on(dial_peer).
+        // Holding the mutex lock while calling block_on can deadlock if the async
+        // task tries to acquire the same lock.
+        rust_log("network is present, calling try_dial_peer_sync...");
+        network.try_dial_peer_sync(&addr).map_err(|e| {
             rust_log(&format!("dial_peer FAILED: {}", e));
             FfiError::NetworkError {
                 reason: e.to_string(),
@@ -1827,9 +1864,9 @@ impl GratiaNode {
             match rx.try_recv() {
                 Ok(event) => {
                     let ffi_event = match event {
-                        NetworkEvent::PeerConnected { peer_id, .. } => {
+                        NetworkEvent::PeerConnected { peer_id, is_inbound, .. } => {
                             if let Some(network) = &mut inner.network {
-                                network.on_peer_connected(peer_id, true);
+                                network.on_peer_connected(peer_id, is_inbound);
                             }
                             // WHY: When a new peer connects, broadcast our recent
                             // blocks so they can catch up. This is the sync protocol
@@ -1858,10 +1895,13 @@ impl GratiaNode {
                                 info!("Sync: new peer connected, {} cached blocks broadcast", blocks_to_sync);
                             }
 
-                            // WHY: Re-announce our node to newly connected peers so
-                            // they discover us for committee selection. Without this,
-                            // a peer that connects after our initial announcement
-                            // would never learn about our node.
+                            // WHY: Announce directly to the newly connected peer,
+                            // bypassing gossipsub. When a peer first connects, the
+                            // gossipsub mesh hasn't formed yet (takes 5+ seconds),
+                            // so gossipsub.publish() silently drops the message.
+                            // DirectAnnounce sends via gossipsub AND emits a local
+                            // event, guaranteeing the other phone's FFI layer sees
+                            // it and rebuilds the committee.
                             if inner.consensus.is_some() {
                                 if let (Some(ref network), Ok(sk_bytes)) = (
                                     &inner.network,
@@ -1872,14 +1912,14 @@ impl GratiaNode {
                                     let announcement = NodeAnnouncement {
                                         node_id: local_node_id,
                                         vrf_pubkey_bytes: vrf_pk.bytes,
-                                        presence_score: 100, // WHY: Demo score, same as start_consensus
+                                        presence_score: 100,
                                         pol_days: 90,
                                         timestamp: Utc::now(),
                                     };
-                                    if let Err(e) = network.try_announce_node_sync(&announcement) {
-                                        warn!("Failed to re-announce node on peer connect: {}", e);
+                                    if let Err(e) = network.try_direct_announce(&announcement, peer_id) {
+                                        warn!("Failed to direct-announce on peer connect: {}", e);
                                     } else {
-                                        rust_log("Re-announced node to newly connected peer");
+                                        rust_log("Direct-announced to newly connected peer");
                                     }
                                 }
                             }
@@ -1892,6 +1932,14 @@ impl GratiaNode {
                             if let Some(network) = &mut inner.network {
                                 network.on_peer_disconnected(&peer_id, true);
                             }
+                            // WHY: Don't rebuild committee on disconnect events.
+                            // libp2p prunes duplicate connections (mDNS creates both
+                            // inbound+outbound), firing PeerDisconnected for normal
+                            // connection management. Rebuilding committee here caused
+                            // premature solo transitions after just 16 seconds.
+                            // Instead, the BFT expiration detector (3 consecutive
+                            // timeouts = 36s) is the sole mechanism for detecting
+                            // real peer loss and reverting to solo mode.
                             FfiNetworkEvent::PeerDisconnected {
                                 peer_id: peer_id.to_string(),
                             }
@@ -1899,6 +1947,10 @@ impl GratiaNode {
                         NetworkEvent::BlockReceived(block) => {
                             let height = block.header.height;
                             let producer = hex::encode(block.header.producer.0);
+                            rust_log(&format!(
+                                "BLOCK RECEIVED: height={} producer={}",
+                                height, &producer[..8.min(producer.len())]
+                            ));
                             let block_hash = block.header.hash().ok();
 
                             // WHY: Cache received blocks for sync protocol. When a
@@ -1917,25 +1969,38 @@ impl GratiaNode {
                             }
 
                             let process_result = if let Some(ref mut consensus) = inner.consensus {
+                                let our_h = consensus.current_height();
+                                let our_tip = *consensus.last_finalized_hash();
+                                rust_log(&format!(
+                                    "BLOCK PROCESS: incoming h={} our_h={} our_tip={}",
+                                    height, our_h, &hex::encode(our_tip.0)[..8]
+                                ));
                                 match consensus.process_incoming_block(*block) {
                                     Ok(BlockProcessResult::Accepted) => {
                                         let h = consensus.current_height();
                                         let tip = consensus.last_finalized_hash().0;
+                                        rust_log(&format!("BLOCK ACCEPTED: new_height={}", h));
                                         Some((Some((h, tip)), false))
                                     }
-                                    Ok(BlockProcessResult::Skipped) => Some((None, false)),
+                                    Ok(BlockProcessResult::Skipped) => {
+                                        rust_log(&format!("BLOCK SKIPPED: height={}", height));
+                                        Some((None, false))
+                                    }
                                     Ok(BlockProcessResult::ForkDetected) => {
+                                        rust_log(&format!("BLOCK FORK: height={}", height));
                                         let our_height = consensus.current_height();
                                         // WHY: Check cooldown — don't reorg if we
                                         // already reorged in the last 60 seconds.
                                         // Without this, after rollback every gossip
                                         // block triggers another reorg (infinite loop).
                                         let in_cooldown = inner.last_reorg_at
-                                            .map(|t| t.elapsed().as_secs() < 60)
+                                            .map(|t| t.elapsed().as_secs() < 10)
                                             .unwrap_or(false);
 
                                         if in_cooldown {
-                                            // Skip — let sync protocol catch us up
+                                            // WHY: Short cooldown (10s) after fast-sync to
+                                            // prevent re-triggering on the same gossip burst.
+                                            // After cooldown, normal fork handling resumes.
                                             Some((None, false))
                                         } else if height > our_height {
                                             rust_log(&format!(
@@ -1952,6 +2017,7 @@ impl GratiaNode {
                                         }
                                     }
                                     Err(e) => {
+                                        rust_log(&format!("BLOCK REJECTED: height={} error={}", height, e));
                                         warn!(height = height, error = %e, "Failed to process incoming block");
                                         Some((None, false))
                                     }
@@ -1964,86 +2030,85 @@ impl GratiaNode {
                             let should_reorg = process_result.map(|(_, reorg)| reorg).unwrap_or(false);
                             let block_result = process_result.and_then(|(accepted, _)| accepted);
 
-                            // ── Fork resolution ─────────────────────────────────
+                            // ── Fork resolution: jump to peer's chain tip ──────
+                            // WHY: The peer has a longer chain. Instead of rolling
+                            // back to genesis (which fails because gossip only sends
+                            // the latest block, not the full history), we JUMP to the
+                            // peer's chain tip. We set our height and tip hash to
+                            // match the incoming block, so subsequent blocks from the
+                            // peer will be at our expected height and get Accepted.
+                            //
+                            // Trade-off: we skip intermediate blocks (no transactions
+                            // from blocks we missed). For testnet this is acceptable.
+                            // For mainnet, a full sync protocol (request blocks by
+                            // height range) will fill the gaps.
+                            //
+                            // This is the blockchain equivalent of "fast sync" — jump
+                            // to the tip and validate new blocks going forward.
                             if should_reorg {
                                 let our_height = inner.consensus.as_ref()
                                     .map(|e| e.current_height())
                                     .unwrap_or(0);
 
                                 rust_log(&format!(
-                                    "FORK RESOLUTION: peer has block at height {} (our height={}), initiating reorg",
-                                    height, our_height,
+                                    "FORK RESOLUTION: jumping from height {} to peer's height {} (fast sync)",
+                                    our_height, height,
                                 ));
 
-                                // Step 1: Collect orphaned transactions from state
-                                let orphaned_txs = if let Some(ref sm) = inner.state_manager {
-                                    match sm.revert_to_height(0) {
-                                        Ok(txs) => {
-                                            rust_log(&format!(
-                                                "FORK RESOLUTION: reverted state to genesis, {} orphaned txs",
-                                                txs.len(),
-                                            ));
-                                            txs
-                                        }
-                                        Err(e) => {
-                                            rust_log(&format!("FORK RESOLUTION: revert failed: {}", e));
-                                            Vec::new()
-                                        }
-                                    }
-                                } else { Vec::new() };
-
-                                // Step 2: Roll back consensus engine to genesis
+                                // Jump consensus to the incoming block's height and hash
                                 if let Some(ref mut consensus) = inner.consensus {
-                                    consensus.rollback_to(0, BlockHash([0u8; 32]));
+                                    let tip_hash = block_clone.header.hash()
+                                        .unwrap_or(BlockHash([0u8; 32]));
+                                    consensus.rollback_to(height, tip_hash);
+                                    rust_log(&format!(
+                                        "FORK RESOLUTION: chain tip set to height={} hash={}",
+                                        height, &hex::encode(tip_hash.0)[..8]
+                                    ));
                                 }
 
-                                // Set cooldown to prevent reorg loop
-                                inner.last_reorg_at = Some(std::time::Instant::now());
-
-                                // Step 3: Clear local caches
+                                // Clear pending blocks, caches, and stale broadcast
                                 inner.recent_blocks.clear();
                                 inner.pending_block_hash = None;
                                 inner.pending_block_created_at = None;
+                                inner.pending_broadcast_block = None; // Don't broadcast orphaned block
+                                inner.consecutive_bft_expirations = 0;
 
-                                // Step 4: Re-add orphaned transactions to mempool
-                                let tx_count = orphaned_txs.len();
-                                for tx in orphaned_txs {
-                                    inner.mempool.push(tx);
+                                // WHY: Revert on-chain state and sync wallet from it.
+                                // Mining rewards from our solo-mined blocks need to be
+                                // unwound — those blocks are being replaced by the peer's
+                                // chain. The wallet must reflect on-chain reality.
+                                if let Some(ref sm) = inner.state_manager {
+                                    let _ = sm.revert_to_height(0);
                                 }
-
-                                // Step 5: Update sync manager to request blocks from peer
-                                if let Some(ref mut sync) = inner.sync_manager {
-                                    sync.update_local_state(0, BlockHash([0u8; 32]));
-                                }
-
-                                // Step 6: Persist the rollback
-                                if let Some(ref persistence) = inner.chain_persistence {
-                                    persistence.save(0, &[0u8; 32], inner.blocks_produced);
-                                }
-
-                                // Step 7: Sync wallet balance from state
                                 if let (Some(ref sm), Ok(our_addr)) = (&inner.state_manager, inner.wallet.address()) {
                                     let acct = sm.get_account(&our_addr).unwrap_or_default();
                                     inner.wallet.sync_balance(acct.balance);
                                 }
 
-                                // Step 8: Reset network SyncManager height and trigger sync
-                                // WHY: The network layer's SyncManager still thinks we're
-                                // at the old height. Without resetting it, next_sync_request()
-                                // returns None (thinks we're synced) and we never download
-                                // the peer's chain. This was the missing piece that caused
-                                // all previous fork resolution attempts to fail.
+                                // Update sync managers
+                                let tip_hash = block_clone.header.hash()
+                                    .unwrap_or(BlockHash([0u8; 32]));
+                                if let Some(ref mut sync) = inner.sync_manager {
+                                    sync.update_local_state(height, tip_hash);
+                                }
                                 if let Some(ref network) = inner.network {
-                                    if let Err(e) = network.try_reset_local_height(0, BlockHash([0u8; 32])) {
-                                        rust_log(&format!("FORK RESOLUTION: reset height failed: {}", e));
-                                    } else {
-                                        rust_log("FORK RESOLUTION: network SyncManager reset to height 0, requesting blocks");
-                                    }
+                                    let _ = network.try_reset_local_height(height, tip_hash);
                                 }
 
+                                // Persist the new chain state
+                                if let Some(ref persistence) = inner.chain_persistence {
+                                    persistence.save(height, &tip_hash.0, inner.blocks_produced);
+                                }
+
+                                // Set cooldown to prevent re-triggering
+                                inner.last_reorg_at = Some(std::time::Instant::now());
+
+                                // Cache the block we just jumped to
+                                inner.recent_blocks.push_back(block_clone.clone());
+
                                 rust_log(&format!(
-                                    "FORK RESOLUTION: rolled back to genesis, {} orphaned txs re-queued, awaiting sync",
-                                    tx_count,
+                                    "FORK RESOLUTION: fast-synced to height {}, ready for shared chain",
+                                    height,
                                 ));
                             }
 
@@ -2100,7 +2165,11 @@ impl GratiaNode {
                                                 // Debit sender
                                                 let mut sender_acct = sm.get_account(&sender_addr).unwrap_or_default();
                                                 let total = amount + tx.fee;
-                                                if sender_acct.balance >= total {
+                                                // WHY: Check both balance AND nonce before
+                                                // applying. Without nonce check, transactions
+                                                // with wrong nonces get applied, desynchronizing
+                                                // the account's nonce from reality.
+                                                if sender_acct.balance >= total && sender_acct.nonce == tx.nonce {
                                                     sender_acct.balance -= total;
                                                     sender_acct.nonce += 1;
                                                     let _ = sm.db().put_account(&sender_addr, &sender_acct);
@@ -2121,15 +2190,20 @@ impl GratiaNode {
                                             _ => { applied += 1; }
                                         }
                                     }
-                                    // Update local wallet balance for incoming transfers
+                                    // WHY: Sync wallet FROM on-chain state after applying
+                                    // transfers. Never add to the wallet cache directly —
+                                    // on-chain state is the source of truth. Adding to
+                                    // wallet.balance() would diverge if the cache is stale.
                                     if incoming_lux > 0 {
-                                        let current = inner.wallet.balance();
-                                        inner.wallet.sync_balance(current + incoming_lux);
-                                        rust_log(&format!(
-                                            "Received {} Lux ({} GRAT) — new wallet balance: {} Lux",
-                                            incoming_lux, incoming_lux / 1_000_000,
-                                            current + incoming_lux
-                                        ));
+                                        if let (Some(ref sm2), Ok(our_addr2)) = (&inner.state_manager, inner.wallet.address()) {
+                                            let acct = sm2.get_account(&our_addr2).unwrap_or_default();
+                                            inner.wallet.sync_balance(acct.balance);
+                                            rust_log(&format!(
+                                                "Received {} Lux ({} GRAT) — wallet synced to on-chain: {} Lux",
+                                                incoming_lux, incoming_lux / 1_000_000,
+                                                acct.balance
+                                            ));
+                                        }
                                     }
                                     if applied > 0 {
                                         rust_log(&format!(
@@ -2142,20 +2216,22 @@ impl GratiaNode {
                                 // WHY: Credit mining reward for received blocks to the
                                 // block producer's account in our state, so the explorer
                                 // and balance queries reflect the true state of the chain.
-                                // Uses active_miners from the block header (reported by
-                                // the producer) to calculate the per-miner share.
+                                // SKIP if we're the producer — we already credited
+                                // ourselves during finalization. Double-crediting would
+                                // inflate our balance.
                                 if let Some(ref sm) = inner.state_manager {
                                     let producer_addr = gratia_core::types::Address(block_clone.header.producer.0);
-                                    // WHY: Use the block's active_miners field instead of
-                                    // hardcoded estimate. The producer reports how many miners
-                                    // were active when the block was produced. Minimum 1 to
-                                    // prevent division by zero.
-                                    let active_miners = (block_clone.header.active_miners as u64).max(1);
-                                    let reward: Lux = EmissionSchedule
-                                        ::per_miner_block_reward_lux(new_height, active_miners);
-                                    let mut acct = sm.get_account(&producer_addr).unwrap_or_default();
-                                    acct.balance += reward;
-                                    let _ = sm.db().put_account(&producer_addr, &acct);
+                                    let our_addr = inner.wallet.address().ok();
+                                    let is_self = our_addr.as_ref() == Some(&producer_addr);
+
+                                    if !is_self {
+                                        let active_miners = (block_clone.header.active_miners as u64).max(1);
+                                        let reward: Lux = EmissionSchedule
+                                            ::per_miner_block_reward_lux(new_height, active_miners);
+                                        let mut acct = sm.get_account(&producer_addr).unwrap_or_default();
+                                        acct.balance += reward;
+                                        let _ = sm.db().put_account(&producer_addr, &acct);
+                                    }
                                 }
 
                                 // Cache for sync protocol
@@ -2181,12 +2257,17 @@ impl GratiaNode {
                             // a valid block from another producer, sign it and
                             // broadcast our signature. This is how non-producing
                             // committee members contribute to BFT finality.
+                            // CRITICAL: Only sign blocks that were ACCEPTED (build
+                            // on our chain). Signing ForkDetected or Skipped blocks
+                            // would give BFT finality to a competing fork, causing
+                            // permanent chain divergence.
                             {
+                                let block_was_accepted = block_result.is_some();
                                 let is_committee_member = inner.consensus.as_ref()
                                     .map(|e| e.is_committee_member())
                                     .unwrap_or(false);
 
-                                if is_committee_member {
+                                if is_committee_member && block_was_accepted {
                                     if let Ok(sk_bytes) = inner.wallet.signing_key_bytes() {
                                         let keypair = gratia_core::crypto::Keypair::from_secret_key_bytes(&sk_bytes);
                                         let sign_result = inner.consensus.as_ref()
@@ -2416,19 +2497,104 @@ impl GratiaNode {
                                     // and both phones produce for the same slot.
                                     all_eligible.sort_by(|a, b| a.node_id.0.cmp(&b.node_id.0));
 
+                                    let prev_real_members = inner.real_committee_members;
+
                                     rust_log(&format!(
-                                        "Rebuilding committee: {} real + {} synthetic = {} total",
+                                        "Rebuilding committee: {} real + {} synthetic = {} total (was {} real)",
                                         real_count,
                                         all_eligible.len() - real_count,
                                         all_eligible.len(),
+                                        prev_real_members,
                                     ));
 
                                     let epoch_seed = [0xAB; 32]; // Demo seed
-                                    // WHY: Now borrow consensus mutably — all other field
-                                    // accesses are done, so no borrow conflict.
+                                    // WHY: Update real_committee_members AFTER successful
+                                    // init. If init fails, the old count stays correct.
                                     if let Some(ref mut consensus) = inner.consensus {
-                                        if let Err(e) = consensus.initialize_committee(&all_eligible, &epoch_seed, 0, 0) {
-                                            warn!("Failed to rebuild committee: {}", e);
+                                        match consensus.initialize_committee(&all_eligible, &epoch_seed, 0, 0) {
+                                            Ok(()) => {
+                                                // WHY: Only update after successful init
+                                                inner.real_committee_members = real_count;
+                                            }
+                                            Err(e) => {
+                                                warn!("Failed to rebuild committee: {}", e);
+                                            }
+                                        }
+                                    }
+
+                                    // ── Solo→Multi transition ──────────────────────────
+                                    // WHY: When transitioning from solo (1 real member) to
+                                    // multi-node (2+ real members), DON'T reset to genesis.
+                                    // Instead, let the normal block exchange handle chain
+                                    // convergence:
+                                    // - If the peer has a longer chain, their blocks will
+                                    //   trigger ForkDetected → fork resolution adopts theirs
+                                    // - If we have a longer chain, the peer syncs ours via
+                                    //   the recent_blocks broadcast on PeerConnected
+                                    // - If both start from genesis (height 0), the stagger
+                                    //   mechanism ensures one produces first
+                                    //
+                                    // Resetting to genesis was too aggressive — it threw
+                                    // away valid solo-mined blocks every time a peer joined.
+                                    if prev_real_members <= 1 && real_count > 1 {
+                                        let our_height = inner.consensus.as_ref()
+                                            .map(|e| e.current_height())
+                                            .unwrap_or(0);
+
+                                        // WHY: When two solo chains reconnect, they're
+                                        // at similar heights with incompatible parent
+                                        // hashes. Neither triggers fast-sync because
+                                        // neither is clearly "ahead." Deterministic
+                                        // tiebreaker: the node with the HIGHER node_id
+                                        // yields — resets to genesis and syncs the
+                                        // other's chain. The lower node_id keeps its
+                                        // chain (it "wins"). This ensures exactly ONE
+                                        // node resets, not both, and convergence is
+                                        // guaranteed.
+                                        if our_height > 0 {
+                                            let our_id = inner.wallet.address()
+                                                .map(|a| a.0)
+                                                .unwrap_or([0xFF; 32]);
+                                            let should_yield = our_id > peer_node_id.0;
+
+                                            if should_yield {
+                                                rust_log(&format!(
+                                                    "SOLO→MULTI: yielding chain (height {}) — our node_id is higher, peer wins",
+                                                    our_height,
+                                                ));
+
+                                                // Reset to genesis — peer's chain will be adopted via fast-sync
+                                                if let Some(ref mut consensus) = inner.consensus {
+                                                    consensus.rollback_to(0, BlockHash([0u8; 32]));
+                                                }
+                                                if let Some(ref sm) = inner.state_manager {
+                                                    let _ = sm.revert_to_height(0);
+                                                }
+                                                if let (Some(ref sm), Ok(our_addr)) = (&inner.state_manager, inner.wallet.address()) {
+                                                    let acct = sm.get_account(&our_addr).unwrap_or_default();
+                                                    inner.wallet.sync_balance(acct.balance);
+                                                }
+                                                if let Some(ref network) = inner.network {
+                                                    let _ = network.try_reset_local_height(0, BlockHash([0u8; 32]));
+                                                }
+                                                inner.recent_blocks.clear();
+                                                inner.pending_block_hash = None;
+                                                inner.pending_block_created_at = None;
+                                                inner.pending_broadcast_block = None;
+                                                inner.consecutive_bft_expirations = 0;
+                                                // WHY: Reset blocks_produced — solo blocks
+                                                // are being discarded, so the count should
+                                                // reflect only blocks on the canonical chain.
+                                                inner.blocks_produced = 0;
+                                                if let Some(ref persistence) = inner.chain_persistence {
+                                                    persistence.save(0, &[0u8; 32], 0);
+                                                }
+                                            } else {
+                                                rust_log(&format!(
+                                                    "SOLO→MULTI: keeping chain (height {}) — our node_id is lower, we win",
+                                                    our_height,
+                                                ));
+                                            }
                                         }
                                     }
                                 }
@@ -2514,10 +2680,21 @@ impl GratiaNode {
                                 // If finality reached, finalize the block now.
                                 if finalized {
                                     rust_log(&format!("BFT: finality reached for height {}!", sig_height));
-                                    match inner.consensus.as_mut().unwrap().finalize_pending_block() {
+                                    inner.consecutive_bft_expirations = 0;
+                                    let finalize_result = match inner.consensus.as_mut() {
+                                        Some(engine) => engine.finalize_pending_block(),
+                                        None => {
+                                            rust_log("BFT: consensus engine missing during finalize");
+                                            continue;
+                                        }
+                                    };
+                                    match finalize_result {
                                         Ok(finalized_block) => {
                                             let fh = finalized_block.header.height;
-                                            inner.blocks_produced += 1;
+                                            // WHY: DON'T increment blocks_produced here.
+                                            // It was already incremented when the block was
+                                            // produced in the slot timer. Incrementing again
+                                            // causes double-counting.
                                             let new_h = inner.consensus.as_ref().map(|e| e.current_height()).unwrap_or(0);
                                             rust_log(&format!("BLOCK FINALIZED (BFT) height={} chain={}", fh, new_h));
 
@@ -2554,17 +2731,23 @@ impl GratiaNode {
                                                 inner.recent_blocks.pop_front();
                                             }
 
-                                            // Credit mining reward.
+                                            // WHY: Credit reward ONLY here (BFT path) — the
+                                            // slot timer path only credits for solo blocks
+                                            // (real_members > 1 check). This is the single
+                                            // source of truth for BFT-finalized block rewards.
+                                            // blocks_produced is NOT incremented here (already
+                                            // done at production time in slot timer).
                                             {
                                                 let active_miners = 1u64.max(inner.staking.staker_count() as u64).max(1);
                                                 let reward: Lux = gratia_core::emission::EmissionSchedule
                                                     ::per_miner_block_reward_lux(fh, active_miners);
-                                                let current = inner.wallet.balance();
-                                                inner.wallet.sync_balance(current + reward);
+                                                // Update on-chain state FIRST (source of truth)
                                                 if let (Some(ref sm), Ok(our_addr)) = (&inner.state_manager, inner.wallet.address()) {
                                                     let mut acct = sm.get_account(&our_addr).unwrap_or_default();
                                                     acct.balance += reward;
                                                     let _ = sm.db().put_account(&our_addr, &acct);
+                                                    // Sync wallet FROM on-chain state
+                                                    inner.wallet.sync_balance(acct.balance);
                                                 }
                                             }
 
@@ -2814,6 +2997,8 @@ impl GratiaNode {
         // WHY: Sort by node_id so all phones build the committee in the same
         // canonical order, regardless of which phone is "self" vs "peer".
         all_eligible.sort_by(|a, b| a.node_id.0.cmp(&b.node_id.0));
+
+        inner.real_committee_members = real_count;
 
         rust_log(&format!(
             "Committee: {} real + {} synthetic = {} total, local score={}",
@@ -4141,15 +4326,175 @@ fn consensus_status(engine: &ConsensusEngine, blocks_produced: u64) -> FfiConsen
 /// it produces an empty block (no transactions for the demo), serializes it,
 /// and broadcasts it to the network.
 async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
-    // WHY: Wait 10 seconds before producing any blocks. This gives mDNS
-    // time to discover peers (~1-2 seconds) and exchange NodeAnnouncements
-    // so the committee includes all connected phones. Without this delay,
-    // both phones produce block 1 simultaneously with different hashes
-    // (startup race), causing immediate chain divergence that fork
-    // resolution can't cleanly fix. 10 seconds is conservative — mDNS
-    // typically discovers peers within 1-2 seconds on the same WiFi.
-    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
-    rust_log("Slot timer: startup delay complete, beginning block production");
+    // ── Peer Discovery & Initial Sync Phase (up to 30 seconds) ─────────
+    // WHY: Wait for peer discovery and chain sync BEFORE producing any
+    // blocks. Without this, both phones produce divergent chains before
+    // discovering each other via the bootstrap node, creating permanent
+    // forks that trigger infinite reorg loops.
+    //
+    // During this window:
+    // - libp2p connects to the bootstrap node via QUIC (~2-5s)
+    // - Gossipsub mesh forms and NodeAnnouncements propagate (~5-10s)
+    // - MiningService.pollNetworkEvents() runs every 500ms, processing
+    //   PeerConnected and NodeAnnounced events (rebuilding the committee)
+    // - Any blocks from existing peers arrive via gossip and get applied
+    //
+    // After this window:
+    // - If peers found + blocks received: we're synced, start producing
+    // - If peers found + no blocks: fresh network, VRF handles ordering
+    // - If no peers: solo mode (bootstrap, like Satoshi mining alone)
+    {
+        let discovery_start = std::time::Instant::now();
+        let discovery_timeout = std::time::Duration::from_secs(30);
+        let check_interval = tokio::time::Duration::from_secs(2);
+        // WHY: Wait at least 10 seconds regardless, to give gossipsub
+        // mesh time to form. Without this minimum, a fast local network
+        // might pass the "has peers" check before the mesh is ready to
+        // relay blocks, causing the node to start producing before it
+        // could have received the peer's chain.
+        let min_wait = std::time::Duration::from_secs(10);
+
+        rust_log("Slot timer: starting 30s peer discovery phase");
+
+        loop {
+            tokio::time::sleep(check_interval).await;
+
+            let (peer_count, has_known_peers, our_height) = {
+                let guard = match inner.lock() {
+                    Ok(g) => g,
+                    Err(_) => {
+                        error!("Slot timer: mutex poisoned during discovery");
+                        return;
+                    }
+                };
+                let pc = guard.network.as_ref()
+                    .map(|n| n.connected_peer_count())
+                    .unwrap_or(0);
+                let kp = !guard.known_peer_nodes.is_empty();
+                let h = guard.consensus.as_ref()
+                    .map(|e| e.current_height())
+                    .unwrap_or(0);
+                (pc, kp, h)
+            };
+
+            let elapsed = discovery_start.elapsed();
+
+            // WHY: If we've synced blocks from a peer (height > 0 from
+            // a persisted chain or received gossip blocks), AND we've
+            // discovered real peers, AND minimum wait has passed, we're
+            // ready. The peer's chain is our starting point.
+            if has_known_peers && our_height > 0 && elapsed >= min_wait {
+                rust_log(&format!(
+                    "Slot timer: synced with peers at height {}, peers={}, elapsed={}s — starting production",
+                    our_height, peer_count, elapsed.as_secs()
+                ));
+                break;
+            }
+
+            // WHY: If we've found peers via NodeAnnouncements but haven't
+            // received any blocks yet, and min_wait has passed, give a few
+            // more seconds for blocks to arrive via gossip. If still no
+            // blocks by 20s, both phones are starting fresh — safe to begin
+            // since the committee and VRF will handle slot assignment.
+            if has_known_peers && our_height == 0 && elapsed >= min_wait {
+                // Wait up to 20s total for blocks from peers
+                if elapsed >= std::time::Duration::from_secs(20) {
+                    rust_log(&format!(
+                        "Slot timer: peers found but no blocks received (fresh network), peers={}, elapsed={}s — starting production",
+                        peer_count, elapsed.as_secs()
+                    ));
+                    break;
+                }
+                // Otherwise keep waiting for blocks
+                continue;
+            }
+
+            // WHY: Dynamic timeout based on peer state. If transport-level
+            // peers are connected (bootstrap, mDNS) but we haven't received
+            // a NodeAnnounced yet (known=false), extend the wait to 60s.
+            // Gossipsub mesh formation takes 5-10 seconds after connection,
+            // and the periodic re-announcement runs every 32s. The 30s
+            // timeout was expiring just before the first announcement arrived.
+            let effective_timeout = if peer_count > 0 && !has_known_peers {
+                // Peers connected but no announcements yet — wait longer
+                std::time::Duration::from_secs(60)
+            } else {
+                discovery_timeout // 30s default
+            };
+
+            if elapsed >= effective_timeout {
+                if has_known_peers {
+                    rust_log(&format!(
+                        "Slot timer: discovery complete (pc={}, known=true), height={} — starting production",
+                        peer_count, our_height
+                    ));
+                } else if peer_count > 0 {
+                    rust_log(&format!(
+                        "Slot timer: peers connected but no announcements after {}s (pc={}), starting solo",
+                        elapsed.as_secs(), peer_count
+                    ));
+                } else {
+                    rust_log("Slot timer: no peers after 30s — starting solo production (bootstrap mode)");
+                }
+                break;
+            }
+        }
+
+        // Mark initial sync as complete so the main loop can produce blocks.
+        let stagger_slots = {
+            let mut guard = match inner.lock() {
+                Ok(g) => g,
+                Err(_) => {
+                    error!("Slot timer: mutex poisoned after discovery");
+                    return;
+                }
+            };
+            guard.initial_sync_done = true;
+
+            // WHY: When multiple nodes start simultaneously on a fresh network
+            // (height=0, 2+ real members), all of them exit the discovery phase
+            // at roughly the same time and race to produce block 1. This causes
+            // both to produce competing blocks → fork. To prevent this, stagger
+            // startup: the first node in canonical committee order (sorted by
+            // node_id) starts immediately; the second waits 1 slot (4s). The
+            // first node produces and broadcasts block 1 before the second tries.
+            let stagger = if guard.real_committee_members > 1
+                && guard.consensus.as_ref().map(|e| e.current_height()).unwrap_or(0) == 0
+            {
+                // Am I the lowest node_id in the committee?
+                let our_id = guard.wallet.address()
+                    .map(|a| NodeId(a.0))
+                    .unwrap_or(NodeId([0xFF; 32]));
+                let first_peer_id = guard.known_peer_nodes.first()
+                    .map(|p| p.node_id);
+
+                if let Some(peer_id) = first_peer_id {
+                    if our_id.0 > peer_id.0 {
+                        // We're NOT first — wait 1 slot so the peer produces first
+                        rust_log("Slot timer: staggering start by 1 slot (not first in committee order)");
+                        1u64
+                    } else {
+                        // We ARE first — start immediately
+                        rust_log("Slot timer: first in committee order, starting immediately");
+                        0
+                    }
+                } else { 0 }
+            } else { 0 };
+
+            rust_log(&format!(
+                "Slot timer: initial sync complete — real_committee_members={}, height={}, stagger={}",
+                guard.real_committee_members,
+                guard.consensus.as_ref().map(|e| e.current_height()).unwrap_or(0),
+                stagger,
+            ));
+            stagger
+        };
+
+        // Apply stagger delay if needed
+        if stagger_slots > 0 {
+            tokio::time::sleep(tokio::time::Duration::from_secs(4 * stagger_slots)).await;
+        }
+    }
 
     // WHY: 4-second slot time, middle of the 3-5 second target range.
     let slot_duration = tokio::time::Duration::from_secs(4);
@@ -4265,6 +4610,46 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                     ));
                 }
             }
+
+            // ── Periodic peer count reconciliation ──────────────────────
+            // WHY: When WiFi drops without a clean disconnect, the atomic
+            // peer counter stays stale. Reconcile it with the ConnectionManager's
+            // actual peer set every 32 seconds to keep the UI accurate.
+            if let Some(ref network) = guard.network {
+                network.reconcile_peer_count();
+            }
+
+            // ── Periodic node re-announcement ──────────────────────────
+            // WHY: Phones connect to the bootstrap relay, not directly to
+            // each other. The bootstrap relays gossipsub messages but does
+            // NOT emit PeerConnected events to existing peers when a new
+            // phone joins. So if Phone A connects, announces, then Phone B
+            // connects later, Phone B never receives Phone A's announcement.
+            // Re-announcing every ~32 seconds ensures newly-connected peers
+            // discover us for committee selection, even if they missed our
+            // initial announcement.
+            if guard.consensus.is_some() {
+                if let (Some(ref network), Ok(sk_bytes)) = (
+                    &guard.network,
+                    guard.wallet.signing_key_bytes(),
+                ) {
+                    let local_node_id = guard.wallet.address()
+                        .map(|addr| NodeId(addr.0))
+                        .unwrap_or(NodeId([0u8; 32]));
+                    let vrf_pk = VrfSecretKey::from_ed25519_bytes(&sk_bytes).public_key();
+                    let announcement = NodeAnnouncement {
+                        node_id: local_node_id,
+                        vrf_pubkey_bytes: vrf_pk.bytes,
+                        presence_score: 100, // Demo score
+                        pol_days: 90,
+                        timestamp: Utc::now(),
+                    };
+                    if let Err(e) = network.try_announce_node_sync(&announcement) {
+                        // Channel full or network not running — not critical
+                        tracing::trace!("Periodic re-announce failed: {}", e);
+                    }
+                }
+            }
         }
 
         // WHY: We check consensus existence and advance the slot in a
@@ -4297,11 +4682,25 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
         // signatures. No BFT finality = block is invalid and discarded.
         // This is how Bitcoin works — if you can't prove your block is
         // valid (via PoW hash / BFT sigs), it doesn't count.
+        let mut bft_incremented_this_tick = false;
         {
             let has_pending = guard.pending_block_created_at.is_some();
             if has_pending {
+                // WHY: Scale BFT timeout with committee size. With 2-3 nodes
+                // on fast WiFi, signatures arrive in <1 second. With a 21-node
+                // committee across global mobile networks (3G, spotty WiFi,
+                // cross-continent relay hops), the 14th signature may take
+                // 30+ seconds. Formula: base 10 seconds + 2 seconds per real
+                // committee member. This gives:
+                //   2 members → 14s (testnet on WiFi — comfortable)
+                //   5 members → 20s (small testnet)
+                //  21 members → 52s (mainnet — under 1 minute for global mobile)
+                // The 2x multiplier accounts for round-trip latency: block
+                // broadcast to validator + signature broadcast back. Each hop
+                // can take 1-5s on congested 3G networks.
+                let bft_timeout_secs = 10 + (2 * guard.real_committee_members as u64);
                 let expired = guard.pending_block_created_at
-                    .map(|t| t.elapsed().as_secs() >= 12)
+                    .map(|t| t.elapsed().as_secs() >= bft_timeout_secs)
                     .unwrap_or(false);
 
                 if expired {
@@ -4313,9 +4712,11 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                         .map(|e| e.pending_finality_threshold())
                         .unwrap_or(0);
 
+                    guard.consecutive_bft_expirations += 1;
+                    bft_incremented_this_tick = true;
                     rust_log(&format!(
-                        "BFT EXPIRED: discarding block with {}/{} sigs (insufficient finality)",
-                        sig_count, threshold
+                        "BFT EXPIRED: discarding block with {}/{} sigs (insufficient finality) — {} consecutive",
+                        sig_count, threshold, guard.consecutive_bft_expirations
                     ));
 
                     // WHY: Clear the pending block without finalizing it.
@@ -4325,23 +4726,144 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                     }
                     guard.pending_block_hash = None;
                     guard.pending_block_created_at = None;
+
+                    // ── Silent peer loss detection ─────────────────────
+                    // WHY: After 3 consecutive BFT expirations (~36 seconds),
+                    // peers are likely gone (WiFi dropped, app killed, etc.)
+                    // but ConnectionClosed never fired. Rebuild committee to
+                    // solo mode so blocks can auto-finalize again.
+                    if guard.consecutive_bft_expirations >= 2 && guard.real_committee_members > 1 {
+                        rust_log(&format!(
+                            "PEER LOSS DETECTED: {} consecutive BFT expirations — reverting to solo mode",
+                            guard.consecutive_bft_expirations
+                        ));
+                        guard.known_peer_nodes.clear();
+                        guard.real_committee_members = 1;
+                        guard.consecutive_bft_expirations = 0;
+
+                        // Rebuild committee as solo
+                        let sk_bytes_opt = guard.wallet.signing_key_bytes().ok();
+                        let local_node_id = guard.wallet.address()
+                            .map(|a| NodeId(a.0))
+                            .unwrap_or(NodeId([0u8; 32]));
+                        let local_score = if guard.presence_score > 0 { guard.presence_score } else { 75u8 };
+
+                        if let (Some(ref mut consensus), Some(ref sk_bytes)) = (
+                            &mut guard.consensus,
+                            &sk_bytes_opt,
+                        ) {
+                            let vrf_pubkey = VrfSecretKey::from_ed25519_bytes(sk_bytes).public_key();
+                            let mut all_eligible = vec![EligibleNode {
+                                node_id: local_node_id,
+                                vrf_pubkey,
+                                presence_score: local_score,
+                                has_valid_pol: true,
+                                meets_minimum_stake: true,
+                                pol_days: 90,
+                            }];
+                            for i in 1..=2u8 {
+                                let mut fake_id = [0u8; 32];
+                                fake_id[0] = i;
+                                fake_id[31] = 0xFF;
+                                all_eligible.push(EligibleNode {
+                                    node_id: NodeId(fake_id),
+                                    vrf_pubkey: VrfSecretKey::from_ed25519_bytes(&[i; 32]).public_key(),
+                                    presence_score: 40,
+                                    has_valid_pol: true,
+                                    meets_minimum_stake: true,
+                                    pol_days: 90,
+                                });
+                            }
+                            all_eligible.sort_by(|a, b| a.node_id.0.cmp(&b.node_id.0));
+                            let epoch_seed = [0xAB; 32];
+                            if let Err(e) = consensus.initialize_committee(&all_eligible, &epoch_seed, 0, 0) {
+                                warn!("Failed to rebuild solo committee: {}", e);
+                            } else {
+                                rust_log("Committee rebuilt: 1 real + 2 synthetic (solo mode after BFT timeout)");
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        // WHY: Don't produce blocks without peers. A solo phone produces
-        // blocks that no one can co-sign, so they'll never reach BFT
-        // finality and will be discarded. This prevents fake chains from
-        // accumulating during offline periods. Like Bitcoin: you CAN mine
-        // solo, but without the network your blocks are worthless.
-        if should_produce {
+        // WHY: Safety net — don't produce if initial sync hasn't completed.
+        // Normally initial_sync_done is true by the time we reach here (set
+        // after the 30s discovery phase), but NodeAnnounced can reset it
+        // during a solo→multi transition to force re-sync.
+        if should_produce && !guard.initial_sync_done {
+            should_produce = false;
+            // Only log every 8th slot to avoid spam
+            if slot_count % 8 == 0 {
+                rust_log("Skipping block production — initial sync not complete");
+            }
+        }
+
+        // WHY: In bootstrap mode (only synthetic committee members), a solo
+        // phone CAN mine — like Satoshi mining Bitcoin's genesis block alone.
+        // Once real peers exist (real_committee_members > 1), we require at
+        // least one peer connection so BFT signatures can be exchanged.
+        // If we've been unable to reach peers for 3 consecutive attempts
+        // (~12 seconds), fall back to solo mode. This prevents the deadlock
+        // where committee=2 + peers=0 = skip forever (BFT expiration never
+        // fires because no blocks are produced to expire).
+        if should_produce && guard.real_committee_members > 1 {
             let has_peers = guard.network.as_ref()
                 .map(|n| n.connected_peer_count() > 0)
                 .unwrap_or(false);
             if !has_peers {
-                should_produce = false;
-                rust_log("Skipping block production — no peers connected");
+                // WHY: Only increment if BFT expiry didn't already increment
+                // this tick. Both paths check the same condition (peer is gone),
+                // so incrementing twice per tick would trigger solo mode 2x faster
+                // than intended.
+                if !bft_incremented_this_tick {
+                    guard.consecutive_bft_expirations += 1;
+                }
+                if guard.consecutive_bft_expirations >= 2 {
+                    rust_log(&format!(
+                        "NO PEERS for {} consecutive slots — reverting to solo mode",
+                        guard.consecutive_bft_expirations
+                    ));
+                    guard.known_peer_nodes.clear();
+                    guard.real_committee_members = 1;
+                    guard.consecutive_bft_expirations = 0;
+                    // Rebuild solo committee inline
+                    let sk_bytes_opt = guard.wallet.signing_key_bytes().ok();
+                    let local_node_id = guard.wallet.address()
+                        .map(|a| NodeId(a.0)).unwrap_or(NodeId([0u8; 32]));
+                    let local_score = if guard.presence_score > 0 { guard.presence_score } else { 75u8 };
+                    if let (Some(ref mut consensus), Some(ref sk_bytes)) = (&mut guard.consensus, &sk_bytes_opt) {
+                        let vrf_pubkey = VrfSecretKey::from_ed25519_bytes(sk_bytes).public_key();
+                        let mut all_eligible = vec![EligibleNode {
+                            node_id: local_node_id, vrf_pubkey, presence_score: local_score,
+                            has_valid_pol: true, meets_minimum_stake: true, pol_days: 90,
+                        }];
+                        for i in 1..=2u8 {
+                            let mut fake_id = [0u8; 32]; fake_id[0] = i; fake_id[31] = 0xFF;
+                            all_eligible.push(EligibleNode {
+                                node_id: NodeId(fake_id),
+                                vrf_pubkey: VrfSecretKey::from_ed25519_bytes(&[i; 32]).public_key(),
+                                presence_score: 40, has_valid_pol: true,
+                                meets_minimum_stake: true, pol_days: 90,
+                            });
+                        }
+                        all_eligible.sort_by(|a, b| a.node_id.0.cmp(&b.node_id.0));
+                        let _ = consensus.initialize_committee(&all_eligible, &[0xAB; 32], 0, 0);
+                        rust_log("Committee rebuilt: solo mode (no peers reachable)");
+                    }
+                } else {
+                    should_produce = false;
+                }
             }
+        }
+
+        // WHY: Don't produce a new block if one is already pending BFT finality.
+        // Producing overwrites the pending block and resets the BFT timer, which
+        // means the timeout NEVER fires — each new production restarts the clock.
+        // This caused S25 to get stuck forever: producing block 1 every 4 seconds,
+        // each one resetting the 14-second timer before it could expire.
+        if should_produce && guard.pending_block_created_at.is_some() {
+            should_produce = false;
         }
 
         if should_produce {
@@ -4366,8 +4888,13 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                 .collect();
             let tx_count = block_txs.len();
 
-            let produce_result = guard.consensus.as_mut().unwrap()
-                .produce_block(block_txs, vec![], [0u8; 32]);
+            let produce_result = match guard.consensus.as_mut() {
+                Some(engine) => engine.produce_block(block_txs, vec![], [0u8; 32]),
+                None => {
+                    rust_log("SLOT: consensus engine missing, skipping block production");
+                    continue;
+                }
+            };
 
             match produce_result {
                 Ok(pending) => {
@@ -4390,7 +4917,13 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
 
                     // Phase 2: Read committee info and sign (mutable borrow on consensus).
                     let (threshold, member_count, our_sig, pending_finalized, block_hash_for_broadcast, pending_block_clone) = {
-                        let engine = guard.consensus.as_mut().unwrap();
+                        let engine = match guard.consensus.as_mut() {
+                            Some(e) => e,
+                            None => {
+                                rust_log("SLOT: consensus engine missing during Phase 2");
+                                continue;
+                            }
+                        };
                         let threshold = engine.pending_finality_threshold();
                         let member_count = engine.committee()
                             .map(|c| c.members.len())
@@ -4399,8 +4932,13 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                         // Sign with our OWN real Ed25519 key.
                         let our_sig = sk_bytes_opt.as_ref().and_then(|sk_bytes| {
                             let keypair = gratia_core::crypto::Keypair::from_secret_key_bytes(sk_bytes);
-                            let header = engine.pending_block.as_ref()
-                                .unwrap().block.header.clone();
+                            let header = match engine.pending_block.as_ref() {
+                                Some(pb) => pb.block.header.clone(),
+                                None => {
+                                    rust_log("SLOT: no pending block to sign");
+                                    return None;
+                                }
+                            };
                             match engine.sign_block_as_validator(&header, &keypair) {
                                 Ok(sig) => Some(sig),
                                 Err(e) => {
@@ -4438,13 +4976,17 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                     // Mutable borrow on consensus is now dropped.
 
                     // Phase 3: Decide whether to finalize now or await peer sigs.
+                    // WHY: When real_committee_members <= 1, all other committee
+                    // members are synthetic padding that can't sign. BFT finality
+                    // would never be reached, so we auto-finalize.
+                    let real_members = guard.real_committee_members;
                     let should_finalize_now;
-                    if member_count <= 1 || pending_finalized {
+                    if real_members <= 1 || member_count <= 1 || pending_finalized {
                         should_finalize_now = true;
-                        if member_count <= 1 {
+                        if real_members <= 1 || member_count <= 1 {
                             rust_log(&format!(
-                                "Bootstrap mode: solo node, auto-finalizing (members={})",
-                                member_count
+                                "Bootstrap mode: auto-finalizing (real_members={}, total_members={})",
+                                real_members, member_count
                             ));
                         }
                     } else {
@@ -4484,7 +5026,23 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                     } else
                     // Finalize immediately (bootstrap/solo or threshold already met).
                     {
-                    match guard.consensus.as_mut().unwrap().finalize_pending_block() {
+                    let finalize_result = match guard.consensus.as_mut() {
+                        Some(engine) => {
+                            if real_members <= 1 {
+                                // WHY: With only synthetic committee members, normal finalize()
+                                // will always fail (requires 2/2 sigs but synthetics can't sign).
+                                // force_finalize() only requires 1 signature (our own).
+                                engine.force_finalize_pending_block()
+                            } else {
+                                engine.finalize_pending_block()
+                            }
+                        }
+                        None => {
+                            rust_log("SLOT: consensus engine missing during finalization");
+                            continue;
+                        }
+                    };
+                    match finalize_result {
                         Ok(finalized_block) => {
                             let finalized_height = finalized_block.header.height;
 
@@ -4496,6 +5054,7 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                             // the mutex guard. We can't hold the lock across an
                             // async broadcast call.
                             let new_chain_height = guard.consensus.as_ref().map(|e| e.current_height()).unwrap_or(0);
+                            guard.consecutive_bft_expirations = 0;
                             rust_log(&format!("BLOCK FINALIZED height={} new_chain_height={}", finalized_height, new_chain_height));
 
                             // Persist chain state to file after every finalization.
@@ -4569,37 +5128,45 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                                 guard.recent_blocks.pop_front();
                             }
 
-                            rust_log("REWARD: entering reward credit block");
-                            // WHY: Credit mining reward to the block producer on
-                            // finalization. The reward is earned by producing the
-                            // block — if this node finalized it, this node gets paid.
-                            // Mining state gates block production eligibility in
-                            // production, but the reward always follows the block.
-                            {
-                                // WHY: active_miners count determines per-miner share.
-                                // With 1 miner, they get the full block reward. As more
-                                // join, the reward splits proportionally.
+                            // WHY: Only credit rewards for blocks that reached REAL
+                            // BFT finality (2+ peer signatures). Solo-finalized blocks
+                            // (auto-finalized when real_members <= 1) don't earn rewards
+                            // because they were never validated by another node. If the
+                            // phone reconnects and a peer has a longer chain, the solo
+                            // chain gets replaced — phantom rewards from orphaned solo
+                            // blocks would inflate the supply. Solo mode keeps the chain
+                            // advancing (so the phone can resume quickly) but doesn't
+                            // pay until the network confirms the work.
+                            if real_members > 1 {
+                                // WHY: This path is for blocks that auto-finalized
+                                // with real_members > 1 (threshold already met from
+                                // self-signature). Rewards are credited here. The BFT
+                                // path (ValidatorSignatureReceived) handles deferred
+                                // finalization. On-chain state is source of truth —
+                                // update it first, then sync wallet from it.
                                 let active_miners = 1u64.max(
                                     guard.staking.staker_count() as u64
                                 ).max(1);
                                 let reward: Lux = gratia_core::emission::EmissionSchedule
                                     ::per_miner_block_reward_lux(finalized_height, active_miners);
-                                let current = guard.wallet.balance();
-                                guard.wallet.sync_balance(current + reward);
 
-                                // WHY: Also credit the mining reward in on-chain state
-                                // so the balance is available for future transfers.
                                 if let (Some(ref sm), Ok(our_addr)) = (&guard.state_manager, guard.wallet.address()) {
                                     let mut acct = sm.get_account(&our_addr).unwrap_or_default();
                                     acct.balance += reward;
                                     let _ = sm.db().put_account(&our_addr, &acct);
+                                    // Sync wallet FROM on-chain (single source of truth)
+                                    guard.wallet.sync_balance(acct.balance);
                                 }
 
                                 rust_log(&format!(
-                                    "REWARD: height={} reward={} Lux ({} GRAT) new_balance={} Lux ({} GRAT) active_miners={}",
+                                    "REWARD: height={} reward={} Lux ({} GRAT) active_miners={}",
                                     finalized_height, reward, reward / 1_000_000,
-                                    current + reward, (current + reward) / 1_000_000,
                                     active_miners
+                                ));
+                            } else {
+                                rust_log(&format!(
+                                    "SOLO BLOCK: height={} finalized but NO reward (solo mode, no peer validation)",
+                                    finalized_height
                                 ));
                             }
 
@@ -4665,8 +5232,14 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                 // propagation happens asynchronously in the swarm task.
                 let result = network.try_broadcast_block_sync(&block);
                 match result {
-                    Ok(()) => info!(height = height, "Block broadcast to network"),
-                    Err(e) => warn!(height = height, error = %e, "Failed to broadcast block"),
+                    Ok(()) => {
+                        rust_log(&format!("BLOCK BROADCAST: height={} to gossipsub", height));
+                        info!(height = height, "Block broadcast to network");
+                    }
+                    Err(e) => {
+                        rust_log(&format!("BLOCK BROADCAST FAILED: height={} error={}", height, e));
+                        warn!(height = height, error = %e, "Failed to broadcast block");
+                    }
                 }
             }
         }
@@ -4873,8 +5446,8 @@ fn build_explorer_json(inner: &Arc<Mutex<GratiaNodeInner>>) -> String {
 
     // Compute average block time from recent blocks
     let avg_block_time = if guard.recent_blocks.len() >= 2 {
-        let newest = guard.recent_blocks.back().unwrap().header.timestamp;
-        let oldest = guard.recent_blocks.front().unwrap().header.timestamp;
+        let newest = if let Some(b) = guard.recent_blocks.back() { b.header.timestamp } else { Utc::now() };
+        let oldest = if let Some(b) = guard.recent_blocks.front() { b.header.timestamp } else { newest };
         let span_secs = (newest - oldest).num_seconds() as f64;
         let block_count = guard.recent_blocks.len() as f64 - 1.0;
         if block_count > 0.0 { span_secs / block_count } else { 4.0 }
@@ -5071,7 +5644,7 @@ mod tests {
     fn test_finalize_day_invalid() {
         let node = test_node();
         // No sensor events submitted — day should be invalid.
-        let result = node.finalize_day().unwrap();
+        let result = node.finalize_day(1).unwrap();
         assert!(!result);
     }
 

@@ -39,6 +39,16 @@ class GratiaApplication : Application() {
         /** Global app context for ViewModels that need to post notifications. */
         var appContext: Context? = null
             private set
+
+        /**
+         * Guards against duplicate core initialization.
+         * WHY: Android can re-create the Application object in edge cases
+         * (backup/restore, multi-process apps, certain OEM behaviors).
+         * Re-initializing the Rust core while it's already running causes
+         * undefined behavior (double port binding, duplicate consensus timers).
+         */
+        @Volatile
+        private var coreInitialized = false
     }
 
     // WHY: Tracks whether wallet initialization succeeded. Network and consensus
@@ -49,17 +59,52 @@ class GratiaApplication : Application() {
     override fun onCreate() {
         super.onCreate()
 
+        if (coreInitialized) {
+            Log.w(TAG, "Gratia core already initialized — skipping duplicate init")
+            return
+        }
+
         Log.i(TAG, "Gratia application starting")
         appContext = applicationContext
 
         io.gratia.app.security.AddressBook.init(this)
         createNotificationChannels()
+        requestBatteryOptimizationExemption()
         initializeRustCore()
         startP2PNetwork()
         schedulePolHeartbeat()
+        coreInitialized = true
         // WHY: PoL service is started from MainActivity after runtime permissions
         // (location, Bluetooth) are granted. Android 14+ (targetSdk 34) requires
         // ACCESS_FINE_LOCATION before starting a foreground service with type "location".
+    }
+
+    /**
+     * Request exemption from Android battery optimization (Doze mode).
+     *
+     * WHY: Samsung phones aggressively kill background UDP connections during
+     * Doze, breaking QUIC/libp2p connections needed for BFT consensus. Battery
+     * optimization exemption keeps the network layer alive when the screen is
+     * off. Since mining only runs while plugged in, the battery impact is zero.
+     */
+    private fun requestBatteryOptimizationExemption() {
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                Log.i(TAG, "Requesting battery optimization exemption")
+                val intent = android.content.Intent(
+                    android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+                ).apply {
+                    data = android.net.Uri.parse("package:$packageName")
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(intent)
+            } else {
+                Log.i(TAG, "Battery optimization already exempted")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to request battery optimization exemption: ${e.message}")
+        }
     }
 
     /**

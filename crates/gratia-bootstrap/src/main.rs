@@ -59,6 +59,12 @@ async fn main() {
     let node_id = bootstrap_node_id();
 
     let mut config = NetworkConfig::new(node_id);
+    // WHY: Persist the bootstrap's libp2p identity so the PeerId survives
+    // server restarts. Without this, every restart generates a new PeerId,
+    // and phones with the old PeerId hardcoded can't connect — the QUIC
+    // handshake fails because libp2p rejects PeerId mismatches. This was
+    // causing the A06 to fail every bootstrap connection attempt.
+    config.data_dir = Some("/opt/gratia-bootstrap".to_string());
     config.transport.listen_addresses = vec![
         format!("/ip4/0.0.0.0/udp/{}/quic-v1", port),
     ];
@@ -103,7 +109,7 @@ async fn main() {
     let mut peer_count: u64 = 0;
     loop {
         match event_rx.recv().await {
-            Some(NetworkEvent::PeerConnected { peer_id, node_id }) => {
+            Some(NetworkEvent::PeerConnected { peer_id, node_id, is_inbound: _ }) => {
                 peer_count += 1;
                 peers_connected.store(peer_count, Ordering::Relaxed);
                 tracing::info!(

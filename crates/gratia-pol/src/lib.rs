@@ -57,6 +57,7 @@ impl ProofOfLifeManager {
                 approximate_location: None,
                 distinct_wifi_networks: 0,
                 distinct_bt_environments: 0,
+                bt_environment_change_count: 0,
                 charge_cycle_event: false,
                 optional_sensors: Default::default(),
             },
@@ -120,7 +121,7 @@ impl ProofOfLifeManager {
     /// When the day is valid, a ZK Bulletproof is generated proving that
     /// the core numeric PoL parameters met their thresholds. The proof is
     /// stored internally and can be retrieved via `last_zk_proof()`.
-    pub fn finalize_day(&mut self) -> bool {
+    pub fn finalize_day(&mut self, epoch_day: u32) -> bool {
         let today = Utc::now().date_naive();
         let is_valid = self.current_day_data.is_valid(&self.config.proof_of_life);
 
@@ -151,7 +152,7 @@ impl ProofOfLifeManager {
                 min_bt_envs: self.config.proof_of_life.min_distinct_bt_environments as u64,
             };
 
-            match gratia_zk::generate_pol_proof(&proof_input, &thresholds) {
+            match gratia_zk::generate_pol_proof(&proof_input, &thresholds, epoch_day) {
                 Ok(proof) => {
                     tracing::info!(
                         proof_bytes = proof.proof_bytes.len(),
@@ -203,6 +204,7 @@ impl ProofOfLifeManager {
             approximate_location: None,
             distinct_wifi_networks: 0,
             distinct_bt_environments: 0,
+            bt_environment_change_count: 0,
             charge_cycle_event: false,
             optional_sensors: Default::default(),
         };

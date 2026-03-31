@@ -62,16 +62,18 @@ impl Default for TransportConfig {
             // WHY: Reserve headroom for outbound connections by capping inbound at 30.
             max_inbound: 30,
             max_outbound: 20,
-            // 5 minutes — balances reconnection cost vs idle resource usage on mobile
-            // WHY: 30 seconds is aggressive but appropriate for mobile. Dead
-            // peers (phone disconnected, app killed) should be detected quickly
-            // so the UI shows accurate peer count and the sync manager doesn't
-            // make decisions based on stale peer data. libp2p's QUIC transport
-            // sends keep-alive pings; if no response within this window, the
-            // connection is closed and PeerDisconnected fires.
-            idle_timeout_secs: 30,
-            // 30 seconds — frequent enough to detect dead connections on flaky mobile networks
-            keepalive_interval_secs: 30,
+            // WHY: 60 seconds idle timeout gives connections more time to survive
+            // Samsung's aggressive network management (Doze, Adaptive Battery).
+            // The 30s setting was causing connections to drop prematurely when
+            // Samsung buffered UDP packets during brief power-save windows.
+            // 60s is still short enough to detect genuinely dead peers quickly.
+            idle_timeout_secs: 60,
+            // WHY: 15 seconds keepalive — must be SHORTER than idle_timeout to
+            // prevent the connection from being considered idle. Samsung's network
+            // stack may close NAT mappings for UDP sockets that haven't sent
+            // traffic in ~30s. 15s keepalive ensures regular traffic flows,
+            // keeping the NAT pinhole open and the connection alive.
+            keepalive_interval_secs: 15,
             // WHY: Mesh is None by default — enabled explicitly on mobile devices
             // that have BLE/Wi-Fi Direct hardware. Bootstrap servers and archive
             // nodes leave this as None.
@@ -177,9 +179,15 @@ impl ConnectionManager {
         if !self.can_accept_inbound() {
             return false;
         }
-        self.connected_peers.insert(peer_id);
-        self.inbound_count += 1;
-        true
+        // WHY: Only count as new if the peer wasn't already connected.
+        // HashSet::insert returns true if the value was inserted (new peer).
+        // Without this check, duplicate PeerConnected events for the same
+        // peer would inflate both inbound_count and live_peer_count.
+        let is_new = self.connected_peers.insert(peer_id);
+        if is_new {
+            self.inbound_count += 1;
+        }
+        is_new
     }
 
     /// Register a new outbound connection.
@@ -188,12 +196,16 @@ impl ConnectionManager {
         if !self.can_initiate_outbound() {
             return false;
         }
-        self.connected_peers.insert(peer_id);
-        self.outbound_count += 1;
-        true
+        let is_new = self.connected_peers.insert(peer_id);
+        if is_new {
+            self.outbound_count += 1;
+        }
+        is_new
     }
 
-    /// Remove a disconnected peer. `is_inbound` indicates the connection direction.
+    /// Remove a disconnected peer.
+    /// WHY: `is_inbound` hint from the connect event. If unknown, defaults to
+    /// decrementing inbound (conservative — won't block outbound slots).
     pub fn remove_peer(&mut self, peer_id: &libp2p::PeerId, is_inbound: bool) {
         if self.connected_peers.remove(peer_id) {
             if is_inbound {

@@ -155,11 +155,15 @@ impl GossipMessage {
                 id
             }
             GossipMessage::NodeAnnouncement(ann) => {
-                // WHY: Dedup by node_id — only the latest announcement from a
-                // given node matters. Re-announcements (e.g., on reconnect) are
-                // expected and will be filtered by the dedup cache.
+                // WHY: Include timestamp in dedup ID so re-announcements
+                // (e.g., periodic every 32s, or on reconnect) are NOT filtered.
+                // Previously, dedup by node_id alone caused re-announcements
+                // to be silently dropped, preventing committee rebuilds after
+                // WiFi reconnection. Each announcement with a different timestamp
+                // gets a unique ID and passes through the dedup cache.
                 let mut id = b"node:".to_vec();
                 id.extend_from_slice(&ann.node_id.0);
+                id.extend_from_slice(&ann.timestamp.timestamp().to_be_bytes());
                 id
             }
             GossipMessage::NewLuxPost(post) => {
@@ -306,19 +310,23 @@ pub fn validate_incoming_message(data: &[u8]) -> Result<GossipMessage, NetworkEr
 /// WHY: On a mobile gossip network, the same message arrives via multiple paths.
 /// Deduplication avoids re-processing and re-propagating messages we already have.
 pub struct DeduplicationCache {
-    /// Set of message IDs we have seen recently.
-    seen: HashSet<Vec<u8>>,
+    /// Set for O(1) lookup of whether a message has been seen.
+    seen_set: HashSet<Vec<u8>>,
+    /// Queue for FIFO eviction order — oldest entries are at the front.
+    /// WHY: HashSet has no ordering guarantee. Without a queue, eviction
+    /// removes random entries instead of the oldest, keeping stale messages
+    /// and evicting recent ones. VecDeque preserves insertion order.
+    seen_order: std::collections::VecDeque<Vec<u8>>,
 
     /// Maximum number of entries before we start evicting.
-    /// WHY: 10,000 entries at ~40 bytes each = ~400KB. Acceptable on mobile.
-    /// Covers roughly 3-5 minutes of high-throughput network activity.
     max_entries: usize,
 }
 
 impl DeduplicationCache {
     pub fn new(max_entries: usize) -> Self {
         DeduplicationCache {
-            seen: HashSet::new(),
+            seen_set: HashSet::new(),
+            seen_order: std::collections::VecDeque::new(),
             max_entries,
         }
     }
@@ -326,40 +334,47 @@ impl DeduplicationCache {
     /// Check if a message has been seen before. If not, marks it as seen.
     /// Returns true if this is a NEW (not previously seen) message.
     pub fn check_and_insert(&mut self, message_id: &[u8]) -> bool {
-        if self.seen.contains(message_id) {
+        if self.seen_set.contains(message_id) {
             return false;
         }
 
-        // Evict all entries when cache is full.
-        // WHY: Simple strategy — a proper LRU would be better but adds complexity.
-        // Since gossip messages are ephemeral, clearing the whole cache is acceptable.
-        // Messages re-received after eviction will simply be re-validated.
-        if self.seen.len() >= self.max_entries {
-            self.seen.clear();
+        // WHY: Evict oldest 25% when cache is full. FIFO order ensures
+        // the oldest messages (least likely to be seen again) are evicted
+        // first, keeping recent messages for dedup.
+        if self.seen_set.len() >= self.max_entries {
+            let to_evict = self.max_entries / 4;
+            for _ in 0..to_evict {
+                if let Some(old) = self.seen_order.pop_front() {
+                    self.seen_set.remove(&old);
+                }
+            }
         }
 
-        self.seen.insert(message_id.to_vec());
+        let id = message_id.to_vec();
+        self.seen_set.insert(id.clone());
+        self.seen_order.push_back(id);
         true
     }
 
     /// Check if a message ID has been seen (without inserting).
     pub fn contains(&self, message_id: &[u8]) -> bool {
-        self.seen.contains(message_id)
+        self.seen_set.contains(message_id)
     }
 
     /// Number of entries in the cache.
     pub fn len(&self) -> usize {
-        self.seen.len()
+        self.seen_set.len()
     }
 
     /// Whether the cache is empty.
     pub fn is_empty(&self) -> bool {
-        self.seen.is_empty()
+        self.seen_set.is_empty()
     }
 
     /// Clear all entries.
     pub fn clear(&mut self) {
-        self.seen.clear();
+        self.seen_set.clear();
+        self.seen_order.clear();
     }
 }
 
@@ -592,6 +607,7 @@ mod tests {
             nullifier: [0xBB; 32],
             zk_proof: vec![0u8; 128],
             zk_commitments: None,
+            epoch_day: 1,
             presence_score: 65,
             sensor_flags: SensorFlags {
                 gps: true,
@@ -668,16 +684,22 @@ mod tests {
 
     #[test]
     fn test_deduplication_cache_eviction() {
-        let mut cache = DeduplicationCache::new(3);
+        let mut cache = DeduplicationCache::new(4);
 
         assert!(cache.check_and_insert(b"a"));
         assert!(cache.check_and_insert(b"b"));
         assert!(cache.check_and_insert(b"c"));
-        assert_eq!(cache.len(), 3);
-
-        // This should trigger full eviction then insert
         assert!(cache.check_and_insert(b"d"));
-        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.len(), 4);
+
+        // Inserting a 5th entry triggers partial eviction (25% removed)
+        assert!(cache.check_and_insert(b"e"));
+        // Should keep ~75% of old entries + the new one
+        assert!(cache.len() <= 4);
+        assert!(cache.len() >= 3); // At least 75% kept + new entry
+
+        // The new entry should be deduped
+        assert!(!cache.check_and_insert(b"e"));
     }
 
     #[test]

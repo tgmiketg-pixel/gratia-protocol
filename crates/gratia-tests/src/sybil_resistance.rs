@@ -87,7 +87,7 @@ fn test_fake_nodes_cannot_share_pol_attestations() {
 
     // Each node tries to finalize a day without recording any events.
     for (i, manager) in managers.iter_mut().enumerate() {
-        let is_valid = manager.finalize_day();
+        let is_valid = manager.finalize_day(1);
         assert!(
             !is_valid,
             "Fake node {} should NOT pass PoL with no sensor data",

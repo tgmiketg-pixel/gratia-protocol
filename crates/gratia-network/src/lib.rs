@@ -33,6 +33,8 @@ pub mod transport;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use libp2p::futures::StreamExt;
@@ -96,6 +98,8 @@ pub enum NetworkEvent {
     PeerConnected {
         peer_id: PeerId,
         node_id: Option<NodeId>,
+        /// Whether this was an inbound connection (they dialed us).
+        is_inbound: bool,
     },
 
     /// A peer disconnected.
@@ -146,6 +150,13 @@ pub struct NetworkConfig {
 
     /// Geographic shard this node belongs to.
     pub shard_id: u16,
+
+    /// Data directory for persisting network state (libp2p identity).
+    /// WHY: Without a stable libp2p identity, each app restart creates a new
+    /// PeerId, causing the other phone to see a "new peer" and triggering
+    /// committee rebuilds and chain resets. Persisting the identity keypair
+    /// ensures the PeerId survives across restarts.
+    pub data_dir: Option<String>,
 }
 
 impl NetworkConfig {
@@ -158,8 +169,44 @@ impl NetworkConfig {
             local_node_id,
             presence_score: 40, // Minimum threshold
             shard_id: 0,
+            data_dir: None,
         }
     }
+}
+
+/// Load or create a persistent libp2p identity keypair.
+/// WHY: A stable PeerId across app restarts means peers recognize us as the
+/// same node. Without this, each restart generates a new identity, causing
+/// the network to treat us as a brand-new peer — triggering committee
+/// rebuilds, chain resets, and inflated peer counts.
+fn load_or_create_identity(data_dir: &str) -> libp2p::identity::Keypair {
+    let key_path = format!("{}/libp2p_identity.key", data_dir);
+
+    // Try to load existing keypair
+    if let Ok(bytes) = std::fs::read(&key_path) {
+        if let Ok(keypair) = libp2p::identity::Keypair::from_protobuf_encoding(&bytes) {
+            tracing::info!(
+                peer_id = %keypair.public().to_peer_id(),
+                "Loaded persistent libp2p identity"
+            );
+            return keypair;
+        }
+        tracing::warn!("Corrupt identity file, generating new keypair");
+    }
+
+    // Generate new keypair and persist it
+    let keypair = libp2p::identity::Keypair::generate_ed25519();
+    if let Ok(bytes) = keypair.to_protobuf_encoding() {
+        if let Err(e) = std::fs::write(&key_path, &bytes) {
+            tracing::warn!("Failed to persist libp2p identity: {}", e);
+        } else {
+            tracing::info!(
+                peer_id = %keypair.public().to_peer_id(),
+                "Generated and persisted new libp2p identity"
+            );
+        }
+    }
+    keypair
 }
 
 // ============================================================================
@@ -233,6 +280,12 @@ pub struct NetworkManager {
     /// Block provider for serving sync requests.
     /// WHY: Set after state is initialized (start_consensus), not at network start.
     block_provider: std::sync::Arc<dyn BlockProvider>,
+
+    /// Live peer count shared with the event loop.
+    /// WHY: The event loop runs in a separate tokio task and owns the swarm.
+    /// It increments/decrements this atomic on ConnectionEstablished/Closed
+    /// so the main thread can read the real peer count without channels.
+    live_peer_count: Arc<AtomicU32>,
 }
 
 /// Commands sent from the application to the network event loop.
@@ -252,6 +305,15 @@ pub enum NetworkCommand {
     },
     /// Announce this node's info to the network for committee selection.
     AnnounceNode(Box<NodeAnnouncement>),
+    /// Send a NodeAnnouncement directly to a specific peer via gossipsub publish.
+    /// WHY: When a new peer connects, gossipsub mesh hasn't formed yet, so
+    /// publish() silently drops the message. DirectAnnounce forces the message
+    /// through by also emitting it as a local NetworkEvent, ensuring the FFI
+    /// layer processes it even if gossipsub can't deliver it yet.
+    DirectAnnounce {
+        announcement: Box<NodeAnnouncement>,
+        target_peer: PeerId,
+    },
     /// Publish a Lux social post to the gossip network.
     PublishLuxPost(Box<gratia_lux::LuxPost>),
     /// Publish a validator signature for a pending block to the gossip network.
@@ -307,6 +369,7 @@ impl NetworkManager {
             running: false,
             command_tx: None,
             block_provider: std::sync::Arc::new(NoBlockProvider),
+            live_peer_count: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -329,7 +392,10 @@ impl NetworkManager {
 
         // Channel for network events (event loop -> consensus layer)
         // WHY: Buffer of 256 — handles burst of blocks/txs without backpressure
-        let (event_tx, event_rx) = mpsc::channel::<NetworkEvent>(256);
+        // WHY: 1024 buffer handles sync bursts (100+ blocks + transactions
+        // arriving rapidly during catch-up). 256 could overflow and stall the
+        // swarm task during high-throughput periods.
+        let (event_tx, event_rx) = mpsc::channel::<NetworkEvent>(1024);
 
         // Channel for commands (application -> event loop)
         // WHY: Buffer of 128 — application sends few commands per second
@@ -337,10 +403,25 @@ impl NetworkManager {
 
         self.command_tx = Some(command_tx);
 
-        // Build the libp2p Swarm
-        let mut swarm = SwarmBuilder::with_new_identity()
+        // Build the libp2p Swarm with persistent identity
+        let identity = if let Some(ref dir) = self.config.data_dir {
+            load_or_create_identity(dir)
+        } else {
+            libp2p::identity::Keypair::generate_ed25519()
+        };
+        tracing::info!(peer_id = %identity.public().to_peer_id(), "Using libp2p identity");
+        let quic_keepalive = Duration::from_secs(self.config.transport.keepalive_interval_secs);
+        let mut swarm = SwarmBuilder::with_existing_identity(identity)
             .with_tokio()
-            .with_quic()
+            .with_quic_config(|mut cfg| {
+                // WHY: Samsung's network stack closes NAT mappings for UDP sockets
+                // that haven't sent traffic in ~30s. 15s keepalive sends QUIC PING
+                // frames to keep the NAT pinhole open and prevent the connection
+                // from being considered idle by the OS. Without this, QUIC connections
+                // silently die on Samsung budget phones within 30-60 seconds.
+                cfg.keep_alive_interval = quic_keepalive;
+                cfg
+            })
             .with_behaviour(|key| {
                 // Gossipsub configuration tuned for mobile
                 let gossipsub_config = gossipsub::ConfigBuilder::default()
@@ -352,9 +433,14 @@ impl NetworkManager {
                         msg.data.hash(&mut hasher);
                         gossipsub::MessageId::from(hasher.finish().to_be_bytes().to_vec())
                     })
-                    // WHY: 30 second heartbeat — longer than default (1s) to reduce
-                    // battery drain from gossip protocol overhead on mobile.
-                    .heartbeat_interval(Duration::from_secs(30))
+                    // WHY: 5 second heartbeat — fast enough to re-graft peers into
+                    // the gossipsub mesh after WiFi reconnection. The default (1s) is
+                    // excessive for mobile, but 30s was too slow — reconnected peers
+                    // couldn't receive blocks for up to 30 seconds while waiting for
+                    // the mesh to reform. 5s is a good balance: quick recovery after
+                    // network disruption, minimal battery overhead (~12 heartbeats/min
+                    // vs 60/min at 1s default).
+                    .heartbeat_interval(Duration::from_secs(5))
                     // WHY: Mesh target of 4 peers (instead of default 6) — reduces
                     // bandwidth on mobile while maintaining reasonable propagation.
                     .mesh_n(4)
@@ -363,6 +449,14 @@ impl NetworkManager {
                     // WHY: 300 KB max transmit size — matches our MAX_MESSAGE_SIZE
                     // (256 KB block + serialization overhead).
                     .max_transmit_size(300 * 1024)
+                    // WHY: flood_publish sends published messages to ALL connected
+                    // peers, not just mesh peers. Without this, messages published
+                    // before the gossipsub mesh forms (first 5-10 seconds after
+                    // connection) are silently dropped — causing NodeAnnouncements
+                    // and blocks to never reach newly connected peers. The bandwidth
+                    // overhead is minimal with 2-3 peers on testnet. For mainnet
+                    // with 100+ peers, this should be disabled in favor of mesh-only.
+                    .flood_publish(true)
                     .build()
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
@@ -447,7 +541,9 @@ impl NetworkManager {
         // Spawn the event loop as a background task
         let node_id = self.config.local_node_id;
         let block_provider = self.block_provider.clone();
-        tokio::spawn(run_swarm_event_loop(swarm, command_rx, event_tx, node_id, block_provider));
+        let live_peer_count = self.live_peer_count.clone();
+        let bootstrap_peers = self.config.bootstrap_peers.clone();
+        tokio::spawn(run_swarm_event_loop(swarm, command_rx, event_tx, node_id, block_provider, live_peer_count, bootstrap_peers));
 
         tracing::info!(
             node_id = %self.config.local_node_id,
@@ -613,6 +709,21 @@ impl NetworkManager {
         Ok(())
     }
 
+    /// Send a NodeAnnouncement directly to a specific peer, bypassing gossipsub.
+    /// WHY: When a peer first connects, the gossipsub mesh hasn't formed yet,
+    /// so gossipsub.publish() silently drops the message. This sends the
+    /// announcement directly so the peer can rebuild its committee immediately.
+    pub fn try_direct_announce(&self, announcement: &NodeAnnouncement, target: PeerId) -> Result<(), NetworkError> {
+        let tx = self.command_tx.as_ref().ok_or(NetworkError::NotStarted)?;
+
+        tx.try_send(NetworkCommand::DirectAnnounce {
+            announcement: Box::new(announcement.clone()),
+            target_peer: target,
+        }).map_err(|e| NetworkError::ChannelError(e.to_string()))?;
+
+        Ok(())
+    }
+
     /// Dial a remote peer by multiaddr string.
     ///
     /// Used for manual peer connection (e.g., entering another phone's address).
@@ -625,6 +736,21 @@ impl NetworkManager {
 
         tx.send(NetworkCommand::DialPeer(addr.to_string()))
             .await
+            .map_err(|e| NetworkError::ChannelError(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Non-blocking dial of a remote peer by multiaddr string.
+    /// WHY: Used from sync/FFI contexts where holding a mutex lock prevents
+    /// calling async methods (which would deadlock via block_on).
+    pub fn try_dial_peer_sync(&self, addr: &str) -> Result<(), NetworkError> {
+        let tx = self.command_tx.as_ref().ok_or(NetworkError::NotStarted)?;
+
+        addr.parse::<Multiaddr>()
+            .map_err(|e| NetworkError::DialFailure(format!("invalid address '{}': {}", addr, e)))?;
+
+        tx.try_send(NetworkCommand::DialPeer(addr.to_string()))
             .map_err(|e| NetworkError::ChannelError(e.to_string()))?;
 
         Ok(())
@@ -669,13 +795,34 @@ impl NetworkManager {
     }
 
     /// Get the number of connected peers.
+    /// WHY: Reads from a shared atomic counter that the event loop updates
+    /// on every ConnectionEstablished/Closed event. This is the live count.
     pub fn connected_peer_count(&self) -> usize {
-        self.connections.peer_count()
+        self.live_peer_count.load(Ordering::Relaxed) as usize
     }
 
     /// Get all connected peer IDs.
     pub fn connected_peers(&self) -> &HashSet<PeerId> {
         self.connections.connected_peers()
+    }
+
+    /// Correct the live peer count atomic to match the ConnectionManager.
+    /// WHY: When WiFi drops without a clean disconnect, ConnectionClosed
+    /// never fires and the atomic counter stays stale. The ConnectionManager's
+    /// internal set may also be stale, but the atomic is more likely to drift
+    /// because it's updated from the event loop (different thread). Periodic
+    /// reconciliation keeps the UI peer count accurate.
+    pub fn reconcile_peer_count(&self) {
+        let actual = self.connections.connected_peers().len() as u32;
+        let reported = self.live_peer_count.load(Ordering::Relaxed);
+        if actual != reported {
+            self.live_peer_count.store(actual, Ordering::Relaxed);
+            tracing::debug!(
+                actual = actual,
+                was = reported,
+                "Reconciled peer count"
+            );
+        }
     }
 
     /// Whether the network is currently running.
@@ -772,17 +919,24 @@ impl NetworkManager {
 
     /// Register a newly connected peer.
     pub fn on_peer_connected(&mut self, peer_id: PeerId, is_inbound: bool) -> bool {
-        if is_inbound {
+        let accepted = if is_inbound {
             self.connections.register_inbound(peer_id)
         } else {
             self.connections.register_outbound(peer_id)
+        };
+        if accepted {
+            self.live_peer_count.fetch_add(1, Ordering::Relaxed);
         }
+        accepted
     }
 
     /// Handle a peer disconnection.
     pub fn on_peer_disconnected(&mut self, peer_id: &PeerId, is_inbound: bool) {
         self.connections.remove_peer(peer_id, is_inbound);
         self.sync_manager.remove_peer(peer_id);
+        self.live_peer_count.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+            Some(v.saturating_sub(1))
+        }).ok();
     }
 }
 
@@ -805,6 +959,8 @@ async fn run_swarm_event_loop(
     event_tx: mpsc::Sender<NetworkEvent>,
     node_id: NodeId,
     block_provider: std::sync::Arc<dyn BlockProvider>,
+    live_peer_count: Arc<AtomicU32>,
+    bootstrap_peers: Vec<String>,
 ) {
     // WHY: Separate gossip handler for the event loop — deduplication must
     // happen where messages first arrive (here), not in the application layer.
@@ -820,6 +976,29 @@ async fn run_swarm_event_loop(
     let mut chain_tip_interval = tokio::time::interval(
         Duration::from_secs(CHAIN_TIP_POLL_INTERVAL_SECS),
     );
+
+    // WHY: Periodic bootstrap retry — if the initial dial failed (timeout,
+    // network not ready, server busy), retry every 30 seconds until connected.
+    // Without this, a single failed handshake permanently disconnects from
+    // bootstrap, isolating the phone from non-local peers.
+    let mut bootstrap_retry_interval = tokio::time::interval(
+        Duration::from_secs(30),
+    );
+    // WHY: Parse bootstrap multiaddrs once and extract the expected PeerIds.
+    let bootstrap_addrs: Vec<(Multiaddr, Option<PeerId>)> = bootstrap_peers.iter()
+        .filter_map(|s| s.parse::<Multiaddr>().ok())
+        .map(|addr| {
+            let peer_id = addr.iter().find_map(|p| {
+                if let libp2p::multiaddr::Protocol::P2p(id) = p {
+                    Some(id)
+                } else {
+                    None
+                }
+            });
+            (addr, peer_id)
+        })
+        .collect();
+    let mut bootstrap_connected = false;
 
     // WHY: Get our own PeerId bytes once for filtering incoming sync messages.
     let local_peer_id = *swarm.local_peer_id();
@@ -1071,7 +1250,7 @@ async fn run_swarm_event_loop(
                         peer_id,
                         endpoint,
                         connection_id: _,
-                        num_established: _,
+                        num_established,
                         concurrent_dial_errors: _,
                         established_in: _,
                     } => {
@@ -1079,19 +1258,34 @@ async fn run_swarm_event_loop(
                         tracing::info!(
                             %peer_id,
                             direction = if is_inbound { "inbound" } else { "outbound" },
+                            num_established = num_established.get(),
                             "Connection established"
                         );
                         // WHY: Log to file since tracing doesn't reach Android logcat
-                        let log_msg = format!("PEER CONNECTED: {} ({})", peer_id, if is_inbound { "inbound" } else { "outbound" });
+                        let log_msg = format!("PEER CONNECTED: {} ({}, connections: {})", peer_id, if is_inbound { "inbound" } else { "outbound" }, num_established.get());
                         let log_path = "/data/user/0/io.gratia.app.debug/files/gratia-rust.log";
                         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log_path) {
                             use std::io::Write;
                             let _ = writeln!(f, "[{}] {}", chrono::Utc::now().format("%H:%M:%S"), log_msg);
                         }
-                        let _ = event_tx.send(NetworkEvent::PeerConnected {
-                            peer_id,
-                            node_id: None,
-                        }).await;
+                        // WHY: Only emit PeerConnected for the FIRST connection to
+                        // a peer. DON'T increment live_peer_count here — the FFI
+                        // layer's on_peer_connected() handles that when it processes
+                        // the PeerConnected event. Incrementing in BOTH places caused
+                        // double-counting: count goes 0→1(swarm)→2(FFI), then on
+                        // connection close it goes 2→1(swarm)→0(FFI), making the
+                        // phone think it has 0 peers when it still has 1.
+                        if num_established.get() == 1 {
+                            // Mark bootstrap as connected if this peer is a bootstrap node
+                            if bootstrap_addrs.iter().any(|(_, pid)| pid.as_ref() == Some(&peer_id)) {
+                                bootstrap_connected = true;
+                            }
+                            let _ = event_tx.send(NetworkEvent::PeerConnected {
+                                peer_id,
+                                node_id: None,
+                                is_inbound,
+                            }).await;
+                        }
                     }
                     SwarmEvent::OutgoingConnectionError {
                         peer_id,
@@ -1113,19 +1307,30 @@ async fn run_swarm_event_loop(
                         cause,
                         connection_id: _,
                         endpoint: _,
-                        num_established: _,
+                        num_established,
                     } => {
                         tracing::info!(
                             %peer_id,
                             cause = ?cause,
+                            remaining = num_established,
                             "Connection closed"
                         );
-                        // WHY: Remove peer's chain state so stale data doesn't
-                        // influence sync decisions after disconnect.
-                        sync_manager.remove_peer(&peer_id);
-                        let _ = event_tx.send(NetworkEvent::PeerDisconnected {
-                            peer_id,
-                        }).await;
+                        // WHY: Only act on the LAST connection closing for this peer.
+                        // Multiple connections can exist per peer; we only consider
+                        // the peer disconnected when all connections are gone.
+                        if num_established == 0 {
+                            sync_manager.remove_peer(&peer_id);
+                            // WHY: DON'T decrement live_peer_count here — the FFI
+                            // layer's on_peer_disconnected() handles that. See
+                            // ConnectionEstablished comment for full explanation.
+                            // Reset bootstrap flag if this was a bootstrap peer
+                            if bootstrap_addrs.iter().any(|(_, pid)| pid.as_ref() == Some(&peer_id)) {
+                                bootstrap_connected = false;
+                            }
+                            let _ = event_tx.send(NetworkEvent::PeerDisconnected {
+                                peer_id,
+                            }).await;
+                        }
                     }
 
                     // New listen address
@@ -1164,6 +1369,27 @@ async fn run_swarm_event_loop(
                 let _ = event_tx.send(NetworkEvent::SyncStateChanged(state)).await;
             }
 
+            // ── Bootstrap reconnection ────────────────────────────────────
+            _ = bootstrap_retry_interval.tick() => {
+                if !bootstrap_connected && !bootstrap_addrs.is_empty() {
+                    // Check if any bootstrap peer is in our connected set
+                    let connected: std::collections::HashSet<PeerId> =
+                        swarm.connected_peers().cloned().collect();
+                    bootstrap_connected = bootstrap_addrs.iter().any(|(_, pid)| {
+                        pid.as_ref().map(|p| connected.contains(p)).unwrap_or(false)
+                    });
+
+                    if !bootstrap_connected {
+                        for (addr, _) in &bootstrap_addrs {
+                            tracing::info!(%addr, "Retrying bootstrap peer connection");
+                            if let Err(e) = swarm.dial(addr.clone()) {
+                                tracing::warn!("Bootstrap retry dial failed: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+
             // ── Application commands ──────────────────────────────────────
             cmd = command_rx.recv() => {
                 match cmd {
@@ -1200,6 +1426,21 @@ async fn run_swarm_event_loop(
                             let topic = gossipsub::IdentTopic::new(gossip::TOPIC_NODE_ANNOUNCE);
                             if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic, data) {
                                 tracing::error!("Failed to publish node announcement: {}", e);
+                            }
+                        }
+                    }
+                    Some(NetworkCommand::DirectAnnounce { announcement, target_peer: _ }) => {
+                        // WHY: Publish via gossipsub with flood_publish=true, which
+                        // sends to ALL connected peers regardless of mesh state.
+                        // Do NOT emit locally — that would add our OWN announcement
+                        // to our known_peer_nodes, creating a phantom committee
+                        // member that inflates real_committee_members and breaks
+                        // BFT finality (the phantom can't sign).
+                        let msg = GossipMessage::NodeAnnouncement(announcement);
+                        if let Ok(data) = msg.to_bytes() {
+                            let topic = gossipsub::IdentTopic::new(gossip::TOPIC_NODE_ANNOUNCE);
+                            if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic, data) {
+                                tracing::warn!("DirectAnnounce publish failed: {}", e);
                             }
                         }
                     }

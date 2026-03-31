@@ -820,8 +820,9 @@ mod tests {
         let mut store = LuxStore::new();
         let key = SigningKey::generate(&mut OsRng);
 
-        // Create some posts
+        // Create some posts (sleep between to guarantee different timestamps for ordering)
         let h1 = store.create_post("grat:alice", "Hello world", &key, None).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
         let h2 = store.create_post("grat:bob", "Reply!", &key, Some(h1.clone())).unwrap();
 
         // Add engagement
@@ -840,9 +841,9 @@ mod tests {
             signature: vec![0u8; 64],
         });
 
-        // Save to temp file (unique name to avoid parallel test collisions)
+        // Save to temp file (unique per thread to avoid parallel test collisions)
         let dir = std::env::temp_dir();
-        let path = dir.join(format!("lux_store_test_{}.json", std::process::id()));
+        let path = dir.join(format!("lux_store_test_{:?}_{}.json", std::thread::current().id(), std::process::id()));
         let path_str = path.to_str().unwrap();
         store.save_to_file(path_str).unwrap();
 

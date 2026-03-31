@@ -344,6 +344,10 @@ pub struct ProofOfLifeAttestation {
     /// algorithm. They are not secret — they reveal nothing about the
     /// underlying values without the blinding factors.
     pub zk_commitments: Option<Vec<Vec<u8>>>,
+    /// Day number since genesis that this attestation covers.
+    /// Bound into the ZK proof's Fiat-Shamir transcript to prevent
+    /// replay of a valid proof from one day on a different day.
+    pub epoch_day: u32,
     /// Composite Presence Score (40-100).
     /// WHY: The score is included because it affects VRF weighting
     /// but doesn't reveal identity. Many nodes share the same score.
@@ -452,6 +456,13 @@ pub struct DailyProofOfLifeData {
     pub distinct_wifi_networks: u32,
     /// Number of distinct Bluetooth peer sets observed.
     pub distinct_bt_environments: u32,
+    /// Number of times the BT peer set changed during the day.
+    /// WHY: distinct_bt_environments counts HOW MANY different sets were seen,
+    /// but not WHEN they changed. A phone farm could pre-load multiple fake
+    /// peer sets without any temporal variation. This field ensures the peer
+    /// set actually changed at least once during the day, proving the device
+    /// moved through different physical environments at different times.
+    pub bt_environment_change_count: u32,
     /// Whether at least one charge cycle event (plug/unplug) occurred.
     pub charge_cycle_event: bool,
     /// Optional sensor readings for score enhancement.
@@ -491,7 +502,8 @@ impl DailyProofOfLifeData {
         // WHY: Wi-Fi-only phones are first-class citizens per spec. BT variation
         // requirement only applies when the device actually has BT peers.
         let bt_variation_ok = self.distinct_bt_environments == 0
-            || self.distinct_bt_environments >= config.min_distinct_bt_environments;
+            || (self.distinct_bt_environments >= config.min_distinct_bt_environments
+                && self.bt_environment_change_count >= 1);
 
         // 8. Charge cycle event
         let charge_ok = self.charge_cycle_event;
@@ -629,7 +641,7 @@ pub struct Proposal {
 impl Proposal {
     /// Check if quorum is met (20% of eligible voters participated).
     pub fn quorum_met(&self) -> bool {
-        let total_votes = self.votes_yes + self.votes_no + self.votes_abstain;
+        let total_votes = self.votes_yes.saturating_add(self.votes_no).saturating_add(self.votes_abstain);
         let quorum_threshold = self.eligible_voters / 5; // 20%
         total_votes >= quorum_threshold
     }
@@ -639,12 +651,12 @@ impl Proposal {
         if !self.quorum_met() {
             return false;
         }
-        let total_votes = self.votes_yes + self.votes_no; // Abstains don't count for/against
+        let total_votes = self.votes_yes.saturating_add(self.votes_no); // Abstains don't count for/against
         // WHY: Using multiplication instead of division avoids integer truncation.
         // e.g., with 100 votes, `51 > 100/2` = `51 > 50` = true (correct),
         // but `50 > 100/2` = `50 > 50` = false (correct). With odd totals like 3,
         // `2*2 > 3` = true (correct 51% majority).
-        self.votes_yes * 2 > total_votes
+        self.votes_yes.saturating_mul(2) > total_votes
     }
 }
 

@@ -130,6 +130,13 @@ class MiningService : Service() {
     /** Wake lock to keep CPU active during mining computation. */
     private var wakeLock: PowerManager.WakeLock? = null
 
+    /** WiFi lock to prevent WiFi radio from entering power-save mode.
+     * WHY: Samsung's network stack buffers/drops UDP packets when WiFi enters
+     * power-save mode, causing QUIC connections to silently die. This lock
+     * keeps WiFi in high-performance mode during mining so libp2p connections
+     * remain stable for BFT consensus. */
+    private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
+
     /** Receiver for battery state changes (for immediate unplug detection). */
     private var batteryReceiver: BroadcastReceiver? = null
 
@@ -172,12 +179,25 @@ class MiningService : Service() {
             PowerManager.PARTIAL_WAKE_LOCK,
             "gratia:mining"
         ).apply {
-            // WHY: 2-hour timeout as a safety net to prevent battery drain if
-            // the service crashes without proper cleanup. The monitorConditions
-            // loop will re-acquire the lock periodically during normal operation.
-            // Without a timeout, a leaked wake lock could drain the battery
-            // completely if onDestroy() is never called.
             acquire(2 * 60 * 60 * 1000L)
+        }
+
+        // Acquire WiFi lock to prevent WiFi power-save mode.
+        // WHY: Samsung budget phones (A06) aggressively power-save WiFi when the
+        // screen is off, buffering/dropping UDP packets. This kills QUIC connections
+        // within 30-60 seconds, breaking BFT consensus. WIFI_MODE_FULL_HIGH_PERF
+        // keeps the WiFi radio in full-power mode so libp2p connections stay alive.
+        // Battery impact is minimal since mining only runs while plugged in.
+        try {
+            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+            @Suppress("DEPRECATION")
+            wifiLock = wifiManager.createWifiLock(
+                android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+                "gratia:mining"
+            ).apply { acquire() }
+            Log.i(TAG, "WiFi lock acquired (high-perf mode)")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to acquire WiFi lock: ${e.message}")
         }
 
         sessionStartTimeMs = System.currentTimeMillis()
@@ -239,6 +259,12 @@ class MiningService : Service() {
             if (it.isHeld) it.release()
         }
         wakeLock = null
+
+        wifiLock?.let {
+            if (it.isHeld) it.release()
+            Log.i(TAG, "WiFi lock released")
+        }
+        wifiLock = null
 
         serviceScope.cancel()
 

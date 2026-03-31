@@ -240,6 +240,11 @@ impl SensorEventBuffer {
             approximate_location,
             distinct_wifi_networks: self.wifi_bssids.len() as u32,
             distinct_bt_environments: self.distinct_bt_environments,
+            bt_environment_change_count: if self.distinct_bt_environments > 1 {
+                self.distinct_bt_environments - 1
+            } else {
+                0
+            },
             charge_cycle_event: self.charge_event_occurred,
             optional_sensors: self.optional_sensors.clone(),
         }
