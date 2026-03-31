@@ -294,6 +294,15 @@ impl ConsensusEngine {
         false
     }
 
+    /// Force the engine into Producing state.
+    /// WHY: When the FFI layer's synthetic override decides this node should
+    /// produce (because the VRF assigned a synthetic member), the engine
+    /// state is still Active. produce_block() requires Producing state.
+    /// This method bridges the gap without going through advance_slot().
+    pub fn force_producing_state(&mut self) {
+        self.state = ConsensusState::Producing;
+    }
+
     /// Produce a block for the current slot.
     ///
     /// Should only be called when `advance_slot()` returns `true`.

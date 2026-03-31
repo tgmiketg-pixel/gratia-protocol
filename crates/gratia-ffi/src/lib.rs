@@ -4785,25 +4785,27 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
         let mut should_produce = {
             match guard.consensus.as_mut() {
                 Some(engine) => {
+                    let state_before = format!("{:?}", engine.state());
                     let result = engine.advance_slot();
+                    let cur_slot = engine.current_slot();
+                    let cur_height = engine.current_height();
+                    rust_log(&format!(
+                        "SLOT TICK: slot={} height={} vrf_result={} state={} real_count={}",
+                        cur_slot, cur_height, result, state_before, real_count
+                    ));
                     if result {
                         info!(
-                            slot = engine.current_slot(),
-                            height = engine.current_height() + 1,
+                            slot = cur_slot,
+                            height = cur_height + 1,
                             "Slot timer: this node should produce a block"
                         );
                     }
-                    // WHY: When the committee has synthetic padding (real < 3),
-                    // the VRF assigns some slots to synthetics that can't
-                    // produce, stalling the chain. Override: when < 3 real
-                    // members, ALWAYS produce. Both phones produce for
-                    // every height, and BFT ensures only one block per
-                    // height gets finalized (first to collect co-signatures
-                    // wins). This is less efficient than alternation but
-                    // guaranteed to work. Once the network has 3+ real
-                    // members, the VRF handles slot assignment properly
-                    // without synthetics.
                     if !result && real_count < 3 {
+                        // WHY: The VRF assigned this slot to a synthetic member.
+                        // Override to produce anyway. Must also set the engine
+                        // state to Producing — produce_block() rejects calls
+                        // when state != Producing.
+                        engine.force_producing_state();
                         true
                     } else {
                         result
@@ -4935,10 +4937,7 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
         // during a solo→multi transition to force re-sync.
         if should_produce && !guard.initial_sync_done {
             should_produce = false;
-            // Only log every 8th slot to avoid spam
-            if slot_count % 8 == 0 {
-                rust_log("Skipping block production — initial sync not complete");
-            }
+            rust_log("BLOCKED: initial_sync_done=false — skipping production");
         }
 
         // WHY: In bootstrap mode (only synthetic committee members), a solo
@@ -5005,10 +5004,12 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
         // This caused S25 to get stuck forever: producing block 1 every 4 seconds,
         // each one resetting the 14-second timer before it could expire.
         if should_produce && guard.pending_block_created_at.is_some() {
+            rust_log("BLOCKED: pending_block_created_at is Some — skipping production");
             should_produce = false;
         }
 
         if should_produce {
+            rust_log(&format!("PRODUCING: height={}", guard.consensus.as_ref().map(|e| e.current_height() + 1).unwrap_or(0)));
             // WHY: Sort the mempool deterministically before draining so that
             // ALL nodes produce identical blocks from the same transaction set.
             // Without deterministic ordering, two nodes with the same mempool
@@ -5341,6 +5342,7 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                     } // closes `else { // Finalize immediately`
                 }
                 Err(e) => {
+                    rust_log(&format!("PRODUCE FAILED: {}", e));
                     warn!("Failed to produce block: {}", e);
                 }
             }
