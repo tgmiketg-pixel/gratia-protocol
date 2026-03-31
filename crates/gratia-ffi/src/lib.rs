@@ -4785,15 +4785,10 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
         let mut should_produce = {
             match guard.consensus.as_mut() {
                 Some(engine) => {
-                    let state_before = format!("{:?}", engine.state());
                     let result = engine.advance_slot();
-                    let cur_slot = engine.current_slot();
-                    let cur_height = engine.current_height();
-                    rust_log(&format!(
-                        "SLOT TICK: slot={} height={} vrf_result={} state={} real_count={}",
-                        cur_slot, cur_height, result, state_before, real_count
-                    ));
                     if result {
+                        let cur_slot = engine.current_slot();
+                        let cur_height = engine.current_height();
                         info!(
                             slot = cur_slot,
                             height = cur_height + 1,
@@ -4937,7 +4932,6 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
         // during a solo→multi transition to force re-sync.
         if should_produce && !guard.initial_sync_done {
             should_produce = false;
-            rust_log("BLOCKED: initial_sync_done=false — skipping production");
         }
 
         // WHY: In bootstrap mode (only synthetic committee members), a solo
@@ -5004,7 +4998,6 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
         // This caused S25 to get stuck forever: producing block 1 every 4 seconds,
         // each one resetting the 14-second timer before it could expire.
         if should_produce && guard.pending_block_created_at.is_some() {
-            rust_log("BLOCKED: pending_block_created_at is Some — skipping production");
             should_produce = false;
         }
 
@@ -5093,9 +5086,7 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
 
                         if let Some(ref sig) = our_sig {
                             match engine.add_block_signature(sig.clone()) {
-                                Ok(finalized) => {
-                                    rust_log(&format!("Self-signature added, finalized={}", finalized));
-                                }
+                                Ok(_finalized) => {}
                                 Err(e) => {
                                     rust_log(&format!("Failed to add self-signature: {}", e));
                                 }
@@ -5126,12 +5117,6 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                     let should_finalize_now;
                     if real_members <= 1 || member_count <= 1 || pending_finalized {
                         should_finalize_now = true;
-                        if real_members <= 1 || member_count <= 1 {
-                            rust_log(&format!(
-                                "Bootstrap mode: auto-finalizing (real_members={}, total_members={})",
-                                real_members, member_count
-                            ));
-                        }
                     } else {
                         should_finalize_now = false;
 
@@ -5322,11 +5307,6 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                                 if let Some(ref backend) = guard.storage_backend {
                                     if let Err(e) = backend.persist() {
                                         warn!("Failed to persist state: {}", e);
-                                    } else {
-                                        rust_log(&format!(
-                                            "State persisted at height {}",
-                                            finalized_height,
-                                        ));
                                     }
                                 }
                             }

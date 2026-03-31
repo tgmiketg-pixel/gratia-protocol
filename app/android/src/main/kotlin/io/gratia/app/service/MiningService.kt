@@ -262,6 +262,11 @@ class MiningService : Service() {
         }
         batteryReceiver = null
 
+        connectivityReceiver?.let {
+            try { unregisterReceiver(it) } catch (_: Exception) {}
+        }
+        connectivityReceiver = null
+
         wakeLock?.let {
             if (it.isHeld) it.release()
         }
@@ -312,6 +317,11 @@ class MiningService : Service() {
         }
 
         isMiningActive = true
+
+        // WHY: WiFi reconnect detection must start with mining so that
+        // if WiFi drops and reconnects, we restart the network layer
+        // (recreate libp2p sockets, re-dial bootstrap, rejoin gossipsub).
+        registerConnectivityReceiver()
 
         // Start the power/thermal monitoring loop.
         monitorJob = serviceScope.launch {
