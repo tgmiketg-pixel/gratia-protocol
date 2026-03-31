@@ -140,6 +140,13 @@ class MiningService : Service() {
     /** Receiver for battery state changes (for immediate unplug detection). */
     private var batteryReceiver: BroadcastReceiver? = null
 
+    /** Receiver for WiFi connectivity changes (restart network on reconnect).
+     * WHY: When WiFi drops and reconnects, libp2p's existing sockets are dead.
+     * The old QUIC/TCP connections silently fail. mDNS multicast also dies.
+     * Without restarting the network layer, the phone can't rediscover peers
+     * or reach the bootstrap server after a WiFi toggle. */
+    private var connectivityReceiver: BroadcastReceiver? = null
+
     /** Tracks total Lux earned this session for notification display. */
     private var sessionEarningsLux: Long = 0
 
@@ -514,6 +521,57 @@ class MiningService : Service() {
             addAction(Intent.ACTION_POWER_DISCONNECTED)
         }
         registerReceiver(batteryReceiver, filter)
+    }
+
+    /**
+     * Register a receiver for WiFi connectivity changes.
+     *
+     * WHY: When WiFi drops and reconnects (user toggles WiFi, walks out of
+     * range then back), libp2p's existing sockets die silently. The phone
+     * can't rediscover peers or reach bootstrap until the network layer is
+     * restarted. This receiver detects WiFi reconnection and triggers a
+     * stop+start cycle on the network layer, recreating all sockets.
+     */
+    private fun registerConnectivityReceiver() {
+        connectivityReceiver = object : BroadcastReceiver() {
+            @Suppress("DEPRECATION")
+            override fun onReceive(context: Context, intent: Intent) {
+                val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+                val activeNetwork = cm?.activeNetworkInfo
+                val isConnected = activeNetwork?.isConnected == true
+                val isWifi = activeNetwork?.type == android.net.ConnectivityManager.TYPE_WIFI
+
+                if (isConnected && isWifi) {
+                    Log.i(TAG, "WiFi reconnected — restarting network layer")
+                    serviceScope.launch(Dispatchers.IO) {
+                        try {
+                            // WHY: Stop then start recreates all libp2p sockets,
+                            // re-subscribes to gossipsub topics, re-joins mDNS,
+                            // and re-dials the bootstrap server. Without this,
+                            // dead sockets persist indefinitely after WiFi toggle.
+                            io.gratia.app.bridge.GratiaCoreManager.stopNetwork()
+                            Thread.sleep(1000) // Let sockets close
+                            io.gratia.app.bridge.GratiaCoreManager.startNetwork(listenPort = 9000)
+                            Log.i(TAG, "Network layer restarted after WiFi reconnect")
+
+                            // Re-start consensus to rebuild committee with fresh connections
+                            try {
+                                io.gratia.app.bridge.GratiaCoreManager.startConsensus()
+                            } catch (e: Exception) {
+                                // Already running — that's fine
+                                Log.d(TAG, "Consensus already running: ${e.message}")
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Network restart failed: ${e.message}")
+                        }
+                    }
+                }
+            }
+        }
+
+        @Suppress("DEPRECATION")
+        val filter = IntentFilter(android.net.ConnectivityManager.CONNECTIVITY_ACTION)
+        registerReceiver(connectivityReceiver, filter)
     }
 
     // -- Thermal Management ------------------------------------------------
