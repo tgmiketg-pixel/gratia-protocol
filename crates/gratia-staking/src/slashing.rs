@@ -284,7 +284,11 @@ pub fn build_slashing_event(
         SlashingSeverity::Warning => config.warning_pause_duration_secs,
         SlashingSeverity::Minor => 0,
         SlashingSeverity::Major => config.major_pause_duration_secs,
-        SlashingSeverity::Critical => u64::MAX,
+        // WHY: Use a large-but-safe sentinel instead of u64::MAX.
+        // u64::MAX would overflow when added to a timestamp. This value
+        // (~292 years in seconds) is effectively permanent without causing
+        // arithmetic overflow.
+        SlashingSeverity::Critical => u64::MAX / 2,
     };
 
     let permanently_banned = effective_severity == SlashingSeverity::Critical;

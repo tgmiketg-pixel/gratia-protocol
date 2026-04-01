@@ -109,7 +109,10 @@ impl VotingManager {
             });
 
         // Update the proposal tally.
-        let proposal = proposal_store.get_proposal_mut(proposal_id).unwrap();
+        let proposal = proposal_store.get_proposal_mut(proposal_id)
+            .ok_or_else(|| GovernanceError::ProposalNotFound {
+                id: hex::encode(proposal_id),
+            })?;
         match vote {
             Vote::Yes => proposal.votes_yes += 1,
             Vote::No => proposal.votes_no += 1,
