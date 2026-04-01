@@ -1093,6 +1093,18 @@ impl GratiaNode {
         if let (Some(ref sm), Ok(our_addr)) = (&inner.state_manager, inner.wallet.address()) {
             let acct = sm.get_account(&our_addr).unwrap_or_default();
             if acct.nonce > inner.wallet.nonce() {
+                // WHY: Reject suspiciously large nonce jumps. A gap > 100 likely
+                // indicates state corruption or reorg, not normal usage. Normal
+                // users send < 100 txns between app restarts.
+                let gap = acct.nonce - inner.wallet.nonce();
+                if gap > 100 {
+                    return Err(FfiError::InternalError {
+                        reason: format!(
+                            "Nonce jump too large ({} → {}). Possible state corruption — please restart the app.",
+                            inner.wallet.nonce(), acct.nonce
+                        ),
+                    });
+                }
                 inner.wallet.set_nonce(acct.nonce);
                 rust_log(&format!("Nonce synced from on-chain state: {}", acct.nonce));
             }
