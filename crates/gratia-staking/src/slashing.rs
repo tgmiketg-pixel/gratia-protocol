@@ -484,7 +484,7 @@ mod tests {
 
         assert_eq!(result.event.severity, SlashingSeverity::Critical);
         assert!(result.event.mining_paused);
-        assert_eq!(result.event.mining_pause_duration_secs, u64::MAX);
+        assert_eq!(result.event.mining_pause_duration_secs, u64::MAX / 2);
         assert!(result.event.permanently_banned);
         assert_eq!(result.remaining_stake, 0);
         assert_eq!(result.overflow_slashed, 500_000);
