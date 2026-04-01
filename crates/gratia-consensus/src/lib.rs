@@ -598,7 +598,12 @@ impl ConsensusEngine {
         self.last_finalized_timestamp = None;
         self.pending_block = None;
         self.recent_block_hashes.clear();
-        self.state = ConsensusState::Syncing;
+        // WHY: Set to Active, not Syncing. The previous Syncing state blocked
+        // all block production until the sync timeout fired (~60s), which meant
+        // after every reorg the phone went silent. Since we've already adopted
+        // the peer's chain tip (fast-forward), we're synced and can produce
+        // immediately on the next slot.
+        self.state = ConsensusState::Active;
         self.syncing_slots = 0;
 
         info!(
