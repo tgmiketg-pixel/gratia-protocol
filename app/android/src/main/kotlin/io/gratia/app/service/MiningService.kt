@@ -157,7 +157,12 @@ class MiningService : Service() {
      * Guard flag to prevent redundant mining starts from duplicate
      * onStartCommand calls. Set true when mining loops are running.
      */
+    @Volatile
     private var isMiningActive: Boolean = false
+
+    /** Guard against concurrent WiFi reconnect restarts. */
+    @Volatile
+    private var networkRestartInProgress: Boolean = false
 
     /** SharedPreferences for persisting mining balance across app restarts. */
     private lateinit var prefs: SharedPreferences
@@ -399,7 +404,7 @@ class MiningService : Service() {
                 }
 
                 val batteryManager = getSystemService(Context.BATTERY_SERVICE)
-                    as android.os.BatteryManager
+                    as? android.os.BatteryManager ?: return
 
                 val batteryPercent = batteryManager.getIntProperty(
                     android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY
@@ -551,8 +556,9 @@ class MiningService : Service() {
                 val isConnected = activeNetwork?.isConnected == true
                 val isWifi = activeNetwork?.type == android.net.ConnectivityManager.TYPE_WIFI
 
-                if (isConnected && isWifi) {
+                if (isConnected && isWifi && !networkRestartInProgress) {
                     Log.i(TAG, "WiFi reconnected — restarting network layer")
+                    networkRestartInProgress = true
                     serviceScope.launch(Dispatchers.IO) {
                         try {
                             // WHY: Stop then start recreates all libp2p sockets,
@@ -573,6 +579,8 @@ class MiningService : Service() {
                             }
                         } catch (e: Exception) {
                             Log.w(TAG, "Network restart failed: ${e.message}")
+                        } finally {
+                            networkRestartInProgress = false
                         }
                     }
                 }

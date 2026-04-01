@@ -331,8 +331,10 @@ impl ShardedConsensus {
         let actual_size = all_members.len();
         // WHY: Finality threshold is 67% of the actual committee size, rounded up.
         // This maintains BFT guarantees even if fewer members than configured were selected.
+        // WHY: Even with an empty committee, require at least 1 signature for safety.
+        // A finality threshold of 0 would let any block claim finality with zero signatures.
         let finality = if actual_size == 0 {
-            0
+            1
         } else {
             ((actual_size as f64 * 2.0 / 3.0).ceil() as usize).max(1)
         };

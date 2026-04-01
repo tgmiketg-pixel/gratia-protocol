@@ -288,7 +288,10 @@ impl SandboxedExecution {
             });
         }
 
-        self.event_data_bytes += data_len;
+        self.event_data_bytes = self.event_data_bytes.checked_add(data_len)
+            .ok_or_else(|| SandboxError::PermissionDenied {
+                permission: "event data size overflow".to_string(),
+            })?;
         if self.event_data_bytes > self.config.max_event_data_bytes {
             return Err(SandboxError::PermissionDenied {
                 permission: format!(

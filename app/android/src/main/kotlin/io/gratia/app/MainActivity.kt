@@ -140,7 +140,11 @@ class MainActivity : FragmentActivity(), NfcAdapter.ReaderCallback {
                 .build()
         }
 
-        prompt.authenticate(promptInfo)
+        try {
+            prompt.authenticate(promptInfo)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to show biometric prompt", e)
+        }
     }
 
     companion object {

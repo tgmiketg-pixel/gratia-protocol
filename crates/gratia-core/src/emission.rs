@@ -95,11 +95,10 @@ impl EmissionSchedule {
     ///
     /// Block 0 is in year 1. Block `BLOCKS_PER_YEAR` is the first block of year 2.
     pub fn year_for_height(block_height: u64) -> u32 {
-        let year = (block_height / BLOCKS_PER_YEAR) as u32 + 1;
-        // WHY: .max(1) is a safety net — integer division already ensures
-        // year >= 1 for any non-negative height, but we guard against
-        // future refactors that might change the formula.
-        year.max(1)
+        let year_u64 = (block_height / BLOCKS_PER_YEAR) + 1;
+        // WHY: Clamp to u32::MAX to prevent truncation overflow on extremely
+        // high block heights. The `as u32` cast would silently wrap otherwise.
+        year_u64.min(u32::MAX as u64) as u32
     }
 
     /// Calculate the per-miner block reward (in Lux) given the number of active miners.

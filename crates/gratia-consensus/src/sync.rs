@@ -81,7 +81,7 @@ impl SyncState {
                 if *target_height == 0 {
                     return 1.0;
                 }
-                *current as f64 / *target_height as f64
+                (*current as f64 / *target_height as f64).min(1.0)
             }
             SyncState::Applying => 0.99,
         }
@@ -234,7 +234,12 @@ impl SyncProtocol {
         }
 
         // Validate: first block should be at our_height + 1
-        let first_height = response.blocks[0].header.height;
+        let first_height = response.blocks.first()
+            .ok_or_else(|| SyncError::InvalidBlock {
+                height: 0,
+                reason: "First block missing in sync response".into(),
+            })?
+            .header.height;
         let expected_start = self.our_height + 1;
         if first_height != expected_start {
             return Err(SyncError::UnexpectedHeight {
@@ -281,7 +286,12 @@ impl SyncProtocol {
         }
 
         let block_count = response.blocks.len();
-        let last_height = response.blocks.last().unwrap().header.height;
+        let last_height = response.blocks.last()
+            .ok_or_else(|| SyncError::InvalidBlock {
+                height: 0,
+                reason: "Sync response contained no blocks after validation".into(),
+            })?
+            .header.height;
 
         // Buffer the blocks (with overflow protection)
         if self.blocks_received.len() + block_count > MAX_BUFFER_SIZE {

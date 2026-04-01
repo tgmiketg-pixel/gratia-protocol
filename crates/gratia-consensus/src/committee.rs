@@ -410,11 +410,16 @@ pub fn select_committee_with_network_size(
         // WHY: If cooldown filtering removed too many candidates, fall back to
         // unfiltered. Better to reuse some validators than to have a tiny committee.
         if eligible.len() < tier.committee_size {
+            tracing::warn!(
+                before = before_cooldown,
+                after = eligible.len(),
+                required = tier.committee_size,
+                "Cooldown filtering removed too many candidates, falling back to unfiltered list"
+            );
             eligible = eligible_nodes
                 .iter()
                 .filter(|n| n.is_eligible())
                 .collect();
-            let _ = before_cooldown; // suppress unused warning
         }
     }
 

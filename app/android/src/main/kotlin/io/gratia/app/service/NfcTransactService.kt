@@ -66,7 +66,12 @@ class NfcTransactService : HostApduService() {
 
         return try {
             val walletInfo = GratiaCoreManager.getWalletInfo()
-            val addressBytes = walletInfo.address.toByteArray(Charsets.UTF_8)
+            val address = walletInfo.address
+            if (address.isNullOrEmpty()) {
+                Log.w(TAG, "Wallet address is null or empty")
+                return SW_UNKNOWN
+            }
+            val addressBytes = address.toByteArray(Charsets.UTF_8)
             Log.i(TAG, "Serving wallet address via NFC HCE (${walletInfo.address.take(12)}...)")
 
             // WHY: APDU response format is payload + status word. The reader

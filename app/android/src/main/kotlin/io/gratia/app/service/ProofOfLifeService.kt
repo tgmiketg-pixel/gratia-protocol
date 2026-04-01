@@ -174,6 +174,7 @@ class ProofOfLifeService : Service(), SensorEventListener {
             // and re-initialize sensors in case onCreate() state was lost.
             Log.i(TAG, "PoL service restarted by system (null intent) — re-initializing sensors")
             if (GratiaCoreManager.isInitialized && sensorManagers.isEmpty()) {
+                stopSensors() // Stop any leaked listeners before re-initializing
                 initializeSensors()
                 registerScreenReceiver()
                 registerPowerReceiver()

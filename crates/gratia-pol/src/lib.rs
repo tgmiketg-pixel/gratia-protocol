@@ -265,6 +265,14 @@ impl ProofOfLifeManager {
     pub fn load_state(&mut self, data_dir: &str) {
         let path = format!("{}/pol_state.bin", data_dir);
         if let Ok(data) = std::fs::read(&path) {
+            if data.len() != 17 {
+                tracing::warn!(
+                    actual_len = data.len(),
+                    expected_len = 17,
+                    "PoL state file has unexpected size — skipping load to avoid corrupt state"
+                );
+                return;
+            }
             if data.len() >= 17 {
                 self.consecutive_valid_days = u64::from_le_bytes(
                     data[0..8].try_into().unwrap_or([0; 8]),

@@ -240,17 +240,10 @@ pub fn verify_tee_attestation(attestation: &TeeAttestation) -> TeeVerificationRe
     }
 
     // --- No secure enclave ---
+    // WHY: Collect this flag BEFORE checking staleness so both flags are reported
+    // when an attestation is both stale AND lacks secure enclave.
     if !attestation.has_secure_enclave {
         flags.push(TeeFlag::NoSecureEnclave);
-        // WHY: A device without a secure enclave but with valid TEE otherwise
-        // gets Basic trust and Elevated scrutiny. The device is probably genuine
-        // but cannot provide hardware-backed key isolation, so we trust it less.
-        return TeeVerificationResult {
-            trust_level: TeeTrustLevel::Basic,
-            flags,
-            presence_score_adjustment: 0,
-            scrutiny_modifier: ScrutinyModifier::Elevated,
-        };
     }
 
     // --- Stale attestation downgrades Full -> Basic ---
@@ -260,6 +253,19 @@ pub fn verify_tee_attestation(attestation: &TeeAttestation) -> TeeVerificationRe
             flags,
             presence_score_adjustment: BASIC_TEE_SCORE,
             scrutiny_modifier: ScrutinyModifier::Standard,
+        };
+    }
+
+    // --- No secure enclave (not stale but missing enclave) ---
+    if !attestation.has_secure_enclave {
+        // WHY: A device without a secure enclave but with valid TEE otherwise
+        // gets Basic trust and Elevated scrutiny. The device is probably genuine
+        // but cannot provide hardware-backed key isolation, so we trust it less.
+        return TeeVerificationResult {
+            trust_level: TeeTrustLevel::Basic,
+            flags,
+            presence_score_adjustment: 0,
+            scrutiny_modifier: ScrutinyModifier::Elevated,
         };
     }
 

@@ -648,6 +648,12 @@ impl Proposal {
             return false;
         }
         let total_votes = self.votes_yes.saturating_add(self.votes_no).saturating_add(self.votes_abstain);
+        // WHY: If total_votes exceeds eligible_voters, the proposal state is
+        // corrupted (double-voting or data manipulation). Reject to prevent
+        // governance attacks via vote inflation.
+        if total_votes > self.eligible_voters {
+            return false;
+        }
         let quorum_threshold = self.eligible_voters / 5; // 20%
         total_votes >= quorum_threshold
     }
@@ -658,6 +664,10 @@ impl Proposal {
             return false;
         }
         let total_votes = self.votes_yes.saturating_add(self.votes_no); // Abstains don't count for/against
+        // WHY: Guard against corrupted vote counts exceeding eligible voters.
+        if self.votes_yes > self.eligible_voters || self.votes_no > self.eligible_voters {
+            return false;
+        }
         // WHY: Using multiplication instead of division avoids integer truncation.
         // e.g., with 100 votes, `51 > 100/2` = `51 > 50` = true (correct),
         // but `50 > 100/2` = `50 > 50` = false (correct). With odd totals like 3,

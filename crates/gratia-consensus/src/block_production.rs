@@ -151,14 +151,14 @@ impl BlockProducer {
         let transactions_root = merkle_root(&tx_hashes);
 
         // Compute attestation Merkle root
-        let attestation_hashes: Vec<[u8; 32]> = attestations
-            .iter()
-            .map(|a| {
-                let bytes = bincode::serialize(a)
-                    .expect("attestation serialization should not fail");
-                sha256(&bytes)
-            })
-            .collect();
+        let mut attestation_hashes: Vec<[u8; 32]> = Vec::with_capacity(attestations.len());
+        for a in &attestations {
+            let bytes = bincode::serialize(a)
+                .map_err(|e| GratiaError::SerializationError(format!(
+                    "Failed to serialize attestation: {}", e
+                )))?;
+            attestation_hashes.push(sha256(&bytes));
+        }
         let attestations_root = merkle_root(&attestation_hashes);
 
         // Generate VRF proof for this slot

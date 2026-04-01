@@ -181,13 +181,15 @@ object SecurityManager {
 
     /** Call after successful authentication. Resets the grace timer. */
     fun onAuthSuccess() {
-        lastAuthTimeMs = System.currentTimeMillis()
+        // WHY: Use elapsedRealtime (monotonic clock) instead of currentTimeMillis
+        // to prevent bypass by changing device clock.
+        lastAuthTimeMs = android.os.SystemClock.elapsedRealtime()
     }
 
     /** True if the user authenticated recently enough to skip the lock screen. */
     fun isWithinGracePeriod(): Boolean {
         if (lastAuthTimeMs == 0L) return false
-        return (System.currentTimeMillis() - lastAuthTimeMs) < GRACE_PERIOD_MS
+        return (android.os.SystemClock.elapsedRealtime() - lastAuthTimeMs) < GRACE_PERIOD_MS
     }
 
     /** Whether the lock screen should be shown right now. */
