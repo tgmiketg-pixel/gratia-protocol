@@ -197,7 +197,15 @@ pub struct ShardManager {
 
 impl ShardManager {
     /// Create a new ShardManager with the given configuration.
+    ///
+    /// # Panics
+    /// Panics if `config.active_shards` is 0 (would cause division by zero
+    /// in shard assignment).
     pub fn new(config: ShardConfig) -> Self {
+        assert!(
+            config.active_shards > 0,
+            "active_shards must be > 0 to avoid division by zero in shard assignment"
+        );
         let shard_states = (0..config.active_shards)
             .map(|i| ShardState::new(ShardId(i)))
             .collect();
