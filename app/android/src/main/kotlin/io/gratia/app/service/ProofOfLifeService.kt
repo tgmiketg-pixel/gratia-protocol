@@ -105,20 +105,26 @@ class ProofOfLifeService : Service(), SensorEventListener {
         if (!GratiaCoreManager.isInitialized) {
             Log.w(TAG, "GratiaCoreManager not yet initialized — waiting for init")
             serviceScope.launch {
-                // WHY: 3-second delay gives Application.onCreate() time to finish
-                // initializing the Rust core. If it's still not ready, we log an
-                // error but keep the service alive so the system doesn't kill it.
-                delay(3000L)
-                if (GratiaCoreManager.isInitialized) {
-                    Log.i(TAG, "GratiaCoreManager initialized after delay — resuming PoL setup")
-                    initializeSensors()
-                    registerScreenReceiver()
-                    registerPowerReceiver()
-                    startMidnightRolloverLoop()
-                    evaluateMiningConditions()
-                } else {
-                    Log.e(TAG, "GratiaCoreManager still not initialized — PoL data collection inactive")
+                // WHY: Exponential backoff retry (3s, 6s, 12s, 24s) instead of
+                // a single 3s attempt. Application.onCreate() may take longer on
+                // slow devices (A06). Without retry, sensors never start and the
+                // day ends with 0/8 PoL parameters met.
+                var delayMs = 3000L
+                val maxRetries = 4
+                for (attempt in 1..maxRetries) {
+                    delay(delayMs)
+                    if (GratiaCoreManager.isInitialized) {
+                        Log.i(TAG, "GratiaCoreManager initialized after ${attempt * delayMs / 1000}s — resuming PoL setup")
+                        initializeSensors()
+                        registerScreenReceiver()
+                        registerPowerReceiver()
+                        startMidnightRolloverLoop()
+                        evaluateMiningConditions()
+                        return@launch
+                    }
+                    delayMs *= 2
                 }
+                Log.e(TAG, "GratiaCoreManager still not initialized after retries — PoL data collection inactive")
             }
             return
         }
@@ -393,7 +399,7 @@ class ProofOfLifeService : Service(), SensorEventListener {
             addAction(Intent.ACTION_SCREEN_ON)
         }
 
-        registerReceiver(screenReceiver, filter)
+        registerReceiver(screenReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
     }
 
     /**
@@ -430,7 +436,7 @@ class ProofOfLifeService : Service(), SensorEventListener {
             addAction(Intent.ACTION_BATTERY_CHANGED)
         }
 
-        registerReceiver(powerReceiver, filter)
+        registerReceiver(powerReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
     }
 
     // -- SensorEventListener Implementation --------------------------------

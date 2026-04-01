@@ -530,7 +530,7 @@ class MiningService : Service() {
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_POWER_DISCONNECTED)
         }
-        registerReceiver(batteryReceiver, filter)
+        registerReceiver(batteryReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
     }
 
     /**
@@ -560,7 +560,7 @@ class MiningService : Service() {
                             // and re-dials the bootstrap server. Without this,
                             // dead sockets persist indefinitely after WiFi toggle.
                             io.gratia.app.bridge.GratiaCoreManager.stopNetwork()
-                            Thread.sleep(1000) // Let sockets close
+                            kotlinx.coroutines.delay(1000) // Let sockets close (non-blocking)
                             io.gratia.app.bridge.GratiaCoreManager.startNetwork(listenPort = 9000)
                             Log.i(TAG, "Network layer restarted after WiFi reconnect")
 
@@ -581,7 +581,7 @@ class MiningService : Service() {
 
         @Suppress("DEPRECATION")
         val filter = IntentFilter(android.net.ConnectivityManager.CONNECTIVITY_ACTION)
-        registerReceiver(connectivityReceiver, filter)
+        registerReceiver(connectivityReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
     }
 
     // -- Thermal Management ------------------------------------------------

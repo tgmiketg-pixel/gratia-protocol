@@ -255,7 +255,12 @@ impl<K: Keystore> WalletManager<K> {
         let builder = TransactionBuilder::new(&self.keystore, self.nonce, fee);
         let tx = builder.build_transfer(to, amount)?;
 
-        // Optimistically deduct from local cache and advance nonce
+        // WHY: Deduct from local cache and advance nonce. This is optimistic —
+        // if the transaction is reverted (fork, network partition), the local
+        // nonce will be out of sync with on-chain state. The FFI layer calls
+        // sync_nonce_from_chain() after fork resolution to reconcile. Users
+        // cannot send another transaction until the previous one is confirmed
+        // or the nonce is re-synced from on-chain state.
         self.balance -= total_cost;
         self.nonce += 1;
 

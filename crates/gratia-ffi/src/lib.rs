@@ -2073,12 +2073,18 @@ impl GratiaNode {
                                     ));
                                 }
 
-                                // Clear pending blocks, caches, and stale broadcast
+                                // Clear pending blocks, caches, and stale broadcast.
+                                // WHY: Must also clear engine.pending_block — otherwise
+                                // the slot timer will try to finalize an orphaned block
+                                // that belongs to the old fork.
                                 inner.recent_blocks.clear();
                                 inner.pending_block_hash = None;
                                 inner.pending_block_created_at = None;
-                                inner.pending_broadcast_block = None; // Don't broadcast orphaned block
+                                inner.pending_broadcast_block = None;
                                 inner.consecutive_bft_expirations = 0;
+                                if let Some(ref mut engine) = inner.consensus {
+                                    engine.pending_block = None;
+                                }
 
                                 // WHY: Revert on-chain state and sync wallet from it.
                                 // Mining rewards from our solo-mined blocks need to be
@@ -2090,6 +2096,12 @@ impl GratiaNode {
                                 if let (Some(ref sm), Ok(our_addr)) = (&inner.state_manager, inner.wallet.address()) {
                                     let acct = sm.get_account(&our_addr).unwrap_or_default();
                                     inner.wallet.sync_balance(acct.balance);
+                                    // WHY: Also sync nonce from on-chain state after fork
+                                    // resolution. Without this, the wallet's local nonce
+                                    // diverges from the on-chain nonce, causing subsequent
+                                    // transactions to be rejected (nonce mismatch) or
+                                    // enabling replay of reverted transactions.
+                                    inner.wallet.sync_nonce(acct.nonce);
                                 }
 
                                 // Update sync managers
@@ -5329,40 +5341,29 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
         }
 
         // Broadcast pending block AFTER dropping the mutex guard.
-        // WHY: broadcast_block is async and we can't hold the mutex across
-        // an await point. So we stash the block in pending_broadcast_block
-        // while holding the lock, then broadcast here after the guard is dropped.
+        // WHY: try_broadcast_block_sync sends to a channel (non-blocking),
+        // but we still drop the guard first for safety. Single lock
+        // acquisition extracts both the block and the network reference.
         drop(guard);
 
-        let broadcast_block = {
+        {
             let mut g = match inner.lock() {
                 Ok(g) => g,
                 Err(_) => continue,
             };
-            g.pending_broadcast_block.take()
-        };
-
-        if let Some(block) = broadcast_block {
-            let height = block.header.height;
-            let g = match inner.lock() {
-                Ok(g) => g,
-                Err(_) => continue,
-            };
-            if let Some(ref network) = g.network {
-                // WHY: We need to call the async broadcast_block but we're
-                // holding the lock. Since NetworkManager::broadcast_block
-                // sends to a channel internally (non-blocking), we can call
-                // it synchronously via a short block_on. The actual gossip
-                // propagation happens asynchronously in the swarm task.
-                let result = network.try_broadcast_block_sync(&block);
-                match result {
-                    Ok(()) => {
-                        rust_log(&format!("BLOCK BROADCAST: height={} to gossipsub", height));
-                        info!(height = height, "Block broadcast to network");
-                    }
-                    Err(e) => {
-                        rust_log(&format!("BLOCK BROADCAST FAILED: height={} error={}", height, e));
-                        warn!(height = height, error = %e, "Failed to broadcast block");
+            if let Some(block) = g.pending_broadcast_block.take() {
+                let height = block.header.height;
+                if let Some(ref network) = g.network {
+                    let result = network.try_broadcast_block_sync(&block);
+                    match result {
+                        Ok(()) => {
+                            rust_log(&format!("BLOCK BROADCAST: height={} to gossipsub", height));
+                            info!(height = height, "Block broadcast to network");
+                        }
+                        Err(e) => {
+                            rust_log(&format!("BLOCK BROADCAST FAILED: height={} error={}", height, e));
+                            warn!(height = height, error = %e, "Failed to broadcast block");
+                        }
                     }
                 }
             }

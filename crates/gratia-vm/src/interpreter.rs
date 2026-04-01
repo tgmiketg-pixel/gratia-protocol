@@ -1436,7 +1436,8 @@ fn execute_block(
                 let _align = reader.read_u32_leb128()?;
                 let offset = reader.read_u32_leb128()?;
                 let base = stack.pop().ok_or(InterpError::StackUnderflow)?.as_i32()? as u32;
-                let addr = (base + offset) as usize;
+                let addr = (base as usize).checked_add(offset as usize)
+                    .ok_or_else(|| InterpError::HostError("memory address overflow".into()))?;
                 if addr + 4 > memory.len() {
                     return Err(InterpError::HostError(format!("memory access out of bounds: {}", addr)));
                 }
@@ -1449,7 +1450,8 @@ fn execute_block(
                 let _align = reader.read_u32_leb128()?;
                 let offset = reader.read_u32_leb128()?;
                 let base = stack.pop().ok_or(InterpError::StackUnderflow)?.as_i32()? as u32;
-                let addr = (base + offset) as usize;
+                let addr = (base as usize).checked_add(offset as usize)
+                    .ok_or_else(|| InterpError::HostError("memory address overflow".into()))?;
                 if addr + 8 > memory.len() {
                     return Err(InterpError::HostError(format!("memory access out of bounds: {}", addr)));
                 }
@@ -1465,7 +1467,8 @@ fn execute_block(
                 let _align = reader.read_u32_leb128()?;
                 let offset = reader.read_u32_leb128()?;
                 let base = stack.pop().ok_or(InterpError::StackUnderflow)?.as_i32()? as u32;
-                let addr = (base + offset) as usize;
+                let addr = (base as usize).checked_add(offset as usize)
+                    .ok_or_else(|| InterpError::HostError("memory address overflow".into()))?;
                 if addr + 4 > memory.len() {
                     return Err(InterpError::HostError(format!("memory access out of bounds: {}", addr)));
                 }
@@ -1478,7 +1481,8 @@ fn execute_block(
                 let _align = reader.read_u32_leb128()?;
                 let offset = reader.read_u32_leb128()?;
                 let base = stack.pop().ok_or(InterpError::StackUnderflow)?.as_i32()? as u32;
-                let addr = (base + offset) as usize;
+                let addr = (base as usize).checked_add(offset as usize)
+                    .ok_or_else(|| InterpError::HostError("memory address overflow".into()))?;
                 if addr + 8 > memory.len() {
                     return Err(InterpError::HostError(format!("memory access out of bounds: {}", addr)));
                 }
@@ -1494,7 +1498,8 @@ fn execute_block(
                 let _align = reader.read_u32_leb128()?;
                 let offset = reader.read_u32_leb128()?;
                 let base = stack.pop().ok_or(InterpError::StackUnderflow)?.as_i32()? as u32;
-                let addr = (base + offset) as usize;
+                let addr = (base as usize).checked_add(offset as usize)
+                    .ok_or_else(|| InterpError::HostError("memory address overflow".into()))?;
                 if addr >= memory.len() {
                     return Err(InterpError::HostError(format!("memory access out of bounds: {}", addr)));
                 }
@@ -1506,7 +1511,8 @@ fn execute_block(
                 let _align = reader.read_u32_leb128()?;
                 let offset = reader.read_u32_leb128()?;
                 let base = stack.pop().ok_or(InterpError::StackUnderflow)?.as_i32()? as u32;
-                let addr = (base + offset) as usize;
+                let addr = (base as usize).checked_add(offset as usize)
+                    .ok_or_else(|| InterpError::HostError("memory address overflow".into()))?;
                 if addr >= memory.len() {
                     return Err(InterpError::HostError(format!("memory access out of bounds: {}", addr)));
                 }
@@ -1519,7 +1525,8 @@ fn execute_block(
                 let offset = reader.read_u32_leb128()?;
                 let val = stack.pop().ok_or(InterpError::StackUnderflow)?.as_i32()?;
                 let base = stack.pop().ok_or(InterpError::StackUnderflow)?.as_i32()? as u32;
-                let addr = (base + offset) as usize;
+                let addr = (base as usize).checked_add(offset as usize)
+                    .ok_or_else(|| InterpError::HostError("memory address overflow".into()))?;
                 if addr + 4 > memory.len() {
                     return Err(InterpError::HostError(format!("memory access out of bounds: {}", addr)));
                 }
@@ -1533,7 +1540,8 @@ fn execute_block(
                 let offset = reader.read_u32_leb128()?;
                 let val = stack.pop().ok_or(InterpError::StackUnderflow)?.as_i64()?;
                 let base = stack.pop().ok_or(InterpError::StackUnderflow)?.as_i32()? as u32;
-                let addr = (base + offset) as usize;
+                let addr = (base as usize).checked_add(offset as usize)
+                    .ok_or_else(|| InterpError::HostError("memory address overflow".into()))?;
                 if addr + 8 > memory.len() {
                     return Err(InterpError::HostError(format!("memory access out of bounds: {}", addr)));
                 }
@@ -1547,7 +1555,8 @@ fn execute_block(
                 let offset = reader.read_u32_leb128()?;
                 let val = stack.pop().ok_or(InterpError::StackUnderflow)?.as_f32()?;
                 let base = stack.pop().ok_or(InterpError::StackUnderflow)?.as_i32()? as u32;
-                let addr = (base + offset) as usize;
+                let addr = (base as usize).checked_add(offset as usize)
+                    .ok_or_else(|| InterpError::HostError("memory address overflow".into()))?;
                 if addr + 4 > memory.len() {
                     return Err(InterpError::HostError(format!("memory access out of bounds: {}", addr)));
                 }
@@ -1561,7 +1570,8 @@ fn execute_block(
                 let offset = reader.read_u32_leb128()?;
                 let val = stack.pop().ok_or(InterpError::StackUnderflow)?.as_f64()?;
                 let base = stack.pop().ok_or(InterpError::StackUnderflow)?.as_i32()? as u32;
-                let addr = (base + offset) as usize;
+                let addr = (base as usize).checked_add(offset as usize)
+                    .ok_or_else(|| InterpError::HostError("memory address overflow".into()))?;
                 if addr + 8 > memory.len() {
                     return Err(InterpError::HostError(format!("memory access out of bounds: {}", addr)));
                 }
@@ -1575,7 +1585,8 @@ fn execute_block(
                 let offset = reader.read_u32_leb128()?;
                 let val = stack.pop().ok_or(InterpError::StackUnderflow)?.as_i32()?;
                 let base = stack.pop().ok_or(InterpError::StackUnderflow)?.as_i32()? as u32;
-                let addr = (base + offset) as usize;
+                let addr = (base as usize).checked_add(offset as usize)
+                    .ok_or_else(|| InterpError::HostError("memory address overflow".into()))?;
                 if addr >= memory.len() {
                     return Err(InterpError::HostError(format!("memory access out of bounds: {}", addr)));
                 }
@@ -1592,15 +1603,22 @@ fn execute_block(
             // memory.grow (0x40)
             0x40 => {
                 let _reserved = reader.read_byte()?;
-                let delta = stack.pop().ok_or(InterpError::StackUnderflow)?.as_i32()? as u32;
-                let current_pages = (memory.len() / 65536) as i32;
-                // WHY: Cap at 256 pages (16MB) for mobile safety
-                let new_pages = current_pages as u32 + delta;
-                if new_pages > 256 {
-                    stack.push(Value::I32(-1)); // failure
+                let delta_raw = stack.pop().ok_or(InterpError::StackUnderflow)?.as_i32()?;
+                let current_pages = (memory.len() / 65536) as u32;
+                // WHY: Reject negative deltas (would be huge u32), and cap at
+                // 4096 pages (256MB) matching SandboxConfig::max_memory_bytes.
+                // Previous cap of 256 pages (16MB) was inconsistent with sandbox.
+                if delta_raw < 0 {
+                    stack.push(Value::I32(-1)); // failure — negative growth
                 } else {
-                    memory.resize(new_pages as usize * 65536, 0);
-                    stack.push(Value::I32(current_pages));
+                    let delta = delta_raw as u32;
+                    let new_pages = current_pages.checked_add(delta).unwrap_or(u32::MAX);
+                    if new_pages > 4096 {
+                        stack.push(Value::I32(-1)); // failure — exceeds 256MB limit
+                    } else {
+                        memory.resize(new_pages as usize * 65536, 0);
+                        stack.push(Value::I32(current_pages as i32));
+                    }
                 }
             }
 

@@ -304,9 +304,14 @@ impl CooldownTracker {
     pub fn record_committee(&mut self, members: &[CommitteeMember]) {
         let ids: Vec<NodeId> = members.iter().map(|m| m.node_id).collect();
         self.recent_committees.insert(0, ids);
-        // WHY: Keep only the last 10 rounds — sufficient for the maximum cooldown of 5.
-        if self.recent_committees.len() > 10 {
-            self.recent_committees.truncate(10);
+        // WHY: Keep at least max_cooldown + 2 entries to ensure cooldown checks
+        // have sufficient history. The previous hard-coded limit of 10 was
+        // fragile — if max cooldown was changed to >8, history would be pruned
+        // before the cooldown window expired, allowing nodes to re-select early.
+        // 20 rounds is generous for the maximum cooldown of 5, leaving headroom
+        // for future governance increases.
+        if self.recent_committees.len() > 20 {
+            self.recent_committees.truncate(20);
         }
     }
 

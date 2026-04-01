@@ -511,7 +511,9 @@ impl StateManager {
                 // Reverse: credit sender, debit recipient, refund fee, decrement nonce.
                 let mut sender_acct = self.db.get_account(&sender_address)?;
                 sender_acct.balance += amount + tx.fee;
-                sender_acct.nonce -= 1;
+                sender_acct.nonce = sender_acct.nonce.checked_sub(1).ok_or_else(|| {
+                    GratiaError::Other("nonce underflow during transaction revert".into())
+                })?;
                 self.db.put_account(&sender_address, &sender_acct)?;
 
                 let mut recipient_acct = self.db.get_account(to)?;
@@ -553,7 +555,16 @@ impl StateManager {
         let accounts = self.db.store().iter_cf(db::CF_ACCOUNTS)?;
 
         if accounts.is_empty() {
-            return Ok([0u8; 32]);
+            // WHY: Use a deterministic domain-separated hash instead of [0; 32]
+            // so that empty state is distinguishable from uninitialized/corrupt
+            // state. Previous [0; 32] meant multiple different empty states
+            // produced identical roots, violating Merkle tree uniqueness.
+            let mut hasher = Sha256::new();
+            hasher.update(b"gratia-empty-state-v1");
+            let result = hasher.finalize();
+            let mut root = [0u8; 32];
+            root.copy_from_slice(&result);
+            return Ok(root);
         }
 
         // Hash each (key, value) pair to create leaf hashes.

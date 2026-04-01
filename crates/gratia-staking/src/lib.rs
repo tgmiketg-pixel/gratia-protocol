@@ -93,6 +93,20 @@ impl StakingManager {
 
     /// Update the staking configuration (e.g., via governance).
     pub fn update_config(&mut self, config: StakingConfig) {
+        // WHY: Reject zero per_node_cap — if governance accidentally sets it to 0,
+        // all stakes become overflow with zero consensus power, effectively halting
+        // the network. Also ensure cap >= minimum_stake for consistency.
+        if config.per_node_cap == 0 {
+            tracing::error!("per_node_cap cannot be zero — config change rejected");
+            return;
+        }
+        if config.per_node_cap < config.minimum_stake {
+            tracing::error!(
+                "per_node_cap ({}) must be >= minimum_stake ({}) — config change rejected",
+                config.per_node_cap, config.minimum_stake
+            );
+            return;
+        }
         self.config = config;
     }
 

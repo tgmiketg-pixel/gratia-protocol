@@ -367,13 +367,11 @@ fn test_reject_block_from_non_committee_producer() {
 
     let result = engine.process_incoming_block(block);
 
-    // WHY: On testnet, VRF/committee validation is skipped in
-    // process_incoming_block (only height + parent hash checked).
-    // BFT co-signing provides security instead. This test will
-    // fail once VRF validation is re-enabled for mainnet — at
-    // that point, change this back to assert!(result.is_err()).
+    // WHY: Blocks from non-committee producers are now rejected.
+    // The ±1 slot tolerance still won't match a completely fake
+    // producer (node 99 is not in the committee at all).
     assert!(
-        result.is_ok(),
-        "Testnet: block accepted without VRF validation (BFT provides security)"
+        result.is_err(),
+        "Block from non-committee producer should be rejected"
     );
 }

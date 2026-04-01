@@ -55,6 +55,9 @@ struct LuxStoreSnapshot {
     time_sorted_posts: Vec<String>,
     /// Reply index: parent_hash -> list of reply hashes.
     reply_index: HashMap<String, Vec<String>>,
+    /// Posts removed by moderation verdicts.
+    #[serde(default)]
+    removed_posts: HashSet<String>,
 }
 
 /// Local store for Lux posts, profiles, and engagement data.
@@ -96,6 +99,13 @@ pub struct LuxStore {
     /// WHY: O(1) reply lookup instead of scanning all posts. The feed.rs
     /// reply_thread had a TODO for this — now it's available.
     reply_index: HashMap<String, Vec<String>>,
+
+    /// Posts removed by moderation verdicts.
+    /// WHY: Feed functions filter against this set so that posts removed by
+    /// jury verdicts are actually hidden from all feeds. Without this, the
+    /// moderation system's ContentRemoved verdict had no enforcement — removed
+    /// posts remained visible in home, profile, and global feeds.
+    removed_posts: HashSet<String>,
 }
 
 impl LuxStore {
@@ -111,6 +121,7 @@ impl LuxStore {
             pending_anchors: Vec::new(),
             time_sorted_posts: Vec::new(),
             reply_index: HashMap::new(),
+            removed_posts: HashSet::new(),
         }
     }
 
@@ -423,7 +434,17 @@ impl LuxStore {
 
     /// Get a post by hash.
     pub fn get_post(&self, hash: &str) -> Option<&LuxPost> {
-        self.posts.get(hash)
+        // WHY: Filter out posts removed by moderation verdict. Without this,
+        // jury verdicts with ContentRemoved outcome had no enforcement.
+        if self.removed_posts.contains(hash) {
+            return None;
+        }
+        let post = self.posts.get(hash)?;
+        // WHY: Filter out posts from muted/banned authors.
+        if self.is_muted(&post.author) {
+            return None;
+        }
+        Some(post)
     }
 
     /// Get engagement counts for a post.
@@ -438,8 +459,12 @@ impl LuxStore {
 
     /// Get all posts by a specific author, newest first.
     pub fn get_posts_by_author(&self, author: &str) -> Vec<&LuxPost> {
+        // WHY: Skip muted authors entirely and filter removed posts.
+        if self.is_muted(author) {
+            return Vec::new();
+        }
         let mut posts: Vec<&LuxPost> = self.posts.values()
-            .filter(|p| p.author == author)
+            .filter(|p| p.author == author && !self.removed_posts.contains(&p.hash))
             .collect();
         posts.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
         posts
@@ -534,6 +559,16 @@ impl LuxStore {
         info!(address = %address, hours = hours, total_bans = ban.temp_ban_count, "Temp ban applied");
     }
 
+    /// Mark a post as removed by moderation verdict.
+    pub fn mark_post_removed(&mut self, post_hash: &str) {
+        self.removed_posts.insert(post_hash.to_string());
+    }
+
+    /// Check if a post has been removed by moderation.
+    pub fn is_post_removed(&self, post_hash: &str) -> bool {
+        self.removed_posts.contains(post_hash)
+    }
+
     /// Check if a user is currently muted.
     pub fn is_muted(&self, address: &str) -> bool {
         match self.bans.get(address) {
@@ -606,6 +641,7 @@ impl LuxStore {
             bans: self.bans.clone(),
             time_sorted_posts: self.time_sorted_posts.clone(),
             reply_index: self.reply_index.clone(),
+            removed_posts: self.removed_posts.clone(),
         };
 
         let json = serde_json::to_string_pretty(&snapshot)
@@ -649,6 +685,7 @@ impl LuxStore {
             pending_anchors: Vec::new(), // WHY: Pending anchors are session-local, never persisted
             time_sorted_posts: snapshot.time_sorted_posts,
             reply_index: snapshot.reply_index,
+            removed_posts: snapshot.removed_posts,
         })
     }
 }

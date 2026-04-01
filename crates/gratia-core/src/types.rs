@@ -641,6 +641,12 @@ pub struct Proposal {
 impl Proposal {
     /// Check if quorum is met (20% of eligible voters participated).
     pub fn quorum_met(&self) -> bool {
+        // WHY: If eligible_voters is 0 (edge case during network startup or
+        // misconfigured proposal), quorum can never be met. Without this guard,
+        // 0 >= 0/5 = 0 >= 0 = true, allowing proposals to pass with zero votes.
+        if self.eligible_voters == 0 {
+            return false;
+        }
         let total_votes = self.votes_yes.saturating_add(self.votes_no).saturating_add(self.votes_abstain);
         let quorum_threshold = self.eligible_voters / 5; // 20%
         total_votes >= quorum_threshold

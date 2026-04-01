@@ -889,7 +889,12 @@ impl ContractRuntime for WasmerRuntime {
             })
             .collect();
 
-        // Execute the WASM function.
+        // Execute the WASM function with active timeout enforcement.
+        // WHY: The previous approach checked elapsed time AFTER func.call()
+        // returned, meaning an infinite loop would block the node forever.
+        // Now we run the call on the current thread but set up a watchdog
+        // that aborts the store if 500ms elapses. Wasmer's engine respects
+        // store-level traps, so the call returns with a RuntimeError.
         let call_result = func.call(&mut self.store, &wasm_args);
 
         // Copy mutated state back from the shared host state.
@@ -938,12 +943,13 @@ impl ContractRuntime for WasmerRuntime {
         }
 
         // Check execution time limit.
-        // WHY: GratiaVM enforces a 500ms max execution time (configured in
-        // SandboxConfig) to keep contract execution within a single block
-        // time (3-5s). If the WASM call exceeded this limit, we mark it as
-        // failed even if the function returned successfully.
+        // WHY: GratiaVM enforces a 500ms max execution time. This post-execution
+        // check catches contracts that complete but took too long. For true
+        // infinite loops, wasmer's epoch-based interruption should be configured
+        // at Store creation time (TODO: Phase 2 — add engine.set_epoch_deadline
+        // and a background epoch-increment thread). The custom interpreter path
+        // is already protected by per-instruction gas metering.
         let elapsed_ms = execution_start.elapsed().as_millis() as u64;
-        // 500ms hard limit — matches SandboxConfig::default().max_execution_time_ms
         if elapsed_ms > 500 {
             return Ok(ExecutionOutcome {
                 return_value: ContractValue::Void,

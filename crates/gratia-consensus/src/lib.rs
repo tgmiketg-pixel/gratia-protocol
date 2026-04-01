@@ -249,21 +249,26 @@ impl ConsensusEngine {
         // of downloading the peer's longer chain. The sync protocol will set
         // state back to Active once we've caught up.
         //
-        // Safety timeout: if stuck in Syncing for 5+ slots (20 seconds),
-        // resume producing. This prevents a permanent stall if the sync
-        // protocol fails to deliver blocks (e.g., peer went offline).
+        // WHY: Don't produce blocks while syncing (downloading the peer's
+        // longer chain). After 15 slots (60 seconds) with no progress, check
+        // whether peers are still reachable. If the sync is genuinely stuck
+        // (peer went offline mid-sync), the FFI layer's BFT expiration counter
+        // will detect the peer loss and rebuild the committee to solo mode,
+        // which sets state back to Active. We do NOT auto-resume here because
+        // that would fork the chain — the node would produce a block extending
+        // the wrong parent while the honest chain continues ahead.
         if self.state == ConsensusState::Syncing {
             self.syncing_slots += 1;
-            if self.syncing_slots > 5 {
+            if self.syncing_slots > 15 {
                 warn!(
                     slots = self.syncing_slots,
-                    "Syncing timeout — resuming block production"
+                    "Syncing stalled for 60s — waiting for peer loss detection to recover"
                 );
-                self.state = ConsensusState::Active;
+                // Reset counter to avoid log spam, but stay in Syncing.
+                // Recovery happens via BFT expiration → solo mode fallback.
                 self.syncing_slots = 0;
-            } else {
-                return false;
             }
+            return false;
         }
 
         // Check if committee rotation is needed
@@ -509,16 +514,25 @@ impl ConsensusEngine {
             let expected_producer = committee.block_producer_for_slot(expected_height);
             if let Some(producer) = expected_producer {
                 if producer.node_id != block.header.producer {
-                    // WHY: Don't hard-reject — the other node's slot counter
-                    // might still be slightly out of sync during the transition.
-                    // Log and accept for now. For mainnet, this should be a
-                    // hard rejection.
-                    debug!(
-                        height = expected_height,
-                        expected = ?producer.node_id,
-                        actual = ?block.header.producer,
-                        "Block producer doesn't match expected for this height (accepting anyway)",
-                    );
+                    // WHY: Hard-reject blocks from the wrong producer. Both nodes
+                    // agree on slot = height, so they must agree on who produces.
+                    // Allow ±1 height tolerance for clock skew during transitions.
+                    let alt_height = expected_height.wrapping_add(1);
+                    let alt_producer = committee.block_producer_for_slot(alt_height);
+                    let allowed = alt_producer
+                        .map(|p| p.node_id == block.header.producer)
+                        .unwrap_or(false);
+                    if !allowed {
+                        warn!(
+                            height = expected_height,
+                            expected = ?producer.node_id,
+                            actual = ?block.header.producer,
+                            "Block producer mismatch — rejecting",
+                        );
+                        return Err(GratiaError::BlockValidationFailed {
+                            reason: "block producer does not match expected for this height".into(),
+                        });
+                    }
                 }
             }
         }

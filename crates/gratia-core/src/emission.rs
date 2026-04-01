@@ -82,8 +82,13 @@ impl EmissionSchedule {
     pub fn block_reward_lux(block_height: u64) -> Lux {
         let year = Self::year_for_height(block_height);
         let daily_grat = Self::daily_budget_grat(year);
-        let per_block_grat = daily_grat / BLOCKS_PER_DAY;
-        per_block_grat * LUX_PER_GRAT
+        // WHY: Compute in Lux before dividing to preserve precision. The old
+        // formula (daily_grat / BLOCKS_PER_DAY * LUX_PER_GRAT) lost precision
+        // because integer division truncated before the multiply. At year ~50+,
+        // daily_grat < BLOCKS_PER_DAY causing per_block_grat = 0. Computing
+        // in Lux first: (daily_grat * 1_000_000) / 7200 preserves sub-GRAT
+        // rewards. Overflow is safe: max daily_grat (~2.7M) * 1M = 2.7T < u64::MAX.
+        (daily_grat * LUX_PER_GRAT) / BLOCKS_PER_DAY
     }
 
     /// Determine which emission year a block height falls in (1-indexed).
@@ -181,15 +186,18 @@ mod tests {
 
     #[test]
     fn test_block_reward_year_1() {
-        // daily_budget / 7200 blocks = per-block reward
+        // WHY: Precision-preserving formula computes (daily_grat * LUX_PER_GRAT) / BLOCKS_PER_DAY
+        // instead of (daily_grat / BLOCKS_PER_DAY) * LUX_PER_GRAT. This avoids truncation
+        // loss from integer division, giving 808,599,583 Lux instead of 808,000,000 Lux.
+        // The difference (~0.07%) accumulates to ~4.3M more GRAT distributed over year 1,
+        // which is correct — the old formula was underpaying by truncation.
         let daily_grat = EmissionSchedule::daily_budget_grat(1); // 5_821_917
-        let expected_per_block_grat = daily_grat / BLOCKS_PER_DAY; // 808 GRAT
-        let expected_lux = expected_per_block_grat * LUX_PER_GRAT;
+        let expected_lux = (daily_grat * LUX_PER_GRAT) / BLOCKS_PER_DAY;
 
         let reward = EmissionSchedule::block_reward_lux(0); // height 0 = year 1
         assert_eq!(reward, expected_lux);
-        // Sanity: ~808 GRAT per block * 1_000_000 Lux/GRAT = 808_000_000 Lux
-        assert_eq!(reward, 808_000_000);
+        // Sanity: ~808.6 GRAT per block
+        assert_eq!(reward, 808_599_583);
     }
 
     #[test]
