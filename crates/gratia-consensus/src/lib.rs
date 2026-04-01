@@ -475,25 +475,40 @@ impl ConsensusEngine {
         }
 
         if incoming_height > expected_height {
-            // WHY: The peer sent a block ahead of our expected height. This
-            // means they have blocks we don't have. Report as ForkDetected
-            // so the caller can decide whether to reorg. The FFI layer guards
-            // against startup race conditions separately (our_height >= 5).
             let gap = incoming_height - self.current_height;
-            warn!(
-                incoming = incoming_height,
-                local = self.current_height,
-                gap = gap,
-                "Peer is ahead — fork detected",
-            );
-            return Ok(BlockProcessResult::ForkDetected);
+            if gap == 2 {
+                // WHY: Gap of 2 means the peer finalized a block we had pending
+                // (our pending block expired or we missed its finalization) and
+                // then produced the next one. Accept as a fast-forward: adopt
+                // the peer's block as our new tip. Without this, two-phone BFT
+                // enters a fork loop — each phone's pending block expires before
+                // the other's signature arrives, putting them perpetually 1 block
+                // apart. Treating gap=2 as acceptable lets the chain converge.
+                info!(
+                    incoming = incoming_height,
+                    local = self.current_height,
+                    "Fast-forward: accepting block 2 ahead (peer finalized while we had pending)",
+                );
+                // Fall through to normal validation below
+            } else {
+                // WHY: Gap > 2 means the peer has multiple blocks we don't have.
+                // Report as ForkDetected so the FFI layer can reorg.
+                warn!(
+                    incoming = incoming_height,
+                    local = self.current_height,
+                    gap = gap,
+                    "Peer is ahead — fork detected",
+                );
+                return Ok(BlockProcessResult::ForkDetected);
+            }
         }
 
-        // Block is at expected height. Check parent hash before full validation.
-        // WHY: If the parent hash doesn't match, the peer is on a different fork.
-        // Instead of rejecting with an error (which hides the fork), return
-        // ForkDetected so the caller can compare chain lengths and reorg.
-        if block.header.parent_hash != self.last_finalized_hash {
+        // WHY: For gap=2 fast-forwards, skip parent hash check — the peer's
+        // block extends THEIR tip (which includes a block we don't have yet).
+        // We accept this as a fast-forward and update our tip to match.
+        let is_fast_forward = incoming_height > expected_height;
+
+        if !is_fast_forward && block.header.parent_hash != self.last_finalized_hash {
             warn!(
                 height = incoming_height,
                 our_parent = %self.last_finalized_hash,
@@ -505,11 +520,10 @@ impl ConsensusEngine {
 
         // Normal case: block at expected next height with correct parent.
         // WHY: Validate that the block producer is a legitimate committee
-        // member for this height. Now that slot = height (not a local
-        // timer counter), both nodes agree on who should produce each
-        // block. Full VRF proof verification is skipped (would require
-        // verifying the producer's VRF output matches the slot seed),
-        // but committee membership is checked.
+        // member for this height. Skip for fast-forwards (gap=2) since
+        // the block is at a height we didn't expect — producer validation
+        // uses expected_height which doesn't match the actual block height.
+        if !is_fast_forward {
         if let Some(ref committee) = self.current_committee {
             let expected_producer = committee.block_producer_for_slot(expected_height);
             if let Some(producer) = expected_producer {
@@ -536,6 +550,7 @@ impl ConsensusEngine {
                 }
             }
         }
+        } // closes !is_fast_forward producer check
 
         // Block is valid — update state
         let block_hash = block.header.hash()?;

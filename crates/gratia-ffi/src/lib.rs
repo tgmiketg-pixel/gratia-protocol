@@ -2129,6 +2129,45 @@ impl GratiaNode {
                                     "FORK RESOLUTION: fast-synced to height {}, ready for shared chain",
                                     height,
                                 ));
+
+                                // ── Co-sign the block we just adopted ─────────────
+                                // WHY: After fast-forwarding to the peer's chain tip,
+                                // we trust this block enough to build on it. Co-signing
+                                // it sends our BFT signature back to the producer, helping
+                                // THEIR pending block reach finality. Without this, two-phone
+                                // BFT deadlocks: each phone's block is treated as a fork by
+                                // the other, so neither gets co-signed, BFT always expires
+                                // at 1/2 signatures, and the chain never reaches finality.
+                                let is_committee = inner.consensus.as_ref()
+                                    .map(|e| e.is_committee_member())
+                                    .unwrap_or(false);
+                                if is_committee {
+                                    if let Ok(sk_bytes) = inner.wallet.signing_key_bytes() {
+                                        let keypair = gratia_core::crypto::Keypair::from_secret_key_bytes(&sk_bytes);
+                                        if let Some(our_sig) = inner.consensus.as_ref().and_then(|engine| {
+                                            engine.sign_block_as_validator(&block_clone.header, &keypair).ok()
+                                        }) {
+                                            let block_hash_bytes = block_clone.header.hash()
+                                                .map(|h| h.0)
+                                                .unwrap_or([0u8; 32]);
+                                            if let Some(ref network) = inner.network {
+                                                let sig_msg = gratia_network::gossip::ValidatorSignatureMessage {
+                                                    block_hash: block_hash_bytes,
+                                                    height,
+                                                    signature: our_sig,
+                                                };
+                                                match network.try_broadcast_validator_signature_sync(&sig_msg) {
+                                                    Ok(()) => rust_log(&format!(
+                                                        "BFT: co-signed reorg block {} from peer", height
+                                                    )),
+                                                    Err(e) => rust_log(&format!(
+                                                        "BFT: failed to co-sign reorg block: {}", e
+                                                    )),
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
 
                             if let Some((new_height, tip_hash)) = block_result {
@@ -4807,13 +4846,35 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                             "Slot timer: this node should produce a block"
                         );
                     }
-                    if !result && real_count < 3 {
-                        // WHY: The VRF assigned this slot to a synthetic member.
-                        // Override to produce anyway. Must also set the engine
-                        // state to Producing — produce_block() rejects calls
-                        // when state != Producing.
+                    if !result && real_count == 1 {
+                        // WHY: Solo mode — only 1 real node, all other committee
+                        // members are synthetic and can't produce. Override every
+                        // slot so the solo phone keeps the chain advancing.
                         engine.force_producing_state();
                         true
+                    } else if !result && real_count == 2 {
+                        // WHY: Two real nodes — VRF assigned this slot to the
+                        // synthetic member. Alternate production by height parity:
+                        // the node with the lower ID produces on even heights,
+                        // the other on odd heights. Without this, BOTH nodes
+                        // force-produce every slot, creating competing blocks
+                        // that fork endlessly (neither reaches BFT 2/2 finality
+                        // because each phone's block is overwritten by the other's).
+                        let next_height = engine.current_height() + 1;
+                        let we_are_lower = peer_ids_for_slot.first()
+                            .map(|peer_id| our_id_for_slot < *peer_id)
+                            .unwrap_or(true); // Solo fallback if no peers known
+                        let our_turn = if we_are_lower {
+                            next_height % 2 == 0
+                        } else {
+                            next_height % 2 == 1
+                        };
+                        if our_turn {
+                            engine.force_producing_state();
+                            true
+                        } else {
+                            false // Other node's turn — skip this slot
+                        }
                     } else {
                         result
                     }
