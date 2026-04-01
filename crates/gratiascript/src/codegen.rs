@@ -838,12 +838,14 @@ impl CodeGen {
                 // loc.lon → call get_location_lon
                 match field.as_str() {
                     "lat" => {
-                        let idx = self.find_import("get_location_lat").unwrap_or(0);
+                        let idx = self.find_import("get_location_lat")
+                            .ok_or_else(|| CompileError::codegen("host function get_location_lat not found in imports".to_string()))?;
                         code.push(OP_CALL);
                         encode_u32(code, idx);
                     }
                     "lon" => {
-                        let idx = self.find_import("get_location_lon").unwrap_or(1);
+                        let idx = self.find_import("get_location_lon")
+                            .ok_or_else(|| CompileError::codegen("host function get_location_lon not found in imports".to_string()))?;
                         code.push(OP_CALL);
                         encode_u32(code, idx);
                     }

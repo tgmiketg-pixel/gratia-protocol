@@ -691,7 +691,12 @@ impl StateDb {
                         "corrupt block height".to_string(),
                     ));
                 }
-                Ok(u64::from_be_bytes(data.try_into().unwrap()))
+                // WHY: The length check above guarantees exactly 8 bytes,
+                // but use map_err instead of unwrap for defense-in-depth.
+                let bytes: [u8; 8] = data.try_into().map_err(|_| {
+                    GratiaError::StorageError("corrupt block height bytes".to_string())
+                })?;
+                Ok(u64::from_be_bytes(bytes))
             }
             None => Ok(0),
         }

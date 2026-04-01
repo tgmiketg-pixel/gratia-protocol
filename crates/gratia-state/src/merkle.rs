@@ -126,9 +126,15 @@ impl MerkleTree {
 
     /// Generate a Merkle inclusion proof for the leaf at the given index.
     ///
-    /// Returns `None` if the index is out of bounds.
+    /// Returns `None` if the index is out of bounds or the tree is empty.
     pub fn generate_proof(&self, leaf_index: usize) -> Option<MerkleProof> {
         let leaves = self.levels.first()?;
+        // WHY: An empty tree has a single zero node as sentinel. Generating a
+        // proof for it would create a false positive (proving a non-existent
+        // leaf exists). Reject proofs for empty trees.
+        if leaves.len() == 1 && leaves[0] == [0u8; 32] {
+            return None;
+        }
         if leaf_index >= leaves.len() {
             return None;
         }
