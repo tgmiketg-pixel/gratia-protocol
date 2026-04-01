@@ -217,7 +217,13 @@ impl ReputationManager {
     }
 
     /// Get or create the reputation entry for a peer.
+    ///
+    /// WHY: Auto-evicts stale peers when the map exceeds 1000 entries to
+    /// prevent unbounded memory growth on long-running nodes.
     fn entry(&mut self, peer_id: &str) -> &mut PeerReputation {
+        if self.peers.len() > 1000 && !self.peers.contains_key(peer_id) {
+            self.evict_stale_peers(chrono::Duration::hours(24));
+        }
         self.peers
             .entry(peer_id.to_string())
             .or_insert_with(PeerReputation::new)

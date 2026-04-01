@@ -436,11 +436,18 @@ impl SyncManager {
             .max()
             .unwrap_or(self.local_height);
 
-        let from = highest_requested + 1;
+        let from = match highest_requested.checked_add(1) {
+            Some(f) => f,
+            None => return None, // highest_requested is u64::MAX
+        };
         if from > network_height {
             return None;
         }
-        let to = (from + MAX_BLOCKS_PER_REQUEST - 1).min(network_height);
+        // WHY: Use checked_add to prevent overflow at extreme block heights.
+        let to = from
+            .checked_add(MAX_BLOCKS_PER_REQUEST - 1)
+            .unwrap_or(network_height)
+            .min(network_height);
 
         // Find a peer that has blocks we need and that we haven't already
         // sent a pending request to

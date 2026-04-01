@@ -371,7 +371,10 @@ impl WasmerRuntime {
             func_env,
             |env: wasmer::FunctionEnvMut<Arc<Mutex<WasmerHostState>>>| -> f32 {
                 let state_arc = env.data().clone();
-                let mut state = state_arc.lock().unwrap();
+                let mut state = match state_arc.lock() {
+                    Ok(s) => s,
+                    Err(_) => return Default::default(), // Mutex poisoned — abort safely
+                };
                 if state.aborted {
                     return 0.0;
                 }
@@ -395,7 +398,10 @@ impl WasmerRuntime {
             func_env,
             |env: wasmer::FunctionEnvMut<Arc<Mutex<WasmerHostState>>>| -> f32 {
                 let state_arc = env.data().clone();
-                let mut state = state_arc.lock().unwrap();
+                let mut state = match state_arc.lock() {
+                    Ok(s) => s,
+                    Err(_) => return Default::default(), // Mutex poisoned — abort safely
+                };
                 if state.aborted {
                     return 0.0;
                 }
@@ -419,7 +425,10 @@ impl WasmerRuntime {
             func_env,
             |env: wasmer::FunctionEnvMut<Arc<Mutex<WasmerHostState>>>| -> i32 {
                 let state_arc = env.data().clone();
-                let mut state = state_arc.lock().unwrap();
+                let mut state = match state_arc.lock() {
+                    Ok(s) => s,
+                    Err(_) => return Default::default(), // Mutex poisoned — abort safely
+                };
                 if state.aborted {
                     return 0;
                 }
@@ -443,7 +452,10 @@ impl WasmerRuntime {
             func_env,
             |env: wasmer::FunctionEnvMut<Arc<Mutex<WasmerHostState>>>| -> i32 {
                 let state_arc = env.data().clone();
-                let mut state = state_arc.lock().unwrap();
+                let mut state = match state_arc.lock() {
+                    Ok(s) => s,
+                    Err(_) => return Default::default(), // Mutex poisoned — abort safely
+                };
                 if state.aborted {
                     return 0;
                 }
@@ -470,7 +482,10 @@ impl WasmerRuntime {
             func_env,
             |env: wasmer::FunctionEnvMut<Arc<Mutex<WasmerHostState>>>, sensor_type: i32| -> f64 {
                 let state_arc = env.data().clone();
-                let mut state = state_arc.lock().unwrap();
+                let mut state = match state_arc.lock() {
+                    Ok(s) => s,
+                    Err(_) => return Default::default(), // Mutex poisoned — abort safely
+                };
                 if state.aborted {
                     return 0.0;
                 }
@@ -502,7 +517,10 @@ impl WasmerRuntime {
             func_env,
             |env: wasmer::FunctionEnvMut<Arc<Mutex<WasmerHostState>>>| -> i64 {
                 let state_arc = env.data().clone();
-                let mut state = state_arc.lock().unwrap();
+                let mut state = match state_arc.lock() {
+                    Ok(s) => s,
+                    Err(_) => return Default::default(), // Mutex poisoned — abort safely
+                };
                 if state.aborted {
                     return 0;
                 }
@@ -521,7 +539,10 @@ impl WasmerRuntime {
             func_env,
             |env: wasmer::FunctionEnvMut<Arc<Mutex<WasmerHostState>>>| -> i64 {
                 let state_arc = env.data().clone();
-                let mut state = state_arc.lock().unwrap();
+                let mut state = match state_arc.lock() {
+                    Ok(s) => s,
+                    Err(_) => return Default::default(), // Mutex poisoned — abort safely
+                };
                 if state.aborted {
                     return 0;
                 }
@@ -544,7 +565,10 @@ impl WasmerRuntime {
             func_env,
             |env: wasmer::FunctionEnvMut<Arc<Mutex<WasmerHostState>>>| -> i32 {
                 let state_arc = env.data().clone();
-                let mut state = state_arc.lock().unwrap();
+                let mut state = match state_arc.lock() {
+                    Ok(s) => s,
+                    Err(_) => return Default::default(), // Mutex poisoned — abort safely
+                };
                 if state.aborted {
                     return 0;
                 }
@@ -576,7 +600,10 @@ impl WasmerRuntime {
             func_env,
             |env: wasmer::FunctionEnvMut<Arc<Mutex<WasmerHostState>>>| -> i64 {
                 let state_arc = env.data().clone();
-                let mut state = state_arc.lock().unwrap();
+                let mut state = match state_arc.lock() {
+                    Ok(s) => s,
+                    Err(_) => return Default::default(), // Mutex poisoned — abort safely
+                };
                 if state.aborted {
                     return 0;
                 }
@@ -603,7 +630,10 @@ impl WasmerRuntime {
                 // WHY: Clone the Arc so the borrow on env is released, then
                 // use env as the store reference for memory views.
                 let state_arc = env.data().clone();
-                let mut state = state_arc.lock().unwrap();
+                let mut state = match state_arc.lock() {
+                    Ok(s) => s,
+                    Err(_) => return Default::default(), // Mutex poisoned — abort safely
+                };
                 if state.aborted {
                     return 0;
                 }
@@ -650,7 +680,10 @@ impl WasmerRuntime {
              val_ptr: i32,
              val_len: i32| {
                 let state_arc = env.data().clone();
-                let mut state = state_arc.lock().unwrap();
+                let mut state = match state_arc.lock() {
+                    Ok(s) => s,
+                    Err(_) => return Default::default(), // Mutex poisoned — abort safely
+                };
                 if state.aborted {
                     return;
                 }
@@ -703,7 +736,10 @@ impl WasmerRuntime {
              data_ptr: i32,
              data_len: i32| {
                 let state_arc = env.data().clone();
-                let mut state = state_arc.lock().unwrap();
+                let mut state = match state_arc.lock() {
+                    Ok(s) => s,
+                    Err(_) => return Default::default(), // Mutex poisoned — abort safely
+                };
                 if state.aborted {
                     return;
                 }
@@ -854,7 +890,9 @@ impl ContractRuntime for WasmerRuntime {
         // The memory must be stored AFTER instantiation because exports only
         // exist on a live instance.
         if let Ok(memory) = instance.exports.get_memory("memory") {
-            shared_state.lock().unwrap().memory = Some(memory.clone());
+            if let Ok(mut s) = shared_state.lock() {
+                s.memory = Some(memory.clone());
+            }
         }
 
         // Record the start time for execution time limit enforcement.
@@ -901,7 +939,11 @@ impl ContractRuntime for WasmerRuntime {
         // WHY: The host functions may have charged gas, emitted events, or
         // written to storage during execution. We need to propagate these
         // changes back to the caller's references.
-        let final_state = shared_state.lock().unwrap();
+        let final_state = shared_state.lock().map_err(|_| {
+            GratiaError::ContractExecutionFailed {
+                reason: "Host state mutex poisoned during contract execution".into(),
+            }
+        })?;
         *gas_meter = final_state.gas_meter.clone();
         *host_env = final_state.host_env.clone();
 
