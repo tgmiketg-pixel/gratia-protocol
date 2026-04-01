@@ -80,19 +80,19 @@ impl FeedManager {
 
     /// Build a reply thread: all replies to a specific post.
     pub fn reply_thread(store: &LuxStore, post_hash: &str, viewer_address: &str) -> Vec<FeedItem> {
-        // WHY: Linear scan for now. In production, maintain a reply index
-        // in RocksDB for O(1) lookup.
-        let mut replies: Vec<FeedItem> = Vec::new();
-
-        // This is O(n) over all posts — fine for V1, needs indexing for scale
-        for post in store.get_posts_by_author("") {
-            // get_posts_by_author with "" won't match anything, so we need
-            // a different approach for V1
-            let _ = post;
-        }
-
-        // V1: iterate all posts (fine for small networks)
-        // TODO: Add reply index when post count exceeds 10,000
+        let mut replies: Vec<FeedItem> = store.get_replies(post_hash)
+            .into_iter()
+            .map(|post| {
+                let engagement = store.get_engagement(&post.hash);
+                let profile = store.get_profile(&post.author);
+                FeedItem {
+                    post: post.clone(),
+                    engagement,
+                    author_display_name: profile.and_then(|p| p.display_name.clone()),
+                    liked_by_me: store.has_liked(viewer_address, &post.hash),
+                }
+            })
+            .collect();
         replies.sort_by(|a, b| a.post.timestamp.cmp(&b.post.timestamp));
         replies
     }

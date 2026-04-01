@@ -155,7 +155,7 @@ impl FeeCalculator {
 
     /// Record a fee burn from a posted Lux message.
     pub fn record_burn(&mut self, lux_amount: u64) {
-        self.total_burned_lux += lux_amount;
+        self.total_burned_lux = self.total_burned_lux.saturating_add(lux_amount);
     }
 
     /// Total Lux burned from Lux fees over the network's lifetime.

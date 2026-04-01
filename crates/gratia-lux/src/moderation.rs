@@ -102,7 +102,9 @@ impl JurySystem {
             return self.cases.get(&post_hash);
         }
 
-        let jury_size = if false { APPEAL_JURY_SIZE } else { STANDARD_JURY_SIZE };
+        // WHY: file_report() is always for new cases, not appeals.
+        // Appeals go through file_appeal() which uses APPEAL_JURY_SIZE.
+        let jury_size = STANDARD_JURY_SIZE;
         if selected_jury.len() < jury_size {
             tracing::warn!(
                 needed = jury_size,
