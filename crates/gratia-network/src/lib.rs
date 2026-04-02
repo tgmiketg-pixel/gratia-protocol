@@ -1159,28 +1159,33 @@ async fn run_swarm_event_loop(
                         // WHY: Rate-limit and reputation-check BEFORE spending
                         // CPU on deserialization and validation. A banned or
                         // rate-limited peer's messages are dropped immediately.
-                        let peer_id_str = message.source
-                            .map(|p| p.to_string())
-                            .unwrap_or_default();
-
-                        if !peer_id_str.is_empty() {
-                            // Check if peer is banned
-                            if reputation_mgr.is_banned(&peer_id_str) {
-                                tracing::debug!(peer = %peer_id_str, "Dropping message from banned peer");
+                        // SECURITY: Reject messages with no source. Anonymous
+                        // gossipsub messages bypass rate limiting and reputation,
+                        // so they must not be processed.
+                        let peer_id_str = match message.source {
+                            Some(p) => p.to_string(),
+                            None => {
+                                tracing::debug!(topic, "Dropping anonymous gossipsub message (no source)");
                                 continue;
                             }
+                        };
 
-                            // Determine rate-limit action type from topic
-                            let rate_action = match topic {
-                                gossip::TOPIC_BLOCKS => "block",
-                                gossip::TOPIC_TRANSACTIONS => "tx",
-                                _ => "message",
-                            };
-                            if !rate_limiter.check_rate(&peer_id_str, rate_action) {
-                                tracing::debug!(peer = %peer_id_str, topic, "Rate limited, dropping message");
-                                reputation_mgr.record_spam(&peer_id_str);
-                                continue;
-                            }
+                        // Check if peer is banned
+                        if reputation_mgr.is_banned(&peer_id_str) {
+                            tracing::debug!(peer = %peer_id_str, "Dropping message from banned peer");
+                            continue;
+                        }
+
+                        // Determine rate-limit action type from topic
+                        let rate_action = match topic {
+                            gossip::TOPIC_BLOCKS => "block",
+                            gossip::TOPIC_TRANSACTIONS => "tx",
+                            _ => "message",
+                        };
+                        if !rate_limiter.check_rate(&peer_id_str, rate_action) {
+                            tracing::debug!(peer = %peer_id_str, topic, "Rate limited, dropping message");
+                            reputation_mgr.record_spam(&peer_id_str);
+                            continue;
                         }
 
                         match gossip_handler.process_incoming(topic, &message.data) {
@@ -1188,9 +1193,24 @@ async fn run_swarm_event_loop(
                                 // WHY: Record valid message reception for reputation
                                 if !peer_id_str.is_empty() {
                                     match &msg {
-                                        GossipMessage::NewBlock(_) => reputation_mgr.record_valid_block(&peer_id_str),
+                                        GossipMessage::NewBlock(block) => {
+                                            // SECURITY: Link block producer's NodeId to this
+                                            // PeerId so reputation carries across PeerId rotations.
+                                            let node_id_str = format!("{}", block.header.producer);
+                                            reputation_mgr.link_node_id(&node_id_str, &peer_id_str);
+                                            reputation_mgr.record_valid_block(&peer_id_str);
+                                        }
                                         GossipMessage::NewTransaction(_) => reputation_mgr.record_valid_tx(&peer_id_str),
-                                        _ => {} // Other types don't adjust reputation
+                                        GossipMessage::NodeAnnouncement(ann) => {
+                                            // SECURITY: Link announcement's NodeId to PeerId.
+                                            let node_id_str = format!("{}", ann.node_id);
+                                            reputation_mgr.link_node_id(&node_id_str, &peer_id_str);
+                                        }
+                                        GossipMessage::ValidatorSignatureMsg(sig_msg) => {
+                                            let node_id_str = format!("{}", sig_msg.signature.validator);
+                                            reputation_mgr.link_node_id(&node_id_str, &peer_id_str);
+                                        }
+                                        _ => {} // Other types don't carry NodeId
                                     }
                                 }
 

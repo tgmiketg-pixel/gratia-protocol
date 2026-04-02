@@ -206,6 +206,15 @@ impl Default for PeerReputation {
 pub struct ReputationManager {
     /// Peer ID (libp2p PeerId as string) to reputation mapping.
     peers: HashMap<String, PeerReputation>,
+    /// NodeId (hex string) → PeerId mapping.
+    /// WHY: Attackers can rotate PeerId freely, but NodeId is cryptographically
+    /// bound to their Ed25519 key. When a gossip message carries a NodeId
+    /// (e.g., block producer, node announcement), we link it to the PeerId so
+    /// reputation applies across PeerId rotations.
+    // TODO: Full fix would key all reputation on NodeId instead of PeerId.
+    // This partial fix links NodeId→PeerId so bans on a PeerId also apply
+    // when the same NodeId appears from a different PeerId.
+    node_to_peer: HashMap<String, String>,
 }
 
 impl ReputationManager {
@@ -213,6 +222,7 @@ impl ReputationManager {
     pub fn new() -> Self {
         Self {
             peers: HashMap::new(),
+            node_to_peer: HashMap::new(),
         }
     }
 
@@ -312,6 +322,45 @@ impl ReputationManager {
             }
             keep
         });
+    }
+
+    /// Link a NodeId (hex string) to a PeerId so that reputation and bans
+    /// carry over when an attacker rotates their PeerId.
+    ///
+    /// If the NodeId was previously linked to a different PeerId that is banned,
+    /// the ban is propagated to the new PeerId.
+    pub fn link_node_id(&mut self, node_id: &str, peer_id: &str) {
+        // Check if this NodeId was previously linked to a different PeerId
+        // and transfer bad reputation if so.
+        let should_transfer = self.node_to_peer.get(node_id)
+            .filter(|old_peer| old_peer.as_str() != peer_id)
+            .and_then(|old_peer| {
+                self.peers.get(old_peer).cloned()
+            })
+            .filter(|old_rep| old_rep.score < DEFAULT_SCORE);
+
+        if let Some(old_rep) = should_transfer {
+            let new_rep = self.entry(peer_id);
+            // Carry over the worse score if the old identity was penalized.
+            if old_rep.score < new_rep.score {
+                new_rep.score = old_rep.score;
+                new_rep.banned_until = old_rep.banned_until;
+                debug!(
+                    node_id = node_id,
+                    new_peer = peer_id,
+                    score = old_rep.score,
+                    "Transferred reputation from old PeerId to new PeerId for same NodeId",
+                );
+            }
+        }
+        self.node_to_peer.insert(node_id.to_string(), peer_id.to_string());
+    }
+
+    /// Check if a NodeId is banned (via its linked PeerId).
+    pub fn is_node_banned(&self, node_id: &str) -> bool {
+        self.node_to_peer
+            .get(node_id)
+            .map_or(false, |peer_id| self.is_banned(peer_id))
     }
 
     /// Number of tracked peers.

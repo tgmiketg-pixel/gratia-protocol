@@ -298,33 +298,29 @@ pub fn verify_vrf_proof(
 /// This means a node with score 100 gets the raw VRF value, while a node
 /// with score 40 (minimum) gets its value multiplied by 2.5x, making it
 /// less likely to have the lowest selection value.
-pub fn vrf_output_to_selection(vrf_output: &[u8; 32], presence_score: u8) -> f64 {
+/// Integer-only committee selection value using u64 arithmetic.
+///
+/// SECURITY: Replaces the previous f64 version to ensure deterministic ordering
+/// across ARM and x86 platforms. Floating-point rounding differences between
+/// architectures can cause nodes to disagree on committee membership.
+///
+/// The weighting formula: selection = raw_hash / score
+/// Higher presence_score → lower selection value → higher priority (selected first).
+/// A score-100 node gets raw/100, a score-40 node gets raw/40 (2.5x larger).
+pub fn vrf_output_to_selection(vrf_output: &[u8; 32], presence_score: u8) -> u64 {
     // WHY: Clamping to [40, 100] matches the protocol's Presence Score range.
     // Scores below 40 should never occur (they fail the consensus threshold).
-    let score = presence_score.max(40).min(100) as f64;
+    let score = presence_score.max(40).min(100) as u64;
 
-    // Convert the first 8 bytes of VRF output to a uniform value in [0, 1)
+    // Convert the first 8 bytes of VRF output to a u64 hash value.
     let mut bytes = [0u8; 8];
     bytes.copy_from_slice(&vrf_output[..8]);
     let raw = u64::from_le_bytes(bytes);
-    let uniform = raw as f64 / u64::MAX as f64;
 
-    // WHY: Dividing by score/100 means higher scores produce lower selection values.
-    // The node with the lowest selection value wins block production rights.
-    // A score-100 node gets uniform * 1.0, a score-40 node gets uniform * 2.5.
-    let weighted = uniform * (100.0 / score);
-
-    // WHY: NaN or infinite values from floating-point edge cases would cause
-    // non-deterministic sorting of the committee across different nodes.
-    // Replacing with f64::MAX effectively de-prioritizes this node in selection
-    // without crashing consensus.
-    if weighted.is_nan() || weighted.is_infinite() {
-        return f64::MAX;
-    }
-
-    // Clamp to [0, 1) for safety, though in practice values above 1.0
-    // just mean the node is very unlikely to be selected.
-    weighted.min(1.0 - f64::EPSILON)
+    // WHY: Integer division is deterministic across all platforms.
+    // Higher score → smaller result → higher selection priority.
+    // score is always >= 40, so division by zero is impossible.
+    raw / score
 }
 
 /// Build the VRF input for a given slot.
@@ -460,31 +456,30 @@ mod tests {
     fn test_vrf_output_to_selection_bounds() {
         let zero_output = [0u8; 32];
         let selection = vrf_output_to_selection(&zero_output, 100);
-        assert!(selection >= 0.0);
-        assert!(selection < 1.0);
+        // Zero input → zero selection value
+        assert_eq!(selection, 0);
 
         let max_output = [0xFF; 32];
         let selection = vrf_output_to_selection(&max_output, 40);
-        // Even with worst score, clamped to < 1.0
-        assert!(selection < 1.0);
+        // u64::MAX / 40 — should be a large but valid u64
+        assert!(selection > 0);
+        assert_eq!(selection, u64::MAX / 40);
     }
 
     #[test]
-    fn test_vrf_output_to_selection_nan_safety() {
-        // WHY: Ensure NaN/infinite values are replaced with f64::MAX
-        // to maintain deterministic committee sorting.
-        let output = [0u8; 32]; // zero output
-        // Even with a score of 0 (which gets clamped to 40), the result
-        // should never be NaN.
+    fn test_vrf_output_to_selection_deterministic() {
+        // WHY: Integer arithmetic is deterministic across ARM and x86.
+        // Verify the same inputs always produce the same output.
+        let output = [0u8; 32];
+        // Score 0 gets clamped to 40
         let selection = vrf_output_to_selection(&output, 0);
-        assert!(!selection.is_nan());
-        assert!(!selection.is_infinite());
+        let selection2 = vrf_output_to_selection(&output, 0);
+        assert_eq!(selection, selection2);
 
-        // All-ones output with minimum score should still be valid
         let max_output = [0xFF; 32];
         let selection = vrf_output_to_selection(&max_output, 40);
-        assert!(!selection.is_nan());
-        assert!(!selection.is_infinite());
+        let selection2 = vrf_output_to_selection(&max_output, 40);
+        assert_eq!(selection, selection2);
     }
 
     #[test]

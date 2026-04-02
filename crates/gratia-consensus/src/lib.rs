@@ -399,9 +399,24 @@ impl ConsensusEngine {
                     pubkey,
                 )?;
             } else {
+                // SECURITY: Count real committee members (those with non-empty signing keys).
+                // In multi-node mode (>1 real member), REJECT signatures from validators
+                // with empty pubkeys. An attacker with an empty signing key would bypass
+                // Ed25519 verification entirely. Only allow during bootstrap/solo mode.
+                let real_members = committee.members.iter()
+                    .filter(|m| !m.signing_pubkey.is_empty())
+                    .count();
+                if real_members > 1 {
+                    return Err(GratiaError::BlockValidationFailed {
+                        reason: format!(
+                            "Rejecting unverified signature from validator {}: no signing pubkey (multi-node mode, {} real members)",
+                            signature.validator, real_members,
+                        ),
+                    });
+                }
                 warn!(
                     validator = %signature.validator,
-                    "Accepting unverified signature: no signing pubkey for validator (bootstrap/synthetic)",
+                    "Accepting unverified signature: no signing pubkey for validator (bootstrap/solo mode)",
                 );
             }
         }
@@ -651,11 +666,68 @@ impl ConsensusEngine {
                             ),
                         }
                     })?;
+                } else {
+                    // SECURITY: In multi-node mode, reject signatures from validators
+                    // with empty pubkeys to prevent Ed25519 verification bypass.
+                    let real_members = committee.members.iter()
+                        .filter(|m| !m.signing_pubkey.is_empty())
+                        .count();
+                    if real_members > 1 {
+                        return Err(GratiaError::BlockValidationFailed {
+                            reason: format!(
+                                "Block signature from validator {} has no signing pubkey (multi-node mode, {} real members)",
+                                vs.validator, real_members,
+                            ),
+                        });
+                    }
                 }
-                // WHY: If signing_pubkey is empty (synthetic/bootstrap), we skip
-                // cryptographic verification but still check committee membership.
-                // This is acceptable during bootstrap when synthetic nodes exist.
             }
+        }
+
+        // SECURITY: Validate each transaction in the block.
+        // WHY: Committee signatures prove the block header is authentic, but a
+        // malicious producer could include forged transactions. Verify each tx's
+        // Ed25519 signature and hash integrity before accepting the block.
+        for (i, tx) in block.transactions.iter().enumerate() {
+            // Check signature is the correct length for Ed25519 (64 bytes)
+            if tx.signature.len() != 64 {
+                return Err(GratiaError::BlockValidationFailed {
+                    reason: format!(
+                        "Transaction {} has invalid signature length: {} (expected 64)",
+                        i, tx.signature.len(),
+                    ),
+                });
+            }
+            // Check sender pubkey is the correct length for Ed25519 (32 bytes)
+            if tx.sender_pubkey.len() != 32 {
+                return Err(GratiaError::BlockValidationFailed {
+                    reason: format!(
+                        "Transaction {} has invalid sender pubkey length: {} (expected 32)",
+                        i, tx.sender_pubkey.len(),
+                    ),
+                });
+            }
+            // Verify the Ed25519 signature over the transaction's signable content.
+            // Reconstruct the signable bytes the same way the mempool does.
+            let payload_bytes = bincode::serialize(&tx.payload).map_err(|e| {
+                GratiaError::BlockValidationFailed {
+                    reason: format!("Transaction {} payload serialization failed: {}", i, e),
+                }
+            })?;
+            let mut signable = Vec::with_capacity(payload_bytes.len() + 28);
+            signable.extend_from_slice(&payload_bytes);
+            signable.extend_from_slice(&tx.nonce.to_le_bytes());
+            signable.extend_from_slice(&tx.chain_id.to_le_bytes());
+            signable.extend_from_slice(&tx.fee.to_le_bytes());
+            signable.extend_from_slice(&tx.timestamp.timestamp_millis().to_le_bytes());
+
+            gratia_core::crypto::verify_signature(&tx.sender_pubkey, &signable, &tx.signature)
+                .map_err(|_| GratiaError::BlockValidationFailed {
+                    reason: format!(
+                        "Transaction {} has invalid Ed25519 signature",
+                        i,
+                    ),
+                })?;
         }
 
         // Block is valid — update state

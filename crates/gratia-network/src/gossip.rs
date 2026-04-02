@@ -350,25 +350,26 @@ pub fn validate_incoming_message(data: &[u8]) -> Result<GossipMessage, NetworkEr
             // WHY: Cryptographic verification of NodeAnnouncement prevents
             // any peer from impersonating another node_id or inflating scores.
             // Without this, a single malicious peer can take over the committee.
-            if !ann.signature.is_empty() {
-                // Verify ed25519_pubkey hashes to the claimed node_id
-                let derived_id = node_id_from_pubkey(&ann.ed25519_pubkey);
-                if derived_id != ann.node_id {
-                    return Err(NetworkError::InvalidMessage(
-                        "NodeAnnouncement pubkey does not match node_id".to_string(),
-                    ));
-                }
-                // Verify signature over the canonical payload
-                let payload = node_announcement_signing_payload(ann);
-                if let Err(e) = verify_ed25519(&ann.ed25519_pubkey, &payload, &ann.signature) {
-                    return Err(NetworkError::InvalidMessage(
-                        format!("NodeAnnouncement signature invalid: {}", e),
-                    ));
-                }
+            // SECURITY: Reject unsigned announcements. All nodes must sign.
+            if ann.signature.is_empty() {
+                return Err(NetworkError::InvalidMessage(
+                    "NodeAnnouncement has empty signature — unsigned announcements are rejected".to_string(),
+                ));
             }
-            // NOTE: Unsigned announcements are accepted during the transition
-            // period (old nodes don't sign yet). Once all nodes are updated,
-            // this should reject unsigned announcements.
+            // Verify ed25519_pubkey hashes to the claimed node_id
+            let derived_id = node_id_from_pubkey(&ann.ed25519_pubkey);
+            if derived_id != ann.node_id {
+                return Err(NetworkError::InvalidMessage(
+                    "NodeAnnouncement pubkey does not match node_id".to_string(),
+                ));
+            }
+            // Verify signature over the canonical payload
+            let payload = node_announcement_signing_payload(ann);
+            if let Err(e) = verify_ed25519(&ann.ed25519_pubkey, &payload, &ann.signature) {
+                return Err(NetworkError::InvalidMessage(
+                    format!("NodeAnnouncement signature invalid: {}", e),
+                ));
+            }
         }
         GossipMessage::NewLuxPost(post) => {
             // WHY: Reject posts with empty content or missing signature at the
@@ -410,28 +411,30 @@ pub fn validate_incoming_message(data: &[u8]) -> Result<GossipMessage, NetworkEr
             // gossip layer prevents amplification attacks where a malicious peer
             // floods the network with forged signatures. Without this, invalid
             // sigs propagate to all nodes before the consensus layer rejects them.
-            if msg.validator_pubkey != [0u8; 32] {
-                // Verify pubkey matches claimed validator NodeId
-                let derived_id = node_id_from_pubkey(&msg.validator_pubkey);
-                if derived_id != msg.signature.validator {
-                    return Err(NetworkError::InvalidMessage(
-                        "Validator pubkey does not match validator NodeId".to_string(),
-                    ));
-                }
-                // Verify Ed25519 signature over the block hash
-                if let Err(e) = verify_ed25519(
-                    &msg.validator_pubkey,
-                    &msg.block_hash,
-                    &msg.signature.signature,
-                ) {
-                    return Err(NetworkError::InvalidMessage(
-                        format!("Validator signature cryptographically invalid: {}", e),
-                    ));
-                }
+            // SECURITY: Reject validator signatures with zero pubkey.
+            // All validators must include their pubkey for verification.
+            if msg.validator_pubkey == [0u8; 32] {
+                return Err(NetworkError::InvalidMessage(
+                    "ValidatorSignatureMsg has zero pubkey — unauthenticated signatures are rejected".to_string(),
+                ));
             }
-            // NOTE: Messages with zero validator_pubkey are accepted during
-            // the transition period. Once all nodes include pubkeys, this
-            // should reject messages without them.
+            // Verify pubkey matches claimed validator NodeId
+            let derived_id = node_id_from_pubkey(&msg.validator_pubkey);
+            if derived_id != msg.signature.validator {
+                return Err(NetworkError::InvalidMessage(
+                    "Validator pubkey does not match validator NodeId".to_string(),
+                ));
+            }
+            // Verify Ed25519 signature over the block hash
+            if let Err(e) = verify_ed25519(
+                &msg.validator_pubkey,
+                &msg.block_hash,
+                &msg.signature.signature,
+            ) {
+                return Err(NetworkError::InvalidMessage(
+                    format!("Validator signature cryptographically invalid: {}", e),
+                ));
+            }
         }
     }
 

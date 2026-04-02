@@ -324,9 +324,7 @@ impl ShardedConsensus {
 
         // Re-sort by selection value so block producer ordering is deterministic.
         all_members.sort_by(|a, b| {
-            a.selection_value
-                .partial_cmp(&b.selection_value)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            a.selection_value.cmp(&b.selection_value)
         });
 
         let actual_size = all_members.len();

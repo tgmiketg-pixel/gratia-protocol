@@ -205,7 +205,9 @@ pub struct CommitteeMember {
     /// The VRF proof used during committee selection.
     pub selection_proof: VrfProof,
     /// The weighted selection value (lower = higher priority).
-    pub selection_value: f64,
+    /// SECURITY: u64 instead of f64 to ensure deterministic ordering across
+    /// ARM and x86 platforms (f64 arithmetic can differ between architectures).
+    pub selection_value: u64,
     /// Ed25519 signing public key bytes (32 bytes).
     /// WHY: Used to cryptographically verify block signatures from this
     /// validator. Without this, anyone could forge signatures claiming to
@@ -491,11 +493,9 @@ pub fn select_committee_with_network_size(
     // or similar presence scores) can sort differently depending on input
     // order — causing phones to disagree on who produces which slot.
     candidates.sort_by(|a, b| {
-        match a.selection_value.partial_cmp(&b.selection_value) {
-            Some(std::cmp::Ordering::Equal) | None => {
-                a.node_id.0.cmp(&b.node_id.0)
-            }
-            Some(ord) => ord,
+        match a.selection_value.cmp(&b.selection_value) {
+            std::cmp::Ordering::Equal => a.node_id.0.cmp(&b.node_id.0),
+            ord => ord,
         }
     });
 
@@ -1008,7 +1008,7 @@ mod tests {
             vrf_pubkey: VrfPublicKey { bytes: [1; 32] },
             presence_score: 60,
             selection_proof: VrfProof { output: [0; 32], proof_bytes: vec![] },
-            selection_value: 0.5,
+            selection_value: 500,
             signing_pubkey: vec![],
         }]);
 
@@ -1022,7 +1022,7 @@ mod tests {
             vrf_pubkey: VrfPublicKey { bytes: [2; 32] },
             presence_score: 60,
             selection_proof: VrfProof { output: [0; 32], proof_bytes: vec![] },
-            selection_value: 0.5,
+            selection_value: 500,
             signing_pubkey: vec![],
         }]);
 
@@ -1041,7 +1041,7 @@ mod tests {
             vrf_pubkey: VrfPublicKey { bytes: [1; 32] },
             presence_score: 60,
             selection_proof: VrfProof { output: [0; 32], proof_bytes: vec![] },
-            selection_value: 0.5,
+            selection_value: 500,
             signing_pubkey: vec![],
         }]);
 

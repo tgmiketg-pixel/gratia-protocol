@@ -189,15 +189,32 @@ impl FileKeystore {
         Self { signing_key, key_path }
     }
 
-    /// Read 32 bytes from the key file and construct a SigningKey.
+    /// Read the key file and construct a SigningKey.
     /// Returns None if the file doesn't exist or contains invalid data.
+    ///
+    /// Handles three formats in priority order:
+    /// 1. AES-256-GCM encrypted (new format, ciphertext is 48 bytes)
+    /// 2. XOR-obfuscated (legacy format, ciphertext is 32 bytes) — auto-upgrades to AES-GCM
+    /// 3. Raw 32-byte plaintext (debug builds only)
     fn load_key(path: &str) -> Option<SigningKey> {
         let bytes = std::fs::read(path).ok()?;
 
-        // In release builds, expect encrypted format (EncryptedKeyMaterial JSON).
-        // In debug builds, try encrypted first, fall back to raw 32-byte plaintext
-        // for backwards compatibility with existing dev key files.
-        if let Some(key) = Self::load_encrypted_key(&bytes) {
+        // Try encrypted format (AES-GCM or legacy XOR — decrypt_key_material handles both).
+        if let Some((key, needs_upgrade)) = Self::load_encrypted_key(&bytes) {
+            if needs_upgrade {
+                // Auto-upgrade: re-save in AES-GCM format
+                if let Err(e) = Self::save_key(path, &key) {
+                    tracing::warn!(
+                        "FileKeystore: loaded legacy XOR key but failed to upgrade to AES-GCM: {}",
+                        e
+                    );
+                } else {
+                    tracing::info!(
+                        "FileKeystore: auto-upgraded key file from XOR to AES-256-GCM at {}",
+                        path
+                    );
+                }
+            }
             return Some(key);
         }
 
@@ -219,19 +236,23 @@ impl FileKeystore {
     }
 
     /// Attempt to load an EncryptedKeyMaterial JSON file and decrypt it.
-    fn load_encrypted_key(bytes: &[u8]) -> Option<SigningKey> {
+    /// Returns (key, needs_upgrade) where needs_upgrade is true if the file
+    /// was in the legacy XOR format and should be re-saved as AES-GCM.
+    fn load_encrypted_key(bytes: &[u8]) -> Option<(SigningKey, bool)> {
         let ekm: EncryptedKeyMaterial = serde_json::from_slice(bytes).ok()?;
+        let is_legacy = ekm.ciphertext.len() == 32;
         let decrypted = Self::decrypt_key_material(&ekm).ok()?;
         let arr: [u8; 32] = decrypted.try_into().ok()?;
-        Some(SigningKey::from_bytes(&arr))
+        Some((SigningKey::from_bytes(&arr), is_legacy))
     }
 
     /// Derive a 32-byte encryption key from a domain string and salt using SHA-256.
     ///
     /// TODO(audit): Replace with a proper KDF (Argon2 or HKDF) and use a real
     /// device-bound key from Android Keystore / iOS Secure Enclave instead of
-    /// a hardcoded domain string. The current approach provides obfuscation and
-    /// format correctness but not strong protection against a local attacker.
+    /// a hardcoded domain string. The current approach provides authenticated
+    /// encryption (AES-256-GCM) but not strong protection against a local
+    /// attacker who can read the salt from the same file.
     fn derive_encryption_key(salt: &[u8]) -> [u8; 32] {
         use sha2::{Sha256, Digest};
         let mut hasher = Sha256::new();
@@ -243,56 +264,103 @@ impl FileKeystore {
         key
     }
 
-    /// Encrypt secret key bytes into EncryptedKeyMaterial.
+    /// Encrypt secret key bytes into EncryptedKeyMaterial using AES-256-GCM.
     ///
-    /// Uses XOR with a SHA-256 derived keystream. This is NOT a secure cipher
-    /// (no authentication, simple XOR) but prevents plaintext key storage on disk.
+    /// Provides authenticated encryption: ciphertext integrity is protected by
+    /// a 16-byte authentication tag. Any tampering (bit-flip, truncation) is
+    /// detected on decryption.
     ///
-    /// TODO(audit): Replace with AES-256-GCM via the `ring` crate once it is
-    /// added as a dependency. The current XOR scheme is an interim measure that
-    /// ensures the on-disk format is correct (salt, nonce, ciphertext fields)
-    /// so the upgrade is a drop-in replacement without format migration.
+    /// Format: salt (16 bytes) + nonce (12 bytes) stored in EncryptedKeyMaterial,
+    /// ciphertext field contains encrypted data + 16-byte GCM auth tag.
     fn encrypt_key_material(
         secret_bytes: &[u8; 32],
         address: Address,
     ) -> EncryptedKeyMaterial {
-        use sha2::{Sha256, Digest};
+        use ring::aead;
 
-        // Generate random salt and nonce
-        let mut salt = vec![0u8; 32];
-        let mut nonce = vec![0u8; 12];
+        // Generate random 16-byte salt and 12-byte nonce
+        let mut salt = vec![0u8; 16];
+        let mut nonce_bytes = [0u8; 12];
         let mut rng = OsRng;
         use rand::RngCore;
         rng.fill_bytes(&mut salt);
-        rng.fill_bytes(&mut nonce);
+        rng.fill_bytes(&mut nonce_bytes);
 
-        // Derive keystream: SHA-256(derived_key || nonce)
-        let enc_key = Self::derive_encryption_key(&salt);
-        let mut hasher = Sha256::new();
-        hasher.update(&enc_key);
-        hasher.update(&nonce);
-        let keystream = hasher.finalize();
+        // Derive 256-bit key from salt
+        let enc_key_bytes = Self::derive_encryption_key(&salt);
+        let unbound_key = aead::UnboundKey::new(&aead::AES_256_GCM, &enc_key_bytes)
+            .expect("AES-256-GCM key creation should not fail with 32-byte key");
+        let sealing_key = aead::LessSafeKey::new(unbound_key);
 
-        // XOR encrypt
-        let mut ciphertext = vec![0u8; 32];
-        for i in 0..32 {
-            ciphertext[i] = secret_bytes[i] ^ keystream[i];
-        }
+        let nonce = aead::Nonce::assume_unique_for_key(nonce_bytes);
+        let aad = aead::Aad::from(b"gratia-wallet-v2");
 
+        // AES-GCM seal operates in-place: plaintext buffer is extended with the
+        // 16-byte auth tag appended after encryption.
+        let mut in_out = secret_bytes.to_vec();
+        sealing_key
+            .seal_in_place_append_tag(nonce, aad, &mut in_out)
+            .expect("AES-256-GCM seal should not fail");
+
+        // in_out is now 32 bytes ciphertext + 16 bytes tag = 48 bytes
         EncryptedKeyMaterial {
-            ciphertext,
+            ciphertext: in_out,
             salt,
-            nonce,
+            nonce: nonce_bytes.to_vec(),
             address,
         }
     }
 
-    /// Decrypt an EncryptedKeyMaterial back to raw secret key bytes.
+    /// Decrypt an EncryptedKeyMaterial back to raw secret key bytes using AES-256-GCM.
+    ///
+    /// Returns a clear error if the authentication tag does not match (file
+    /// corrupted or tampered with).
     fn decrypt_key_material(ekm: &EncryptedKeyMaterial) -> Result<Vec<u8>, GratiaError> {
+        use ring::aead;
+
+        // New AES-GCM format: ciphertext is 32 + 16 (tag) = 48 bytes
+        if ekm.ciphertext.len() != 48 {
+            // Fall back to legacy XOR format (ciphertext is exactly 32 bytes)
+            if ekm.ciphertext.len() == 32 {
+                return Self::decrypt_key_material_legacy(ekm);
+            }
+            return Err(GratiaError::Other("invalid ciphertext length".into()));
+        }
+
+        if ekm.nonce.len() != 12 {
+            return Err(GratiaError::Other("invalid nonce length".into()));
+        }
+
+        let enc_key_bytes = Self::derive_encryption_key(&ekm.salt);
+        let unbound_key = aead::UnboundKey::new(&aead::AES_256_GCM, &enc_key_bytes)
+            .map_err(|_| GratiaError::Other("failed to create AES-256-GCM key".into()))?;
+        let opening_key = aead::LessSafeKey::new(unbound_key);
+
+        let nonce_bytes: [u8; 12] = ekm.nonce.as_slice().try_into()
+            .map_err(|_| GratiaError::Other("invalid nonce length".into()))?;
+        let nonce = aead::Nonce::assume_unique_for_key(nonce_bytes);
+        let aad = aead::Aad::from(b"gratia-wallet-v2");
+
+        let mut in_out = ekm.ciphertext.clone();
+        let plaintext = opening_key
+            .open_in_place(nonce, aad, &mut in_out)
+            .map_err(|_| GratiaError::Other(
+                "keystore file corrupted or tampered: AES-GCM authentication failed".into()
+            ))?;
+
+        Ok(plaintext.to_vec())
+    }
+
+    /// Legacy decryption for old XOR-encrypted key files.
+    ///
+    /// Exists solely for migration: if an old-format file is loaded, it is
+    /// decrypted here and then re-saved in the new AES-GCM format by the
+    /// caller.
+    fn decrypt_key_material_legacy(ekm: &EncryptedKeyMaterial) -> Result<Vec<u8>, GratiaError> {
         use sha2::{Sha256, Digest};
 
         if ekm.ciphertext.len() != 32 {
-            return Err(GratiaError::Other("invalid ciphertext length".into()));
+            return Err(GratiaError::Other("invalid legacy ciphertext length".into()));
         }
 
         let enc_key = Self::derive_encryption_key(&ekm.salt);
