@@ -1,0 +1,53 @@
+[package]
+name = "gratia-fuzz"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+gratia-core = { path = "../crates/gratia-core" }
+gratia-network = { path = "../crates/gratia-network" }
+gratia-consensus = { path = "../crates/gratia-consensus" }
+gratia-wallet = { path = "../crates/gratia-wallet" }
+gratia-zk = { path = "../crates/gratia-zk" }
+gratia-staking = { path = "../crates/gratia-staking" }
+arbitrary = { version = "1", features = ["derive"] }
+bincode = "1.3"
+libp2p = { version = "0.54", features = ["tokio"] }
+
+# Prevent this from being built as part of the main workspace
+[workspace]
+
+[[bin]]
+name = "fuzz_gossip_deserialize"
+path = "fuzz_targets/fuzz_gossip_deserialize.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_sync_protocol"
+path = "fuzz_targets/fuzz_sync_protocol.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_transaction_validate"
+path = "fuzz_targets/fuzz_transaction_validate.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_block_validate"
+path = "fuzz_targets/fuzz_block_validate.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_zk_proof_verify"
+path = "fuzz_targets/fuzz_zk_proof_verify.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_bulletproofs_generate"
+path = "fuzz_targets/fuzz_bulletproofs_generate.rs"
+doc = false

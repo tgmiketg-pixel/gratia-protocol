@@ -1977,8 +1977,29 @@ impl GratiaNode {
         // WHY: Choose transport strategy based on SIM/network detection from the
         // Android layer. Devices without a SIM have broken UDP/QUIC on some
         // firmware — skip it entirely instead of waiting for timeout + fallback.
-        let bootstrap_peer_id = "12D3KooWRUqRqDGpQwLtxMP6iGfKEjZYWnkgkiW5BLPyxAeB8gLF";
-        let bootstrap_ip = "45.77.95.111";
+        // WHY: Multiple bootstrap nodes for redundancy. If one goes down,
+        // phones can still discover peers via the other(s). The network layer's
+        // retry loop already dials ALL bootstrap peers and considers itself
+        // connected if ANY one responds.
+        struct BootstrapNode {
+            ip: &'static str,
+            peer_id: &'static str,
+        }
+        let bootstrap_nodes: Vec<BootstrapNode> = vec![
+            // Bootstrap 1: Vultr Miami (US East)
+            BootstrapNode {
+                ip: "45.77.95.111",
+                peer_id: "12D3KooWRUqRqDGpQwLtxMP6iGfKEjZYWnkgkiW5BLPyxAeB8gLF",
+            },
+            // TODO: Replace with second bootstrap node IP and PeerId when provisioned
+            // Region: Europe or Asia for geographic diversity
+            // Steps: 1) Provision VPS  2) Deploy gratia-bootstrap binary
+            //        3) Read PeerId from startup logs  4) Update ip + peer_id here
+            // BootstrapNode {
+            //     ip: "SECOND_BOOTSTRAP_IP",
+            //     peer_id: "SECOND_BOOTSTRAP_PEERID",
+            // },
+        ];
 
         match connection_profile {
             FfiConnectionProfile::Full => {
@@ -1988,10 +2009,12 @@ impl GratiaNode {
                     format!("/ip4/0.0.0.0/udp/{}/quic-v1", listen_port),
                     format!("/ip4/0.0.0.0/tcp/{}", listen_port),
                 ];
-                net_config.bootstrap_peers = vec![
-                    format!("/ip4/{}/udp/9000/quic-v1/p2p/{}", bootstrap_ip, bootstrap_peer_id),
-                    format!("/ip4/{}/tcp/9001/p2p/{}", bootstrap_ip, bootstrap_peer_id),
-                ];
+                let mut peers = Vec::new();
+                for node in &bootstrap_nodes {
+                    peers.push(format!("/ip4/{}/udp/9000/quic-v1/p2p/{}", node.ip, node.peer_id));
+                    peers.push(format!("/ip4/{}/tcp/9001/p2p/{}", node.ip, node.peer_id));
+                }
+                net_config.bootstrap_peers = peers;
             }
             FfiConnectionProfile::WifiOnly => {
                 // No SIM — TCP only, skip QUIC entirely. Also enable aggressive
@@ -2004,9 +2027,11 @@ impl GratiaNode {
                 net_config.transport.listen_addresses = vec![
                     format!("/ip4/0.0.0.0/tcp/{}", listen_port),
                 ];
-                net_config.bootstrap_peers = vec![
-                    format!("/ip4/{}/tcp/9001/p2p/{}", bootstrap_ip, bootstrap_peer_id),
-                ];
+                let mut peers = Vec::new();
+                for node in &bootstrap_nodes {
+                    peers.push(format!("/ip4/{}/tcp/9001/p2p/{}", node.ip, node.peer_id));
+                }
+                net_config.bootstrap_peers = peers;
             }
             FfiConnectionProfile::Offline => {
                 // No connectivity — still start the network layer for mDNS/BT mesh

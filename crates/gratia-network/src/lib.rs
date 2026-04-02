@@ -1713,9 +1713,15 @@ async fn run_swarm_event_loop(
                             // WHY: DON'T decrement live_peer_count here — the FFI
                             // layer's on_peer_disconnected() handles that. See
                             // ConnectionEstablished comment for full explanation.
-                            // Reset bootstrap flag if this was a bootstrap peer
+                            // WHY: Re-check ALL bootstrap peers, not just the one that
+                            // disconnected. With multiple bootstrap nodes, losing one
+                            // shouldn't trigger retry if another is still connected.
                             if bootstrap_addrs.iter().any(|(_, pid)| pid.as_ref() == Some(&peer_id)) {
-                                bootstrap_connected = false;
+                                let connected: std::collections::HashSet<PeerId> =
+                                    swarm.connected_peers().cloned().collect();
+                                bootstrap_connected = bootstrap_addrs.iter().any(|(_, pid)| {
+                                    pid.as_ref().map(|p| connected.contains(p)).unwrap_or(false)
+                                });
                             }
                             let _ = event_tx.send(NetworkEvent::PeerDisconnected {
                                 peer_id,

@@ -5,9 +5,23 @@
 //! relays gossipsub messages and participates in Kademlia DHT peer discovery.
 //!
 //! Usage:
-//!   gratia-bootstrap [--port PORT] [--health-port PORT]
+//!   gratia-bootstrap [OPTIONS]
 //!
-//! Default: listens on UDP 9000 (QUIC) for libp2p, HTTP 8080 for health checks.
+//! Options:
+//!   --port PORT          QUIC listen port (default: 9000, TCP = port+1)
+//!   --health-port PORT   Health check HTTP port (default: 8080)
+//!   --data-dir DIR       Persistent data directory (default: /opt/gratia-bootstrap)
+//!   --node-index N       Node index for unique identity (default: 1, use 2 for second node)
+//!   --peer MULTIADDR     Other bootstrap node(s) to peer with (repeatable)
+//!
+//! Examples:
+//!   # First bootstrap node (Miami):
+//!   gratia-bootstrap --data-dir /opt/gratia-bootstrap
+//!
+//!   # Second bootstrap node (Frankfurt), peering with Miami:
+//!   gratia-bootstrap --data-dir /opt/gratia-bootstrap --node-index 2 \
+//!     --peer /ip4/45.77.95.111/udp/9000/quic-v1/p2p/12D3KooWRUqRqDGpQwLtxMP6iGfKEjZYWnkgkiW5BLPyxAeB8gLF \
+//!     --peer /ip4/45.77.95.111/tcp/9001/p2p/12D3KooWRUqRqDGpQwLtxMP6iGfKEjZYWnkgkiW5BLPyxAeB8gLF
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -19,15 +33,34 @@ use tokio::net::TcpListener;
 use gratia_core::types::NodeId;
 use gratia_network::{NetworkConfig, NetworkEvent, NetworkManager, NoBlockProvider};
 
-// WHY: Fixed node ID for the bootstrap server. This allows phones to hardcode
-// the bootstrap peer address including the peer ID. Changing this would require
-// updating all phones with a new app build.
-fn bootstrap_node_id() -> NodeId {
+// WHY: Fixed node ID for bootstrap servers. The node_index differentiates
+// multiple bootstrap nodes (1 = Miami, 2 = second node, etc.). Phones
+// hardcode the libp2p PeerId (derived from the persisted keypair), not
+// this NodeId, so adding new bootstrap nodes doesn't require changing this.
+fn bootstrap_node_id(node_index: u8) -> NodeId {
     let mut id = [0u8; 32];
     id[0] = 0xB0; // "B0" for Bootstrap
     id[1] = 0x07;
-    id[31] = 0x01;
+    id[31] = node_index;
     NodeId(id)
+}
+
+/// Parse repeated --peer MULTIADDR arguments from argv.
+fn parse_peer_args() -> Vec<String> {
+    let args: Vec<String> = std::env::args().collect();
+    let mut peers = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--peer" {
+            if let Some(addr) = args.get(i + 1) {
+                peers.push(addr.clone());
+                i += 2;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    peers
 }
 
 #[tokio::main]
@@ -52,12 +85,29 @@ async fn main() {
         .and_then(|p| p.parse().ok())
         .unwrap_or(8080);
 
-    tracing::info!("=== Gratia Bootstrap Node ===");
+    let data_dir: String = std::env::args()
+        .skip_while(|a| a != "--data-dir")
+        .nth(1)
+        .unwrap_or_else(|| "/opt/gratia-bootstrap".to_string());
+
+    let node_index: u8 = std::env::args()
+        .skip_while(|a| a != "--node-index")
+        .nth(1)
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(1);
+
+    let peer_addrs = parse_peer_args();
+
+    tracing::info!("=== Gratia Bootstrap Node #{} ===", node_index);
     tracing::info!("QUIC listen port: {}", port);
     tracing::info!("TCP listen port: {}", port + 1);
     tracing::info!("Health check port: {}", health_port);
+    tracing::info!("Data directory: {}", data_dir);
+    if !peer_addrs.is_empty() {
+        tracing::info!("Peering with {} other bootstrap node(s)", peer_addrs.len());
+    }
 
-    let node_id = bootstrap_node_id();
+    let node_id = bootstrap_node_id(node_index);
 
     let mut config = NetworkConfig::new(node_id);
     // WHY: Persist the bootstrap's libp2p identity so the PeerId survives
@@ -65,7 +115,7 @@ async fn main() {
     // and phones with the old PeerId hardcoded can't connect — the QUIC
     // handshake fails because libp2p rejects PeerId mismatches. This was
     // causing the A06 to fail every bootstrap connection attempt.
-    config.data_dir = Some("/opt/gratia-bootstrap".to_string());
+    config.data_dir = Some(data_dir);
     // WHY: Listen on both QUIC (UDP) and TCP. Some phones (Samsung A06 without
     // SIM card) can't do UDP/QUIC to external IPs. TCP works everywhere.
     // UFW firewall rules needed: sudo ufw allow 9000/udp && sudo ufw allow 9001/tcp
@@ -73,8 +123,10 @@ async fn main() {
         format!("/ip4/0.0.0.0/udp/{}/quic-v1", port),
         format!("/ip4/0.0.0.0/tcp/{}", port + 1),
     ];
-    // WHY: Bootstrap node doesn't need to connect to other bootstraps — it IS the bootstrap.
-    config.bootstrap_peers = Vec::new();
+    // WHY: Bootstrap nodes peer with each other so their Kademlia DHTs
+    // stay in sync. Phones that connect to either bootstrap will discover
+    // peers from both. Empty if this is the only bootstrap node.
+    config.bootstrap_peers = peer_addrs;
     // WHY: Bootstrap can cache more peers than mobile nodes since it has more RAM.
     config.max_cached_peers = 5000;
     // WHY: Server can handle many more connections than a phone.
