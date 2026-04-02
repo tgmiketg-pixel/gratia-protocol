@@ -269,7 +269,9 @@ private fun MiningStateCard(
         ),
     ) {
         Column(
-            modifier = Modifier.padding(20.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             if (isMining) {
@@ -347,28 +349,35 @@ private fun MiningStateCard(
                 )
 
                 Box(
-                    modifier = Modifier.size(140.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(210.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     // Layer 1: Finality pulse ring (expands on block finalization)
+                    // WHY: 120dp * 1.6 scale = 192dp max — fits within 210dp container
                     Canvas(
                         modifier = Modifier
-                            .size(130.dp)
+                            .size(120.dp)
                             .graphicsLayer {
                                 scaleX = pulseScale
                                 scaleY = pulseScale
                                 alpha = pulseAlpha
                             },
                     ) {
+                        val strokeW = 3.dp.toPx()
                         drawCircle(
                             color = stateColor,
-                            radius = size.minDimension / 2,
-                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 4.dp.toPx()),
+                            radius = (size.minDimension - strokeW) / 2,
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = strokeW),
                         )
                     }
 
                     // Layer 2: Slot progress ring (fills over 4 seconds)
-                    Canvas(modifier = Modifier.size(110.dp)) {
+                    // WHY: padding(8dp) on the Canvas gives breathing room so the
+                    // rounded stroke caps don't clip at the canvas boundary.
+                    Canvas(modifier = Modifier.size(136.dp).padding(8.dp)) {
+                        val strokeW = 5.dp.toPx()
                         // Background track
                         drawArc(
                             color = stateColor.copy(alpha = 0.15f),
@@ -376,7 +385,7 @@ private fun MiningStateCard(
                             sweepAngle = 360f,
                             useCenter = false,
                             style = androidx.compose.ui.graphics.drawscope.Stroke(
-                                width = 6.dp.toPx(),
+                                width = strokeW,
                                 cap = androidx.compose.ui.graphics.StrokeCap.Round,
                             ),
                         )
@@ -387,7 +396,7 @@ private fun MiningStateCard(
                             sweepAngle = slotFill * 360f,
                             useCenter = false,
                             style = androidx.compose.ui.graphics.drawscope.Stroke(
-                                width = 6.dp.toPx(),
+                                width = strokeW,
                                 cap = androidx.compose.ui.graphics.StrokeCap.Round,
                             ),
                         )
@@ -638,7 +647,11 @@ private fun ConsensusInfoCard(
     syncStatus: String,
     isNetworkRunning: Boolean,
 ) {
-    val statusColor = if (isNetworkRunning) SignalGreen else MaterialTheme.colorScheme.outline
+    val statusColor = when {
+        isNetworkRunning && peerCount > 0 -> SignalGreen
+        isNetworkRunning && peerCount == 0 -> Color(0xFFFF9800) // Orange — running but no peers
+        else -> MaterialTheme.colorScheme.outline
+    }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -692,12 +705,12 @@ private fun ConsensusInfoCard(
                     valueColor = if (isCommitteeMember) SignalGreen else MaterialTheme.colorScheme.outline,
                 )
                 StatItem(
-                    value = syncStatus.replaceFirstChar { it.uppercase() },
+                    value = syncStatus,
                     label = "Sync",
                     valueColor = when {
-                        syncStatus == "synced" -> SignalGreen
-                        syncStatus.startsWith("syncing") -> AmberGold
-                        syncStatus.startsWith("behind") -> Color(0xFFE57373)
+                        syncStatus.equals("synced", ignoreCase = true) -> SignalGreen
+                        syncStatus.startsWith("syncing", ignoreCase = true) -> AmberGold
+                        syncStatus.startsWith("behind", ignoreCase = true) -> Color(0xFFE57373)
                         else -> MaterialTheme.colorScheme.outline
                     },
                 )

@@ -14,6 +14,8 @@ import io.gratia.app.BuildConfig
 import io.gratia.app.bridge.GratiaCoreManager
 import io.gratia.app.bridge.GratiaBridgeException
 import io.gratia.app.bridge.NetworkStatus
+import io.gratia.app.sensors.ConnectivityDetector
+import uniffi.gratia_ffi.FfiConnectionProfile
 import io.gratia.app.security.HardwareKeystore
 import io.gratia.app.service.ProofOfLifeService
 import io.gratia.app.worker.PolHeartbeatWorker
@@ -55,6 +57,11 @@ class GratiaApplication : Application() {
     // must not start without a wallet because the consensus engine needs a signing
     // key derived from the wallet for VRF block producer selection.
     private var walletReady = false
+
+    // WHY: Detects SIM card presence and active network type so the network layer
+    // can choose the right transport (TCP vs QUIC) immediately instead of waiting
+    // for QUIC to timeout on devices without a SIM.
+    private lateinit var connectivityDetector: ConnectivityDetector
 
     override fun onCreate() {
         super.onCreate()
@@ -154,6 +161,40 @@ class GratiaApplication : Application() {
         }
 
         try {
+            // WHY: Detect SIM and network state BEFORE starting the network layer.
+            // This lets us skip QUIC entirely on no-SIM devices (where UDP is broken)
+            // instead of waiting for QUIC to timeout and then falling back to TCP.
+            connectivityDetector = ConnectivityDetector(this)
+            val profile = connectivityDetector.detect()
+            val ffiProfile = when (profile) {
+                ConnectivityDetector.ConnectionProfile.FULL -> FfiConnectionProfile.FULL
+                ConnectivityDetector.ConnectionProfile.WIFI_ONLY -> FfiConnectionProfile.WIFI_ONLY
+                ConnectivityDetector.ConnectionProfile.OFFLINE -> FfiConnectionProfile.OFFLINE
+            }
+            Log.i(TAG, "Detected connection profile: $profile → $ffiProfile")
+
+            // WHY: On no-SIM Samsung budget phones (e.g., A06 Indian variant),
+            // Android's WiFi routing table is lazily initialized. External IPs
+            // are unreachable until local network traffic flows. A DNS lookup
+            // forces the system resolver to talk to the WiFi gateway, which
+            // populates the routing table as a side effect. After this, raw
+            // TCP to the bootstrap server's external IP works.
+            if (ffiProfile == FfiConnectionProfile.WIFI_ONLY) {
+                try {
+                    Log.i(TAG, "WIFI_ONLY: sending DNS probe to wake routing table")
+                    java.net.InetAddress.getByName("dns.google")
+                    Log.i(TAG, "WIFI_ONLY: DNS probe succeeded — routing table active")
+                } catch (e: Exception) {
+                    Log.d(TAG, "WIFI_ONLY: DNS probe failed (${e.message}) — routing may be limited")
+                }
+            }
+
+            // Monitor for changes (SIM inserted, Wi-Fi drop, etc.)
+            connectivityDetector.startMonitoring { newProfile ->
+                Log.i(TAG, "Connection profile changed to $newProfile — network will use new profile on next restart")
+                // TODO: In future, restart network layer with new profile on the fly
+            }
+
             // WHY: Try port 9000 first for the demo so phones can connect to each
             // other at a known address. If 9000 is already bound (e.g., network
             // already running or another process), try ports 9001-9010 before
@@ -165,8 +206,8 @@ class GratiaApplication : Application() {
             var status: NetworkStatus? = null
             for (port in BASE_PORT until BASE_PORT + MAX_PORT_ATTEMPTS) {
                 try {
-                    status = GratiaCoreManager.startNetwork(listenPort = port)
-                    Log.i(TAG, "P2P network started on port $port")
+                    status = GratiaCoreManager.startNetwork(listenPort = port, connectionProfile = ffiProfile)
+                    Log.i(TAG, "P2P network started on port $port with profile $ffiProfile")
                     break
                 } catch (e: Exception) {
                     if (port < BASE_PORT + MAX_PORT_ATTEMPTS - 1) {

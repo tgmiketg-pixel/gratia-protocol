@@ -68,6 +68,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import android.graphics.Bitmap
@@ -168,9 +169,12 @@ fun WalletScreen(
     // transactions will actually propagate.
     val networkStatus = remember { mutableStateOf<io.gratia.app.bridge.NetworkStatus?>(null) }
     LaunchedEffect(Unit) {
-        try {
-            networkStatus.value = io.gratia.app.bridge.GratiaCoreManager.getNetworkStatus()
-        } catch (_: Exception) {}
+        while (true) {
+            try {
+                networkStatus.value = io.gratia.app.bridge.GratiaCoreManager.getNetworkStatus()
+            } catch (_: Exception) {}
+            kotlinx.coroutines.delay(5000)
+        }
     }
 
     Scaffold(
@@ -546,7 +550,7 @@ private fun WalletContent(
                             modifier = Modifier.size(16.dp),
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Restore existing wallet?")
+                        Text("Restore Wallet")
                     }
                 }
             }
@@ -607,12 +611,22 @@ private fun BalanceCard(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Balance
+            // Balance — auto-size font to prevent wrapping on narrow screens (A06 720px)
+            // WHY: Lowered thresholds from 20/16 to 18/14 so font shrinks earlier,
+            // preventing truncation on A06's 720px screen with card padding.
+            val balanceText = "${formatGrat(wallet.balanceLux)} GRAT"
+            val balanceFontSize = when {
+                balanceText.length > 18 -> 20.sp
+                balanceText.length > 14 -> 24.sp
+                else -> 28.sp
+            }
             Text(
-                text = "${formatGrat(wallet.balanceLux)} GRAT",
-                style = MaterialTheme.typography.headlineLarge,
+                text = balanceText,
+                fontSize = balanceFontSize,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
             )
 
             // Lux conversion

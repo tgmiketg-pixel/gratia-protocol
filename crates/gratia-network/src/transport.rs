@@ -44,6 +44,13 @@ pub struct TransportConfig {
     /// Regular pings detect dead connections quickly.
     pub keepalive_interval_secs: u64,
 
+    /// Skip QUIC transport entirely, using TCP only.
+    /// WHY: Samsung budget phones without a SIM card (e.g., A06 Indian variant)
+    /// have broken UDP routing — ICMP ping works but app-level UDP sockets fail.
+    /// When this is true, the SwarmBuilder skips `with_quic_config()` so the node
+    /// connects via TCP only, avoiding the 30-second QUIC timeout before fallback.
+    pub tcp_only: bool,
+
     /// Mesh layer (Layer 0) configuration.
     /// WHY: Optional because mesh transport (BLE/Wi-Fi Direct) is only available
     /// on devices with the necessary hardware. Desktop archive nodes and bootstrap
@@ -74,6 +81,7 @@ impl Default for TransportConfig {
             // traffic in ~30s. 15s keepalive ensures regular traffic flows,
             // keeping the NAT pinhole open and the connection alive.
             keepalive_interval_secs: 15,
+            tcp_only: false,
             // WHY: Mesh is None by default — enabled explicitly on mobile devices
             // that have BLE/Wi-Fi Direct hardware. Bootstrap servers and archive
             // nodes leave this as None.

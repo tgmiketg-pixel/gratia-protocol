@@ -630,9 +630,13 @@ private fun WalletSettingsSection(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
             OutlinedButton(
                 onClick = onShowExportSeed,
+                modifier = Modifier.weight(1f),
                 colors = ButtonDefaults.outlinedButtonColors(
                     contentColor = MaterialTheme.colorScheme.error,
                 ),
@@ -640,19 +644,20 @@ private fun WalletSettingsSection(
                 Icon(
                     Icons.Default.Key,
                     contentDescription = null,
-                    modifier = Modifier.padding(end = 8.dp),
+                    modifier = Modifier.padding(end = 4.dp),
                 )
-                Text("Export Seed Phrase")
+                Text("Export Seed", maxLines = 1)
             }
             OutlinedButton(
                 onClick = onShowRestoreWallet,
+                modifier = Modifier.weight(1f),
             ) {
                 Icon(
                     Icons.Default.Key,
                     contentDescription = null,
-                    modifier = Modifier.padding(end = 8.dp),
+                    modifier = Modifier.padding(end = 4.dp),
                 )
-                Text("Restore Wallet")
+                Text("Restore Wallet", maxLines = 1)
             }
         }
 

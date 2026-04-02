@@ -104,6 +104,14 @@ class MiningService : Service() {
          */
         private const val THERMAL_ZONE_PATH = "/sys/class/thermal/thermal_zone0/temp"
 
+        /** Minimum interval between WiFi reconnect restarts (milliseconds).
+         * WHY: Rapid WiFi toggling (5x on/off) fires multiple CONNECTIVITY_ACTION
+         * broadcasts. Each triggers a full consensus stop→start cycle, orphaning
+         * BFT votes and stalling block production. 5 seconds coalesces rapid
+         * toggles into a single restart while still being responsive to real
+         * WiFi recovery after a genuine disconnection. */
+        private const val NETWORK_RESTART_DEBOUNCE_MS = 5_000L
+
         // -- Observable mining state for UI binding -------------------------
 
         private val _miningState = MutableStateFlow<MiningUiState>(MiningUiState.Idle)
@@ -163,6 +171,17 @@ class MiningService : Service() {
     /** Guard against concurrent WiFi reconnect restarts. */
     @Volatile
     private var networkRestartInProgress: Boolean = false
+
+    /**
+     * Timestamp of last WiFi reconnect restart (epoch millis).
+     * WHY: Debounce rapid WiFi toggles. If the user (or a stress test) toggles
+     * WiFi on/off 5+ times in quick succession, each CONNECTIVITY_ACTION fires
+     * a full consensus stop→start cycle. Multiple rapid cycles leave BFT votes
+     * orphaned and block production stalls. By requiring a minimum gap between
+     * restarts, we coalesce rapid toggles into a single restart.
+     */
+    @Volatile
+    private var lastNetworkRestartMillis: Long = 0L
 
     /** SharedPreferences for persisting mining balance across app restarts. */
     private lateinit var prefs: SharedPreferences
@@ -392,15 +411,23 @@ class MiningService : Service() {
                 // rewards only happen inside the slot timer, which exits when
                 // consensus stops. Without this check, the MiningService keeps
                 // running (showing "Mining" in the UI) but earns nothing.
-                try {
-                    val consensusStatus = GratiaCoreManager.getConsensusStatus()
-                    if (consensusStatus.state == "stopped") {
-                        Log.i(TAG, "Consensus stopped — stopping mining service")
-                        stopSelf()
-                        return
+                // WHY: Skip this check during WiFi recovery. The recovery handler
+                // temporarily stops consensus (to clear stale peer references)
+                // then restarts it. Without this guard, the monitor loop races
+                // the restart — it sees "stopped" during the brief window between
+                // stopConsensus() and startConsensus(), kills the service, and
+                // the restart never completes.
+                if (!networkRestartInProgress) {
+                    try {
+                        val consensusStatus = GratiaCoreManager.getConsensusStatus()
+                        if (consensusStatus.state == "stopped") {
+                            Log.i(TAG, "Consensus stopped — stopping mining service")
+                            stopSelf()
+                            return
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to check consensus status: ${e.message}")
                     }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to check consensus status: ${e.message}")
                 }
 
                 val batteryManager = getSystemService(Context.BATTERY_SERVICE)
@@ -548,35 +575,84 @@ class MiningService : Service() {
      * stop+start cycle on the network layer, recreating all sockets.
      */
     private fun registerConnectivityReceiver() {
+        // WHY: Track whether we've seen the initial broadcast so we can skip it.
+        // CONNECTIVITY_ACTION fires immediately on registration, which would
+        // needlessly stop+restart the network layer that GratiaApplication just started.
+        var initialBroadcastSkipped = false
+
         connectivityReceiver = object : BroadcastReceiver() {
             @Suppress("DEPRECATION")
             override fun onReceive(context: Context, intent: Intent) {
+                if (!initialBroadcastSkipped) {
+                    initialBroadcastSkipped = true
+                    Log.d(TAG, "Skipping initial CONNECTIVITY_ACTION broadcast")
+                    return
+                }
+
                 val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
                 val activeNetwork = cm?.activeNetworkInfo
                 val isConnected = activeNetwork?.isConnected == true
                 val isWifi = activeNetwork?.type == android.net.ConnectivityManager.TYPE_WIFI
 
                 if (isConnected && isWifi && !networkRestartInProgress) {
+                    // WHY: Debounce rapid WiFi toggles. If WiFi is toggled on/off
+                    // 5 times in 10 seconds, we'd fire 5 stop→start cycles, each
+                    // orphaning BFT votes. By requiring a 5-second gap, rapid
+                    // toggles coalesce into a single restart after things stabilize.
+                    val now = System.currentTimeMillis()
+                    val elapsed = now - lastNetworkRestartMillis
+                    if (elapsed < NETWORK_RESTART_DEBOUNCE_MS) {
+                        Log.d(TAG, "WiFi reconnect debounced (${elapsed}ms since last restart, need ${NETWORK_RESTART_DEBOUNCE_MS}ms)")
+                        return
+                    }
                     Log.i(TAG, "WiFi reconnected — restarting network layer")
                     networkRestartInProgress = true
+                    lastNetworkRestartMillis = now
                     serviceScope.launch(Dispatchers.IO) {
                         try {
-                            // WHY: Stop then start recreates all libp2p sockets,
-                            // re-subscribes to gossipsub topics, re-joins mDNS,
-                            // and re-dials the bootstrap server. Without this,
-                            // dead sockets persist indefinitely after WiFi toggle.
+                            // WHY: Detect SIM/network state for transport selection.
+                            // Uses the same ConnectivityDetector as GratiaApplication
+                            // so the restart picks the right transport (TCP-only for
+                            // no-SIM devices, QUIC+TCP for SIM devices).
+                            val detector = io.gratia.app.sensors.ConnectivityDetector(context)
+                            val profile = detector.detect()
+                            val ffiProfile = when (profile) {
+                                io.gratia.app.sensors.ConnectivityDetector.ConnectionProfile.FULL ->
+                                    uniffi.gratia_ffi.FfiConnectionProfile.FULL
+                                io.gratia.app.sensors.ConnectivityDetector.ConnectionProfile.WIFI_ONLY ->
+                                    uniffi.gratia_ffi.FfiConnectionProfile.WIFI_ONLY
+                                io.gratia.app.sensors.ConnectivityDetector.ConnectionProfile.OFFLINE ->
+                                    uniffi.gratia_ffi.FfiConnectionProfile.OFFLINE
+                            }
+                            Log.i(TAG, "WiFi reconnect using profile: $ffiProfile")
+
+                            // WHY: Wake routing table on no-SIM devices after WiFi reconnect.
+                            if (ffiProfile == uniffi.gratia_ffi.FfiConnectionProfile.WIFI_ONLY) {
+                                try { java.net.InetAddress.getByName("dns.google") } catch (_: Exception) {}
+                            }
+
+                            // WHY: Stop consensus FIRST, then network layer.
+                            // Consensus holds references to the network's peer connections.
+                            // If we only restart the network, consensus keeps stale references
+                            // and block production stalls. Full stop→start cycle required.
+                            try {
+                                io.gratia.app.bridge.GratiaCoreManager.stopConsensus()
+                                Log.i(TAG, "Consensus stopped for WiFi reconnect")
+                            } catch (e: Exception) {
+                                Log.d(TAG, "Consensus stop note: ${e.message}")
+                            }
+
                             io.gratia.app.bridge.GratiaCoreManager.stopNetwork()
                             kotlinx.coroutines.delay(1000) // Let sockets close (non-blocking)
-                            io.gratia.app.bridge.GratiaCoreManager.startNetwork(listenPort = 9000)
-                            Log.i(TAG, "Network layer restarted after WiFi reconnect")
+                            io.gratia.app.bridge.GratiaCoreManager.startNetwork(
+                                listenPort = 9000,
+                                connectionProfile = ffiProfile,
+                            )
+                            Log.i(TAG, "Network layer restarted after WiFi reconnect with profile $ffiProfile")
 
-                            // Re-start consensus to rebuild committee with fresh connections
-                            try {
-                                io.gratia.app.bridge.GratiaCoreManager.startConsensus()
-                            } catch (e: Exception) {
-                                // Already running — that's fine
-                                Log.d(TAG, "Consensus already running: ${e.message}")
-                            }
+                            // Restart consensus with fresh network connections
+                            io.gratia.app.bridge.GratiaCoreManager.startConsensus()
+                            Log.i(TAG, "Consensus restarted after WiFi reconnect")
                         } catch (e: Exception) {
                             Log.w(TAG, "Network restart failed: ${e.message}")
                         } finally {

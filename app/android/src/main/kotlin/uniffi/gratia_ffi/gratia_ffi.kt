@@ -963,7 +963,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_gratia_ffi_fn_method_gratianode_start_mining(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_gratia_ffi_fn_method_gratianode_start_network(`ptr`: Pointer,`listenPort`: Short,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_gratia_ffi_fn_method_gratianode_start_network(`ptr`: Pointer,`listenPort`: Short,`connectionProfile`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_stop_consensus(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -1391,10 +1391,10 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_start_mining() != 41256.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_start_network() != 17866.toShort()) {
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_start_network() != 34129.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_stop_consensus() != 56015.toShort()) {
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_stop_consensus() != 24712.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_stop_mesh() != 60787.toShort()) {
@@ -2291,12 +2291,18 @@ public interface GratiaNodeInterface {
      * Initializes the libp2p swarm with QUIC transport, Gossipsub for
      * block/transaction propagation, and mDNS for local peer discovery.
      *
-     * `listen_port` specifies the UDP port to listen on (0 = OS-assigned).
+     * `listen_port` specifies the port to listen on (0 = OS-assigned).
+     * `connection_profile` tells us what transports are viable based on SIM/network state.
      */
-    fun `startNetwork`(`listenPort`: kotlin.UShort): FfiNetworkStatus
+    fun `startNetwork`(`listenPort`: kotlin.UShort, `connectionProfile`: FfiConnectionProfile): FfiNetworkStatus
     
     /**
      * Stop the consensus engine.
+     *
+     * WHY: Clears ALL BFT state (pending block, expiration counters) so that
+     * a subsequent start_consensus() begins with a clean slate. Without this,
+     * rapid WiFi toggle cycles (stop→start→stop→start) leave orphaned BFT
+     * votes/proposals that prevent block finality after restart.
      */
     fun `stopConsensus`()
     
@@ -3429,14 +3435,15 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
      * Initializes the libp2p swarm with QUIC transport, Gossipsub for
      * block/transaction propagation, and mDNS for local peer discovery.
      *
-     * `listen_port` specifies the UDP port to listen on (0 = OS-assigned).
+     * `listen_port` specifies the port to listen on (0 = OS-assigned).
+     * `connection_profile` tells us what transports are viable based on SIM/network state.
      */
-    @Throws(FfiException::class)override fun `startNetwork`(`listenPort`: kotlin.UShort): FfiNetworkStatus {
+    @Throws(FfiException::class)override fun `startNetwork`(`listenPort`: kotlin.UShort, `connectionProfile`: FfiConnectionProfile): FfiNetworkStatus {
             return FfiConverterTypeFfiNetworkStatus.lift(
     callWithPointer {
     uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_start_network(
-        it, FfiConverterUShort.lower(`listenPort`),_status)
+        it, FfiConverterUShort.lower(`listenPort`),FfiConverterTypeFfiConnectionProfile.lower(`connectionProfile`),_status)
 }
     }
     )
@@ -3446,6 +3453,11 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
     
     /**
      * Stop the consensus engine.
+     *
+     * WHY: Clears ALL BFT state (pending block, expiration counters) so that
+     * a subsequent start_consensus() begins with a clean slate. Without this,
+     * rapid WiFi toggle cycles (stop→start→stop→start) leave orphaned BFT
+     * votes/proposals that prevent block finality after restart.
      */
     @Throws(FfiException::class)override fun `stopConsensus`()
         = 
@@ -4783,6 +4795,55 @@ public object FfiConverterTypeFfiWalletInfo: FfiConverterRustBuffer<FfiWalletInf
             FfiConverterString.write(value.`miningState`, buf)
     }
 }
+
+
+
+/**
+ * Connection profile detected by the mobile platform layer.
+ *
+ * WHY: Devices without a SIM card (e.g., Samsung A06 Indian variant) have broken
+ * UDP/QUIC sockets — Android's carrier firmware cripples UDP when no cellular radio
+ * is active. By detecting SIM presence upfront, we choose the right transport
+ * strategy immediately instead of waiting for QUIC to timeout and then falling back
+ * to TCP (which adds 10-30s of unnecessary delay on every startup).
+ */
+
+enum class FfiConnectionProfile {
+    
+    /**
+     * SIM present, cellular or Wi-Fi available — QUIC primary, TCP fallback.
+     */
+    FULL,
+    /**
+     * No SIM, Wi-Fi only — TCP primary, skip QUIC entirely.
+     */
+    WIFI_ONLY,
+    /**
+     * No connectivity — Bluetooth mesh relay only (queue transactions).
+     */
+    OFFLINE;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiConnectionProfile: FfiConverterRustBuffer<FfiConnectionProfile> {
+    override fun read(buf: ByteBuffer) = try {
+        FfiConnectionProfile.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: FfiConnectionProfile) = 4UL
+
+    override fun write(value: FfiConnectionProfile, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
 
 
 

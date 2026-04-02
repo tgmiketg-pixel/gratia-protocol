@@ -14,6 +14,7 @@ pub mod committee;
 pub mod block_production;
 pub mod validation;
 pub mod sharded_consensus;
+pub mod streamlet;
 pub mod sync;
 
 use chrono::{DateTime, Utc};

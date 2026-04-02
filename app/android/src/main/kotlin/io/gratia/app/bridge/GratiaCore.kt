@@ -14,6 +14,7 @@ import uniffi.gratia_ffi.FfiShardInfo
 import uniffi.gratia_ffi.FfiStakeInfo
 import uniffi.gratia_ffi.FfiTransactionInfo
 import uniffi.gratia_ffi.FfiVmInfo
+import uniffi.gratia_ffi.FfiConnectionProfile
 import uniffi.gratia_ffi.FfiWalletInfo
 
 /**
@@ -367,12 +368,12 @@ object GratiaCoreManager {
      * @param listenPort UDP port to listen on (0 = OS-assigned).
      * @return Current network status.
      */
-    fun startNetwork(listenPort: Int = 0): NetworkStatus {
+    fun startNetwork(listenPort: Int = 0, connectionProfile: FfiConnectionProfile = FfiConnectionProfile.FULL): NetworkStatus {
         // WHY: Clamp to valid port range before converting to UShort. Values
         // outside 0-65535 would truncate silently, potentially binding to the
         // wrong port.
         val clampedPort = listenPort.coerceIn(0, 65535)
-        val ffi = callNode { it.startNetwork(clampedPort.toUShort()) }
+        val ffi = callNode { it.startNetwork(clampedPort.toUShort(), connectionProfile) }
         return NetworkStatus(
             isRunning = ffi.isRunning,
             peerCount = ffi.peerCount.toInt(),

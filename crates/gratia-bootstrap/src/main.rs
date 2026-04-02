@@ -133,7 +133,7 @@ async fn main() {
                     "Peer disconnected"
                 );
             }
-            Some(NetworkEvent::BlockReceived(block)) => {
+            Some(NetworkEvent::BlockReceived(block, _source)) => {
                 blocks_relayed.fetch_add(1, Ordering::Relaxed);
                 tracing::debug!(
                     height = block.header.height,

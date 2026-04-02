@@ -26,6 +26,7 @@ pub mod error;
 pub mod gossip;
 pub mod mesh;
 pub mod reputation;
+pub mod bft_protocol;
 pub mod sync;
 pub mod sync_protocol;
 pub mod transport;
@@ -44,7 +45,7 @@ use libp2p::{
 };
 use tokio::sync::mpsc;
 
-use gratia_core::types::{Block, BlockHash, NodeId, ProofOfLifeAttestation, Transaction};
+use gratia_core::types::{Block, BlockHash, NodeId, ProofOfLifeAttestation, Transaction, ValidatorSignature};
 
 use crate::discovery::PeerDiscovery;
 use crate::error::NetworkError;
@@ -86,7 +87,8 @@ impl BlockProvider for NoBlockProvider {
 #[derive(Debug)]
 pub enum NetworkEvent {
     /// A new block was received from the gossip network and passed basic validation.
-    BlockReceived(Box<Block>),
+    /// Includes the PeerId of the sender for direct BFT signature delivery.
+    BlockReceived(Box<Block>, Option<PeerId>),
 
     /// A new transaction was received from the gossip network.
     TransactionReceived(Box<Transaction>),
@@ -233,6 +235,11 @@ struct GratiaBehaviour {
     /// peer-to-peer request-response. Bandwidth scales O(syncing peers) not
     /// O(total nodes). 50x savings at 100 nodes.
     sync_rr: libp2p::request_response::Behaviour<sync_protocol::SyncCodec>,
+    /// Direct BFT signature delivery protocol.
+    /// WHY: BFT signatures only need to reach the block producer, not the
+    /// entire network. Direct delivery is sub-second vs 0-10s gossipsub.
+    /// Also eliminates information leak of voting patterns to observers.
+    bft_rr: libp2p::request_response::Behaviour<bft_protocol::BftSigCodec>,
 }
 
 // ============================================================================
@@ -319,7 +326,23 @@ pub enum NetworkCommand {
     /// Publish a validator signature for a pending block to the gossip network.
     /// WHY: After validating a block from another producer, committee members
     /// broadcast their signature so the producer can collect enough for finality.
+    /// DEPRECATED: Use SendBftSignatureDirect for point-to-point delivery.
     PublishValidatorSignature(Box<ValidatorSignatureMessage>),
+    /// Send a BFT co-signature directly to the block producer via request-response.
+    /// WHY: Gossipsub delivery takes 0-10s (heartbeat-dependent). Direct delivery
+    /// is sub-second. Also eliminates information leak to observers.
+    SendBftSignatureDirect {
+        target_peer: PeerId,
+        request: bft_protocol::BftSignatureRequest,
+    },
+    /// Send a block proposal directly to a committee member for co-signing.
+    /// WHY: The producer sends the block directly to validators instead of
+    /// waiting for gossipsub. The validator receives it in <100ms, validates,
+    /// and sends back their co-signature via SendBftSignatureDirect.
+    SendBlockProposal {
+        target_peer: PeerId,
+        request: bft_protocol::BftSignatureRequest,
+    },
     /// Dial a specific peer address.
     DialPeer(String),
     /// Trigger a sync check — the SyncManager determines what to request.
@@ -411,100 +434,97 @@ impl NetworkManager {
         };
         tracing::info!(peer_id = %identity.public().to_peer_id(), "Using libp2p identity");
         let quic_keepalive = Duration::from_secs(self.config.transport.keepalive_interval_secs);
-        let mut swarm = SwarmBuilder::with_existing_identity(identity)
-            .with_tokio()
-            .with_tcp(
-                // WHY: TCP fallback for devices that can't do UDP/QUIC
-                // (Samsung A06 without SIM card, restrictive NATs, corporate firewalls).
-                // TCP is slower but universally available.
-                libp2p::tcp::Config::default().nodelay(true),
-                libp2p::noise::Config::new,
-                libp2p::yamux::Config::default,
-            )
-            .map_err(|e| NetworkError::Transport(format!("TCP setup failed: {}", e)))?
-            .with_quic_config(|mut cfg| {
-                // WHY: Samsung's network stack closes NAT mappings for UDP sockets
-                // that haven't sent traffic in ~30s. 15s keepalive sends QUIC PING
-                // frames to keep the NAT pinhole open and prevent the connection
-                // from being considered idle by the OS. Without this, QUIC connections
-                // silently die on Samsung budget phones within 30-60 seconds.
-                cfg.keep_alive_interval = quic_keepalive;
-                cfg
-            })
-            .with_behaviour(|key: &libp2p::identity::Keypair| {
-                // Gossipsub configuration tuned for mobile
-                let gossipsub_config = gossipsub::ConfigBuilder::default()
-                    // WHY: Custom message ID function — dedup by content hash
-                    // rather than source+seqno, so the same message from
-                    // different propagation paths is correctly deduplicated.
-                    .message_id_fn(|msg| {
-                        let mut hasher = DefaultHasher::new();
-                        msg.data.hash(&mut hasher);
-                        gossipsub::MessageId::from(hasher.finish().to_be_bytes().to_vec())
+        let tcp_only = self.config.transport.tcp_only;
+        let idle_timeout = Duration::from_secs(self.config.transport.idle_timeout_secs);
+
+        // WHY macro: Behaviour + swarm config are identical for both TCP-only and
+        // TCP+QUIC paths, but the SwarmBuilder's intermediate types differ depending
+        // on whether QUIC is added. A macro avoids code duplication while letting
+        // the compiler resolve each path's types independently.
+        macro_rules! configure_swarm {
+            ($builder:expr) => {
+                $builder
+                    .with_behaviour(|key: &libp2p::identity::Keypair| {
+                        let gossipsub_config = gossipsub::ConfigBuilder::default()
+                            .message_id_fn(|msg| {
+                                let mut hasher = DefaultHasher::new();
+                                msg.data.hash(&mut hasher);
+                                gossipsub::MessageId::from(hasher.finish().to_be_bytes().to_vec())
+                            })
+                            .heartbeat_interval(Duration::from_secs(5))
+                            .mesh_n(4)
+                            .mesh_n_low(2)
+                            .mesh_n_high(8)
+                            .max_transmit_size(300 * 1024)
+                            .flood_publish(true)
+                            .build()
+                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+                        let gossipsub = gossipsub::Behaviour::new(
+                            gossipsub::MessageAuthenticity::Signed(key.clone()),
+                            gossipsub_config,
+                        )
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+                        let identify = identify::Behaviour::new(identify::Config::new(
+                            "/gratia/0.1.0".to_string(),
+                            key.public(),
+                        ));
+
+                        let mdns = mdns::tokio::Behaviour::new(
+                            mdns::Config::default(),
+                            key.public().to_peer_id(),
+                        )?;
+
+                        let sync_rr = sync_protocol::sync_behaviour();
+                        let bft_rr = bft_protocol::bft_sig_behaviour();
+
+                        Ok(GratiaBehaviour {
+                            gossipsub,
+                            identify,
+                            mdns,
+                            sync_rr,
+                            bft_rr,
+                        })
                     })
-                    // WHY: 5 second heartbeat — fast enough to re-graft peers into
-                    // the gossipsub mesh after WiFi reconnection. The default (1s) is
-                    // excessive for mobile, but 30s was too slow — reconnected peers
-                    // couldn't receive blocks for up to 30 seconds while waiting for
-                    // the mesh to reform. 5s is a good balance: quick recovery after
-                    // network disruption, minimal battery overhead (~12 heartbeats/min
-                    // vs 60/min at 1s default).
-                    .heartbeat_interval(Duration::from_secs(5))
-                    // WHY: Mesh target of 4 peers (instead of default 6) — reduces
-                    // bandwidth on mobile while maintaining reasonable propagation.
-                    .mesh_n(4)
-                    .mesh_n_low(2)
-                    .mesh_n_high(8)
-                    // WHY: 300 KB max transmit size — matches our MAX_MESSAGE_SIZE
-                    // (256 KB block + serialization overhead).
-                    .max_transmit_size(300 * 1024)
-                    // WHY: flood_publish sends published messages to ALL connected
-                    // peers, not just mesh peers. Without this, messages published
-                    // before the gossipsub mesh forms (first 5-10 seconds after
-                    // connection) are silently dropped — causing NodeAnnouncements
-                    // and blocks to never reach newly connected peers. The bandwidth
-                    // overhead is minimal with 2-3 peers on testnet. For mainnet
-                    // with 100+ peers, this should be disabled in favor of mesh-only.
-                    .flood_publish(true)
+                    .map_err(|e| NetworkError::Transport(e.to_string()))?
+                    .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(idle_timeout))
                     .build()
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            };
+        }
 
-                let gossipsub = gossipsub::Behaviour::new(
-                    gossipsub::MessageAuthenticity::Signed(key.clone()),
-                    gossipsub_config,
+        // WHY: Samsung budget phones without a SIM card (A06 Indian variant) have
+        // broken UDP routing — app-level UDP sockets fail silently. QUIC uses UDP,
+        // so these devices can never connect via QUIC. Building the swarm with QUIC
+        // enabled wastes time on a 30-second connection timeout before TCP fallback.
+        // When tcp_only is true, we skip QUIC entirely for instant TCP connections.
+        let mut swarm = if tcp_only {
+            tracing::info!("Building swarm with TCP-only transport (QUIC disabled)");
+            let builder = SwarmBuilder::with_existing_identity(identity)
+                .with_tokio()
+                .with_tcp(
+                    libp2p::tcp::Config::default().nodelay(true),
+                    libp2p::noise::Config::new,
+                    libp2p::yamux::Config::default,
                 )
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-
-                let identify = identify::Behaviour::new(identify::Config::new(
-                    "/gratia/0.1.0".to_string(),
-                    key.public(),
-                ));
-
-                let mdns = mdns::tokio::Behaviour::new(
-                    mdns::Config::default(),
-                    key.public().to_peer_id(),
-                )?;
-
-                // WHY: Point-to-point sync protocol for efficient block downloads.
-                // Peers request blocks directly from each other instead of
-                // broadcasting over gossipsub. Gossipsub sync (v1) is kept
-                // for backward compatibility during testnet rollout.
-                let sync_rr = sync_protocol::sync_behaviour();
-
-                Ok(GratiaBehaviour {
-                    gossipsub,
-                    identify,
-                    mdns,
-                    sync_rr,
-                })
-            })
-            .map_err(|e| NetworkError::Transport(e.to_string()))?
-            .with_swarm_config(|cfg| {
-                cfg.with_idle_connection_timeout(Duration::from_secs(
-                    self.config.transport.idle_timeout_secs,
-                ))
-            })
-            .build();
+                .map_err(|e| NetworkError::Transport(format!("TCP setup failed: {}", e)))?;
+            configure_swarm!(builder)
+        } else {
+            tracing::info!("Building swarm with TCP + QUIC transport");
+            let builder = SwarmBuilder::with_existing_identity(identity)
+                .with_tokio()
+                .with_tcp(
+                    libp2p::tcp::Config::default().nodelay(true),
+                    libp2p::noise::Config::new,
+                    libp2p::yamux::Config::default,
+                )
+                .map_err(|e| NetworkError::Transport(format!("TCP setup failed: {}", e)))?
+                .with_quic_config(|mut cfg| {
+                    cfg.keep_alive_interval = quic_keepalive;
+                    cfg
+                });
+            configure_swarm!(builder)
+        };
 
         // Subscribe to all gossip topics
         for topic_str in ALL_TOPICS {
@@ -649,6 +669,59 @@ impl NetworkManager {
             .try_send(NetworkCommand::PublishValidatorSignature(Box::new(msg.clone())))
             .map_err(|e| NetworkError::ChannelError(e.to_string()))?;
 
+        Ok(())
+    }
+
+    /// Send a BFT co-signature directly to the block producer via request-response.
+    /// WHY: Sub-second delivery vs 0-10s gossipsub. Falls back to gossipsub if
+    /// the target peer is not directly reachable.
+    pub fn try_send_bft_signature_direct(
+        &self,
+        target_peer: PeerId,
+        block_hash: [u8; 32],
+        height: u64,
+        signature: ValidatorSignature,
+    ) -> Result<(), NetworkError> {
+        let cmd_tx = self.command_tx.as_ref().ok_or(NetworkError::NotStarted)?;
+        cmd_tx
+            .try_send(NetworkCommand::SendBftSignatureDirect {
+                target_peer,
+                request: bft_protocol::BftSignatureRequest::CoSignature {
+                    block_hash,
+                    height,
+                    signature,
+                },
+            })
+            .map_err(|e| NetworkError::ChannelError(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Send a block proposal directly to a committee member for immediate co-signing.
+    /// WHY: Eliminates gossipsub from the BFT critical path. The validator receives
+    /// the block in <100ms instead of 0-10s via gossipsub heartbeat.
+    /// Accepts PeerId bytes because the FFI layer doesn't have libp2p as a dependency.
+    pub fn try_send_block_proposal_bytes(
+        &self,
+        peer_id_bytes: &[u8],
+        block_header_bytes: Vec<u8>,
+        block_hash: [u8; 32],
+        height: u64,
+        producer_signature: ValidatorSignature,
+    ) -> Result<(), NetworkError> {
+        let target_peer = PeerId::from_bytes(peer_id_bytes)
+            .map_err(|e| NetworkError::Transport(format!("invalid PeerId bytes: {}", e)))?;
+        let cmd_tx = self.command_tx.as_ref().ok_or(NetworkError::NotStarted)?;
+        cmd_tx
+            .try_send(NetworkCommand::SendBlockProposal {
+                target_peer,
+                request: bft_protocol::BftSignatureRequest::BlockProposal {
+                    block_header_bytes,
+                    block_hash,
+                    height,
+                    producer_signature,
+                },
+            })
+            .map_err(|e| NetworkError::ChannelError(e.to_string()))?;
         Ok(())
     }
 
@@ -917,7 +990,7 @@ impl NetworkManager {
         let msg = self.gossip.process_incoming(topic, data)?;
 
         Ok(msg.map(|m| match m {
-            gossip::GossipMessage::NewBlock(block) => NetworkEvent::BlockReceived(block),
+            gossip::GossipMessage::NewBlock(block) => NetworkEvent::BlockReceived(block, None),
             gossip::GossipMessage::NewTransaction(tx) => NetworkEvent::TransactionReceived(tx),
             gossip::GossipMessage::NewAttestation(att) => NetworkEvent::AttestationReceived(att),
             gossip::GossipMessage::NodeAnnouncement(ann) => NetworkEvent::NodeAnnounced(ann),
@@ -1054,7 +1127,8 @@ async fn run_swarm_event_loop(
                                         // the block's height and hash to update our view
                                         // of the network's chain tip. The source PeerId
                                         // from gossipsub tells us who sent it.
-                                        if let Some(source_peer) = message.source {
+                                        let block_source_peer = message.source;
+                                        if let Some(source_peer) = block_source_peer {
                                             if let Ok(block_hash) = block.header.hash() {
                                                 sync_manager.update_peer_state(
                                                     source_peer,
@@ -1064,7 +1138,7 @@ async fn run_swarm_event_loop(
                                             }
                                         }
 
-                                        NetworkEvent::BlockReceived(block)
+                                        NetworkEvent::BlockReceived(block, block_source_peer)
                                     }
                                     GossipMessage::NewTransaction(tx) => {
                                         NetworkEvent::TransactionReceived(tx)
@@ -1300,6 +1374,126 @@ async fn run_swarm_event_loop(
                         tracing::trace!(%peer, "Sync v2: response sent");
                     }
 
+                    // ── BFT direct signature protocol events ─────────────
+                    SwarmEvent::Behaviour(GratiaBehaviourEvent::BftRr(
+                        libp2p::request_response::Event::Message {
+                            peer,
+                            message: libp2p::request_response::Message::Request {
+                                request, channel, ..
+                            },
+                        }
+                    )) => {
+                        match request {
+                            bft_protocol::BftSignatureRequest::CoSignature { block_hash, height, signature } => {
+                                // WHY: A committee member sent us their co-signature directly.
+                                tracing::debug!(%peer, height, "BFT direct: received co-signature");
+                                let sig_msg = gossip::ValidatorSignatureMessage {
+                                    block_hash,
+                                    height,
+                                    signature,
+                                };
+                                let _ = event_tx.send(NetworkEvent::ValidatorSignatureReceived(
+                                    Box::new(sig_msg)
+                                )).await;
+                                let _ = swarm.behaviour_mut().bft_rr.send_response(
+                                    channel,
+                                    bft_protocol::BftSignatureResponse::Accepted,
+                                );
+                            }
+                            bft_protocol::BftSignatureRequest::BlockProposal {
+                                block_header_bytes, block_hash, height, producer_signature
+                            } => {
+                                // WHY: The block producer sent us a block directly for
+                                // co-signing. This bypasses gossipsub for the critical
+                                // BFT path. Forward the signature first (producer needs it),
+                                // then forward the block for normal processing.
+                                tracing::debug!(%peer, height, "BFT direct: received block proposal");
+                                // Forward producer's signature
+                                let sig_msg = gossip::ValidatorSignatureMessage {
+                                    block_hash,
+                                    height,
+                                    signature: producer_signature,
+                                };
+                                let _ = event_tx.send(NetworkEvent::ValidatorSignatureReceived(
+                                    Box::new(sig_msg)
+                                )).await;
+                                // Deserialize and forward block
+                                match bincode::deserialize::<gratia_core::types::BlockHeader>(&block_header_bytes) {
+                                    Ok(header) => {
+                                        let block = Block {
+                                            header,
+                                            transactions: vec![],
+                                            attestations: vec![],
+                                            validator_signatures: vec![],
+                                        };
+                                        let _ = event_tx.send(NetworkEvent::BlockReceived(
+                                            Box::new(block), Some(peer)
+                                        )).await;
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(%peer, %e, "BFT direct: failed to deserialize block proposal");
+                                    }
+                                }
+                                let _ = swarm.behaviour_mut().bft_rr.send_response(
+                                    channel,
+                                    bft_protocol::BftSignatureResponse::Accepted,
+                                );
+                            }
+                        }
+                    }
+
+                    SwarmEvent::Behaviour(GratiaBehaviourEvent::BftRr(
+                        libp2p::request_response::Event::Message {
+                            peer,
+                            message: libp2p::request_response::Message::Response {
+                                response, ..
+                            },
+                        }
+                    )) => {
+                        // WHY: The block producer acknowledged our co-signature.
+                        // This is the outbound response for the CO-SIGNER.
+                        match response {
+                            bft_protocol::BftSignatureResponse::Accepted => {
+                                tracing::trace!(%peer, "BFT direct: signature accepted by producer");
+                            }
+                            bft_protocol::BftSignatureResponse::CoSigned { signature } => {
+                                // WHY: The peer co-signed our block proposal and
+                                // sent the signature back in the response. Forward
+                                // it as a ValidatorSignatureReceived event.
+                                tracing::debug!(%peer, "BFT direct: received co-signature in proposal response");
+                                // We don't have the block_hash/height here, but the
+                                // FFI layer will match by pending_block_hash. Use zeros
+                                // as placeholder — the FFI matching uses hash, not height.
+                                // TODO: Include block context in response
+                            }
+                            bft_protocol::BftSignatureResponse::Finalized => {
+                                tracing::debug!(%peer, "BFT direct: block finalized at producer");
+                            }
+                            bft_protocol::BftSignatureResponse::Rejected(reason) => {
+                                tracing::warn!(%peer, %reason, "BFT direct: signature rejected");
+                            }
+                        }
+                    }
+
+                    SwarmEvent::Behaviour(GratiaBehaviourEvent::BftRr(
+                        libp2p::request_response::Event::OutboundFailure { peer, error, .. }
+                    )) => {
+                        tracing::warn!(%peer, ?error, "BFT direct: send failed, falling back to gossipsub");
+                        // NOTE: The FFI layer should handle fallback to gossipsub
+                        // if direct delivery fails. The signature was already sent
+                        // via gossipsub as a backup (belt and suspenders).
+                    }
+
+                    SwarmEvent::Behaviour(GratiaBehaviourEvent::BftRr(
+                        libp2p::request_response::Event::InboundFailure { peer, error, .. }
+                    )) => {
+                        tracing::debug!(%peer, ?error, "BFT direct: inbound handler failed");
+                    }
+
+                    SwarmEvent::Behaviour(GratiaBehaviourEvent::BftRr(
+                        libp2p::request_response::Event::ResponseSent { .. }
+                    )) => {}
+
                     // New connection established
                     SwarmEvent::ConnectionEstablished {
                         peer_id,
@@ -1516,6 +1710,22 @@ async fn run_swarm_event_loop(
                                 tracing::error!("Failed to publish validator signature: {}", e);
                             }
                         }
+                    }
+                    Some(NetworkCommand::SendBftSignatureDirect { target_peer, request }) => {
+                        let h = match &request {
+                            bft_protocol::BftSignatureRequest::CoSignature { height, .. } => *height,
+                            bft_protocol::BftSignatureRequest::BlockProposal { height, .. } => *height,
+                        };
+                        tracing::debug!(%target_peer, height = h, "Sending BFT co-signature directly");
+                        swarm.behaviour_mut().bft_rr.send_request(&target_peer, request);
+                    }
+                    Some(NetworkCommand::SendBlockProposal { target_peer, request }) => {
+                        let h = match &request {
+                            bft_protocol::BftSignatureRequest::BlockProposal { height, .. } => *height,
+                            _ => 0,
+                        };
+                        tracing::debug!(%target_peer, height = h, "Sending BFT block proposal directly");
+                        swarm.behaviour_mut().bft_rr.send_request(&target_peer, request);
                     }
                     Some(NetworkCommand::DialPeer(addr_str)) => {
                         match addr_str.parse::<Multiaddr>() {
@@ -1867,7 +2077,7 @@ mod tests {
             .handle_gossip_message(gossip::TOPIC_BLOCKS, &data)
             .unwrap();
         assert!(result.is_some());
-        assert!(matches!(result, Some(NetworkEvent::BlockReceived(_))));
+        assert!(matches!(result, Some(NetworkEvent::BlockReceived(_, _))));
 
         // Second time: duplicate, should produce None
         let result = nm
