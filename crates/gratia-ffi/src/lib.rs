@@ -2404,11 +2404,20 @@ impl GratiaNode {
                                 if let Some(ref mut consensus) = inner.consensus {
                                     let tip_hash = block_clone.header.hash()
                                         .unwrap_or(BlockHash([0u8; 32]));
-                                    consensus.rollback_to(height, tip_hash);
-                                    rust_log(&format!(
-                                        "FORK RESOLUTION: chain tip set to height={} hash={}",
-                                        height, &hex::encode(tip_hash.0)[..8]
-                                    ));
+                                    match consensus.rollback_to(height, tip_hash) {
+                                        Ok(()) => {
+                                            rust_log(&format!(
+                                                "FORK RESOLUTION: chain tip set to height={} hash={}",
+                                                height, &hex::encode(tip_hash.0)[..8]
+                                            ));
+                                        }
+                                        Err(e) => {
+                                            rust_log(&format!(
+                                                "FORK RESOLUTION REJECTED: rollback too deep: {}",
+                                                e
+                                            ));
+                                        }
+                                    }
                                 }
 
                                 // Clear pending blocks, caches, and stale broadcast.
@@ -3058,8 +3067,10 @@ impl GratiaNode {
                                                 ));
 
                                                 // Reset to genesis — peer's chain will be adopted via fast-sync
+                                                // WHY: Rollback to genesis is exempt from depth limit
+                                                // because this is a deliberate chain yield, not an attack.
                                                 if let Some(ref mut consensus) = inner.consensus {
-                                                    consensus.rollback_to(0, BlockHash([0u8; 32]));
+                                                    let _ = consensus.rollback_to(0, BlockHash([0u8; 32]));
                                                 }
                                                 if let Some(ref sm) = inner.state_manager {
                                                     let _ = sm.revert_to_height(0);

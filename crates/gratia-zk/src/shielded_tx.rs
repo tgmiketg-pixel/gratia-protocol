@@ -321,6 +321,39 @@ pub fn verify_value_conservation(
 }
 
 // ============================================================================
+// Combined Verification
+// ============================================================================
+
+/// Verify a shielded transaction atomically: both range proof and value conservation.
+///
+/// This ensures that a caller cannot accidentally verify one check without the other,
+/// which would leave a security gap (e.g., valid range proof but broken conservation
+/// means tokens were created from nothing).
+///
+/// # Arguments
+/// * `input_commitment` - Commitment to the sender's balance
+/// * `proof` - The shielded transaction proof from the chain
+/// * `fee` - The public transaction fee in Lux
+/// * `context` - Transaction-specific binding data (must match what was used in prove_transfer)
+///
+/// # Returns
+/// * `Ok(())` if both the range proof and value conservation are valid
+/// * `Err(GratiaError)` if either check fails
+pub fn verify_shielded_transaction(
+    input_commitment: &PedersenCommitment,
+    proof: &ShieldedTransactionProof,
+    fee: Lux,
+    context: &ShieldedTransferContext,
+) -> Result<(), GratiaError> {
+    // WHY: Both checks must pass atomically. A valid range proof with broken
+    // conservation means tokens were created from nothing. Valid conservation
+    // with a broken range proof means negative amounts could be hidden.
+    verify_transfer(proof, context)?;
+    verify_value_conservation(input_commitment, proof, fee)?;
+    Ok(())
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 

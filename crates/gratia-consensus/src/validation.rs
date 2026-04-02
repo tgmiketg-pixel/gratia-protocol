@@ -338,6 +338,20 @@ pub fn validate_block_header(
         });
     }
 
+    // WHY: Prevents a malicious producer from backdating blocks far into the
+    // past, which could stall the on-chain clock and disrupt time-dependent
+    // logic (governance deadlines, staking cooldowns). 60 seconds accounts
+    // for mobile clock skew and brief network delays.
+    let max_past = chrono::Duration::seconds(60);
+    if header.timestamp < now - max_past {
+        return Err(GratiaError::BlockValidationFailed {
+            reason: format!(
+                "Block timestamp {} is more than 60 seconds behind current time {}",
+                header.timestamp, now,
+            ),
+        });
+    }
+
     // WHY: Timestamps must be monotonically increasing to prevent
     // time-manipulation attacks where a producer backdates a block to
     // gain an advantage in time-dependent logic (e.g., staking cooldowns,

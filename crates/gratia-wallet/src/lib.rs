@@ -241,6 +241,15 @@ impl<K: Keystore> WalletManager<K> {
     ) -> Result<Transaction, GratiaError> {
         self.check_not_frozen()?;
 
+        // WHY: Zero-amount transfers have no economic purpose and waste block
+        // space. Reject them at the wallet layer before signing, rather than
+        // only catching them during block validation.
+        if amount == 0 {
+            return Err(GratiaError::Other(
+                "Transfer amount cannot be zero".into(),
+            ));
+        }
+
         let total_cost = amount.checked_add(fee).ok_or(GratiaError::Other(
             "amount + fee overflow".into(),
         ))?;

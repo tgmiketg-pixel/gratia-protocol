@@ -799,7 +799,30 @@ impl ConsensusEngine {
     /// to the common ancestor before downloading the longer chain. This
     /// resets the engine's internal state so it can accept blocks from
     /// the fork point onward.
-    pub fn rollback_to(&mut self, height: u64, tip_hash: BlockHash) {
+    pub fn rollback_to(&mut self, height: u64, tip_hash: BlockHash) -> Result<(), GratiaError> {
+        // WHY: Limit rollback depth to 128 blocks to prevent an attacker from
+        // forcing a deep reorg that re-executes hundreds of blocks worth of
+        // transactions. 128 blocks (~8.5 minutes at 4s block time) is generous
+        // for legitimate fork resolution but blocks catastrophic reorgs.
+        // Height 0 is exempt: genesis reset during SOLO->MULTI chain yield is
+        // a deliberate operation, not an attack vector.
+        const MAX_ROLLBACK_DEPTH: u64 = 128;
+        if height > 0 && self.current_height > height && self.current_height - height > MAX_ROLLBACK_DEPTH {
+            warn!(
+                current_height = self.current_height,
+                target_height = height,
+                max_depth = MAX_ROLLBACK_DEPTH,
+                "Rollback rejected: depth exceeds maximum",
+            );
+            return Err(GratiaError::Other(format!(
+                "Rollback depth {} exceeds maximum {} blocks (current={}, target={})",
+                self.current_height - height,
+                MAX_ROLLBACK_DEPTH,
+                self.current_height,
+                height,
+            )));
+        }
+
         let old_height = self.current_height;
         self.current_height = height;
         self.last_finalized_hash = tip_hash;
@@ -819,6 +842,8 @@ impl ConsensusEngine {
             new_height = height,
             "Consensus engine rolled back for fork resolution",
         );
+
+        Ok(())
     }
 
     /// Rotate the committee for a new epoch.

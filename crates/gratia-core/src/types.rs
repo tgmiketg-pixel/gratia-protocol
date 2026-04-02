@@ -51,8 +51,12 @@ pub struct NodeId(pub [u8; 32]);
 
 impl NodeId {
     /// Derive a NodeId from an Ed25519 public key.
+    ///
+    /// Uses domain separation ("gratia-node-id-v1:" prefix) to ensure that
+    /// a NodeId can never collide with an Address (which uses "gratia-address-v1:").
     pub fn from_public_key(key: &VerifyingKey) -> Self {
         let mut hasher = Sha256::new();
+        hasher.update(b"gratia-node-id-v1:");
         hasher.update(key.as_bytes());
         let result = hasher.finalize();
         let mut id = [0u8; 32];
@@ -94,6 +98,18 @@ impl Address {
     /// sender_pubkey bytes (Vec<u8>). This avoids requiring callers to construct
     /// a VerifyingKey just to derive an address.
     pub fn from_pubkey(pubkey_bytes: &[u8]) -> Self {
+        // WHY: Ed25519 public keys are always exactly 32 bytes. Accepting
+        // arbitrary-length input would produce valid-looking but wrong
+        // addresses, leading to unspendable funds. Return a zeroed address
+        // for invalid input rather than panicking or producing a misleading hash.
+        if pubkey_bytes.len() != 32 {
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "WARNING: Address::from_pubkey called with {} bytes (expected 32)",
+                pubkey_bytes.len(),
+            );
+            return Address([0u8; 32]);
+        }
         let mut hasher = Sha256::new();
         hasher.update(b"gratia-address-v1:");
         hasher.update(pubkey_bytes);
