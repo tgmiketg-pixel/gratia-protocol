@@ -15,3 +15,4 @@ app/android/build/
 app/android/local.properties
 web/site/node_modules/
 web/site/package-lock.json
+.claude/
