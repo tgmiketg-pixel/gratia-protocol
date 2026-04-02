@@ -1041,7 +1041,7 @@ async fn run_swarm_event_loop(
     event_tx: mpsc::Sender<NetworkEvent>,
     node_id: NodeId,
     block_provider: std::sync::Arc<dyn BlockProvider>,
-    live_peer_count: Arc<AtomicU32>,
+    _live_peer_count: Arc<AtomicU32>,
     bootstrap_peers: Vec<String>,
 ) {
     // WHY: Separate gossip handler for the event loop — deduplication must
@@ -1456,7 +1456,7 @@ async fn run_swarm_event_loop(
                             bft_protocol::BftSignatureResponse::Accepted => {
                                 tracing::trace!(%peer, "BFT direct: signature accepted by producer");
                             }
-                            bft_protocol::BftSignatureResponse::CoSigned { signature } => {
+                            bft_protocol::BftSignatureResponse::CoSigned { signature: _signature } => {
                                 // WHY: The peer co-signed our block proposal and
                                 // sent the signature back in the response. Forward
                                 // it as a ValidatorSignatureReceived event.

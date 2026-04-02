@@ -20,7 +20,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use gratia_core::types::{BlockHash, BlockHeader, NodeId, ValidatorSignature};
+use gratia_core::types::{BlockHeader, NodeId, ValidatorSignature};
 
 /// A vote from a committee member for a proposed block.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -325,6 +325,7 @@ impl StreamletState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gratia_core::types::BlockHash;
 
     fn make_vote(epoch: u64, block_hash: [u8; 32], height: u64, validator_id: u8) -> StreamletVote {
         let mut node_id = [0u8; 32];

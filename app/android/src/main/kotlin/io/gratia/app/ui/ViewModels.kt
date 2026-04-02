@@ -1340,15 +1340,23 @@ class GovernanceViewModel : ViewModel() {
 // Utility functions shared across screens
 // ============================================================================
 
-/** Format Lux amount as GRAT with up to 6 decimal places, trimming trailing zeros. */
+/** Format Lux amount as GRAT with 2 decimal places (e.g. "2,324.72 GRAT"). */
 fun formatGrat(lux: Long): String {
+    val whole = lux / 1_000_000L
+    val fractional = (lux % 1_000_000L) / 10_000L // 2 decimal places
+    val wholeStr = "%,d".format(whole)
+    return "$wholeStr.%02d".format(fractional)
+}
+
+/** Format Lux amount as GRAT with up to 6 decimal places, trimming trailing zeros. */
+fun formatGratPrecise(lux: Long): String {
     val whole = lux / 1_000_000L
     val fractional = lux % 1_000_000L
     return if (fractional == 0L) {
-        "$whole"
+        "%,d".format(whole)
     } else {
         val frac = "%06d".format(fractional).trimEnd('0')
-        "$whole.$frac"
+        "%,d".format(whole) + ".$frac"
     }
 }
 

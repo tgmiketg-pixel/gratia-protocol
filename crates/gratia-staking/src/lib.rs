@@ -366,6 +366,16 @@ impl StakingManager {
         self.stakes.get(node_id).map(|s| Self::build_stake_info(&self.config, s))
     }
 
+    /// Get pending unstake details for a node.
+    ///
+    /// Returns `(pending_amount, requested_at)` if there is a pending unstake,
+    /// or `None` if no unstake is in progress.
+    pub fn get_pending_unstake(&self, node_id: &NodeId) -> Option<(Lux, DateTime<Utc>)> {
+        self.stakes.get(node_id).and_then(|s| {
+            s.unstake_requested_at.map(|at| (s.unstake_pending, at))
+        })
+    }
+
     /// Get a node's slashing history.
     pub fn get_slashing_history(&self, node_id: &NodeId) -> Option<&SlashingHistory> {
         self.slashing_histories.get(node_id)

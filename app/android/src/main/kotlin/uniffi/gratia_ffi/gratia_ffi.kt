@@ -840,6 +840,22 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -871,6 +887,8 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_compile_contract(`ptr`: Pointer,`source`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_complete_unstake(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Long
     fun uniffi_gratia_ffi_fn_method_gratianode_connect_peer(`ptr`: Pointer,`addr`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_gratia_ffi_fn_method_gratianode_create_poll(`ptr`: Pointer,`question`: RustBuffer.ByValue,`options`: RustBuffer.ByValue,`durationSecs`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -883,12 +901,18 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_finalize_day(`ptr`: Pointer,`epochDay`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    fun uniffi_gratia_ffi_fn_method_gratianode_generate_pol_proof(`ptr`: Pointer,`unlockCount`: Long,`unlockSpreadHours`: Long,`interactionSessions`: Long,`btEnvironments`: Long,`minUnlocks`: Long,`minSpread`: Long,`minInteractions`: Long,`minBtEnvs`: Long,`epochDay`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_generate_range_proof(`ptr`: Pointer,`value`: Long,`bitWidth`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_get_activation_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_consensus_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_cross_shard_queue_size(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Int
+    fun uniffi_gratia_ffi_fn_method_gratianode_get_last_pol_proof(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_mesh_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_mining_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -896,6 +920,8 @@ internal interface UniffiLib : Library {
     fun uniffi_gratia_ffi_fn_method_gratianode_get_network_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_polls(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_get_pool_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_proof_of_life_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -909,6 +935,8 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_transaction_history(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_get_unstake_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_vm_info(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_wallet_info(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -917,6 +945,8 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_init_vm(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_is_node_banned(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     fun uniffi_gratia_ffi_fn_method_gratianode_list_contracts(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_lux_create_post(`ptr`: Pointer,`content`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -984,6 +1014,8 @@ internal interface UniffiLib : Library {
     fun uniffi_gratia_ffi_fn_method_gratianode_update_power_state(`ptr`: Pointer,`isPluggedIn`: Byte,`batteryPercent`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_verify_groth16_proof(`ptr`: Pointer,`proofHex`: RustBuffer.ByValue,`publicInputsHex`: RustBuffer.ByValue,`vkHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    fun uniffi_gratia_ffi_fn_method_gratianode_verify_pol_proof(`ptr`: Pointer,`proofBytesHex`: RustBuffer.ByValue,`commitmentsHex`: RustBuffer.ByValue,`parameterCount`: Byte,`epochDay`: Int,`minUnlocks`: Long,`minSpread`: Long,`minInteractions`: Long,`minBtEnvs`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     fun uniffi_gratia_ffi_fn_method_gratianode_vote_on_poll(`ptr`: Pointer,`pollIdHex`: RustBuffer.ByValue,`optionIndex`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -1107,6 +1139,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_compile_contract(
     ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_complete_unstake(
+    ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_connect_peer(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_create_poll(
@@ -1119,11 +1153,17 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_finalize_day(
     ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_generate_pol_proof(
+    ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_generate_range_proof(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_get_activation_status(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_consensus_status(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_cross_shard_queue_size(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_get_last_pol_proof(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_mesh_status(
     ): Short
@@ -1132,6 +1172,8 @@ internal interface UniffiLib : Library {
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_network_status(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_polls(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_get_pool_status(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_proof_of_life_status(
     ): Short
@@ -1145,6 +1187,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_transaction_history(
     ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_get_unstake_status(
+    ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_vm_info(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_wallet_info(
@@ -1152,6 +1196,8 @@ internal interface UniffiLib : Library {
     fun uniffi_gratia_ffi_checksum_method_gratianode_import_seed_phrase(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_init_vm(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_is_node_banned(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_list_contracts(
     ): Short
@@ -1221,6 +1267,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_verify_groth16_proof(
     ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_verify_pol_proof(
+    ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_vote_on_poll(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_vote_on_proposal(
@@ -1253,6 +1301,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_compile_contract() != 2896.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_complete_unstake() != 18409.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_connect_peer() != 21663.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1271,13 +1322,22 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_finalize_day() != 30023.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_generate_pol_proof() != 37755.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_generate_range_proof() != 62923.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_activation_status() != 393.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_consensus_status() != 58194.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_cross_shard_queue_size() != 8286.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_last_pol_proof() != 27228.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_mesh_status() != 5869.toShort()) {
@@ -1290,6 +1350,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_polls() != 17116.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_pool_status() != 13482.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_proof_of_life_status() != 59779.toShort()) {
@@ -1310,6 +1373,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_transaction_history() != 43027.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_unstake_status() != 14585.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_vm_info() != 25703.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1320,6 +1386,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_init_vm() != 54906.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_is_node_banned() != 7584.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_list_contracts() != 47931.toShort()) {
@@ -1422,6 +1491,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_verify_groth16_proof() != 43772.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_verify_pol_proof() != 20581.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_vote_on_poll() != 60397.toShort()) {
@@ -1926,6 +1998,14 @@ public interface GratiaNodeInterface {
     fun `compileContract`(`source`: kotlin.String): kotlin.String
     
     /**
+     * Complete a pending unstake after the cooldown period has elapsed.
+     *
+     * Returns the amount of Lux released back to the node's wallet.
+     * Fails if no pending unstake exists or cooldown hasn't elapsed.
+     */
+    fun `completeUnstake`(): kotlin.ULong
+    
+    /**
      * Connect to a remote peer by multiaddr string.
      *
      * For local WiFi demo, use: "/ip4/<peer-ip>/udp/<port>/quic-v1"
@@ -1984,6 +2064,18 @@ public interface GratiaNodeInterface {
     fun `finalizeDay`(`epochDay`: kotlin.UInt): kotlin.Boolean
     
     /**
+     * Generate a Bulletproofs zero-knowledge proof that the daily Proof of Life
+     * parameters meet the required thresholds, without revealing actual values.
+     *
+     * WHY: This is the core privacy mechanism for Proof of Life. The phone
+     * collects sensor data locally, then proves to the network that it met
+     * every threshold (unlock count, spread, interactions, BT environments)
+     * without disclosing how much it exceeded each threshold by. The proof is
+     * compact (~700 bytes) and fast to verify on other mobile devices.
+     */
+    fun `generatePolProof`(`unlockCount`: kotlin.ULong, `unlockSpreadHours`: kotlin.ULong, `interactionSessions`: kotlin.ULong, `btEnvironments`: kotlin.ULong, `minUnlocks`: kotlin.ULong, `minSpread`: kotlin.ULong, `minInteractions`: kotlin.ULong, `minBtEnvs`: kotlin.ULong, `epochDay`: kotlin.UInt): FfiPolRangeProof
+    
+    /**
      * Generate a Groth16 range proof for a value.
      *
      * Creates a zero-knowledge proof that a value lies within [0, 2^bit_width)
@@ -2000,6 +2092,14 @@ public interface GratiaNodeInterface {
     fun `generateRangeProof`(`value`: kotlin.ULong, `bitWidth`: kotlin.UInt): kotlin.String
     
     /**
+     * Get staking activation status.
+     *
+     * WHY: The mobile UI needs to show whether staking minimum is enforced,
+     * the grace period countdown, and the effective minimum stake amount.
+     */
+    fun `getActivationStatus`(): FfiActivationStatus
+    
+    /**
      * Get the current consensus status.
      */
     fun `getConsensusStatus`(): FfiConsensusStatus
@@ -2012,6 +2112,16 @@ public interface GratiaNodeInterface {
      * for the mobile UI to show network health.
      */
     fun `getCrossShardQueueSize`(): kotlin.UInt
+    
+    /**
+     * Retrieve the last successfully generated Proof of Life ZK proof from the
+     * PoL manager, if one exists.
+     *
+     * WHY: After the PoL manager runs its daily attestation cycle and generates
+     * a ZK proof internally, the mobile app needs to retrieve it for display
+     * and for broadcasting to the network. This avoids regenerating the proof.
+     */
+    fun `getLastPolProof`(): FfiPolRangeProof?
     
     /**
      * Get the current mesh network status.
@@ -2035,6 +2145,14 @@ public interface GratiaNodeInterface {
      * Get all active polls.
      */
     fun `getPolls`(): List<FfiPoll>
+    
+    /**
+     * Get Network Security Pool status.
+     *
+     * WHY: The mobile UI displays pool stats — total overflow, contributor
+     * count, accumulated yield, and the user's personal share.
+     */
+    fun `getPoolStatus`(): FfiPoolStatus
     
     /**
      * Get the current Proof of Life status.
@@ -2078,6 +2196,14 @@ public interface GratiaNodeInterface {
     fun `getTransactionHistory`(): List<FfiTransactionInfo>
     
     /**
+     * Get pending unstake status for this node.
+     *
+     * WHY: The mobile UI needs to display cooldown countdown and pending
+     * amount so the user knows when they can call `complete_unstake()`.
+     */
+    fun `getUnstakeStatus`(): FfiUnstakeStatus
+    
+    /**
      * Get GratiaVM runtime information.
      *
      * Returns the VM runtime type, number of deployed contracts,
@@ -2115,6 +2241,14 @@ public interface GratiaNodeInterface {
      * dependencies. GratiaScript contracts compile to WASM and execute for real.
      */
     fun `initVm`(): List<kotlin.String>
+    
+    /**
+     * Check if this node is permanently banned from staking.
+     *
+     * WHY: Banned nodes cannot participate in mining or consensus. The mobile
+     * UI needs to detect this and show an appropriate message.
+     */
+    fun `isNodeBanned`(): kotlin.Boolean
     
     /**
      * List deployed contracts.
@@ -2388,6 +2522,15 @@ public interface GratiaNodeInterface {
     fun `verifyGroth16Proof`(`proofHex`: kotlin.String, `publicInputsHex`: kotlin.String, `vkHex`: kotlin.String): kotlin.Boolean
     
     /**
+     * Verify a Bulletproofs Proof of Life ZK proof against the given thresholds.
+     *
+     * WHY: Every validator node verifies PoL proofs when validating blocks.
+     * Bulletproof verification is fast (~5ms on ARM), making it suitable for
+     * mobile validators processing blocks within the 3-5 second window.
+     */
+    fun `verifyPolProof`(`proofBytesHex`: kotlin.String, `commitmentsHex`: List<kotlin.String>, `parameterCount`: kotlin.UByte, `epochDay`: kotlin.UInt, `minUnlocks`: kotlin.ULong, `minSpread`: kotlin.ULong, `minInteractions`: kotlin.ULong, `minBtEnvs`: kotlin.ULong): kotlin.Boolean
+    
+    /**
      * Cast a vote on a poll.
      */
     fun `voteOnPoll`(`pollIdHex`: kotlin.String, `optionIndex`: kotlin.UInt)
@@ -2571,6 +2714,25 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
 
     
     /**
+     * Complete a pending unstake after the cooldown period has elapsed.
+     *
+     * Returns the amount of Lux released back to the node's wallet.
+     * Fails if no pending unstake exists or cooldown hasn't elapsed.
+     */
+    @Throws(FfiException::class)override fun `completeUnstake`(): kotlin.ULong {
+            return FfiConverterULong.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_complete_unstake(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Connect to a remote peer by multiaddr string.
      *
      * For local WiFi demo, use: "/ip4/<peer-ip>/udp/<port>/quic-v1"
@@ -2693,6 +2855,29 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
 
     
     /**
+     * Generate a Bulletproofs zero-knowledge proof that the daily Proof of Life
+     * parameters meet the required thresholds, without revealing actual values.
+     *
+     * WHY: This is the core privacy mechanism for Proof of Life. The phone
+     * collects sensor data locally, then proves to the network that it met
+     * every threshold (unlock count, spread, interactions, BT environments)
+     * without disclosing how much it exceeded each threshold by. The proof is
+     * compact (~700 bytes) and fast to verify on other mobile devices.
+     */
+    @Throws(FfiException::class)override fun `generatePolProof`(`unlockCount`: kotlin.ULong, `unlockSpreadHours`: kotlin.ULong, `interactionSessions`: kotlin.ULong, `btEnvironments`: kotlin.ULong, `minUnlocks`: kotlin.ULong, `minSpread`: kotlin.ULong, `minInteractions`: kotlin.ULong, `minBtEnvs`: kotlin.ULong, `epochDay`: kotlin.UInt): FfiPolRangeProof {
+            return FfiConverterTypeFfiPolRangeProof.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_generate_pol_proof(
+        it, FfiConverterULong.lower(`unlockCount`),FfiConverterULong.lower(`unlockSpreadHours`),FfiConverterULong.lower(`interactionSessions`),FfiConverterULong.lower(`btEnvironments`),FfiConverterULong.lower(`minUnlocks`),FfiConverterULong.lower(`minSpread`),FfiConverterULong.lower(`minInteractions`),FfiConverterULong.lower(`minBtEnvs`),FfiConverterUInt.lower(`epochDay`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Generate a Groth16 range proof for a value.
      *
      * Creates a zero-knowledge proof that a value lies within [0, 2^bit_width)
@@ -2712,6 +2897,25 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
     uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_generate_range_proof(
         it, FfiConverterULong.lower(`value`),FfiConverterUInt.lower(`bitWidth`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Get staking activation status.
+     *
+     * WHY: The mobile UI needs to show whether staking minimum is enforced,
+     * the grace period countdown, and the effective minimum stake amount.
+     */
+    @Throws(FfiException::class)override fun `getActivationStatus`(): FfiActivationStatus {
+            return FfiConverterTypeFfiActivationStatus.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_get_activation_status(
+        it, _status)
 }
     }
     )
@@ -2747,6 +2951,27 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
     callWithPointer {
     uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_get_cross_shard_queue_size(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Retrieve the last successfully generated Proof of Life ZK proof from the
+     * PoL manager, if one exists.
+     *
+     * WHY: After the PoL manager runs its daily attestation cycle and generates
+     * a ZK proof internally, the mobile app needs to retrieve it for display
+     * and for broadcasting to the network. This avoids regenerating the proof.
+     */
+    @Throws(FfiException::class)override fun `getLastPolProof`(): FfiPolRangeProof? {
+            return FfiConverterOptionalTypeFfiPolRangeProof.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_get_last_pol_proof(
         it, _status)
 }
     }
@@ -2814,6 +3039,25 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
     callWithPointer {
     uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_get_polls(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Get Network Security Pool status.
+     *
+     * WHY: The mobile UI displays pool stats — total overflow, contributor
+     * count, accumulated yield, and the user's personal share.
+     */
+    @Throws(FfiException::class)override fun `getPoolStatus`(): FfiPoolStatus {
+            return FfiConverterTypeFfiPoolStatus.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_get_pool_status(
         it, _status)
 }
     }
@@ -2930,6 +3174,25 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
 
     
     /**
+     * Get pending unstake status for this node.
+     *
+     * WHY: The mobile UI needs to display cooldown countdown and pending
+     * amount so the user knows when they can call `complete_unstake()`.
+     */
+    @Throws(FfiException::class)override fun `getUnstakeStatus`(): FfiUnstakeStatus {
+            return FfiConverterTypeFfiUnstakeStatus.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_get_unstake_status(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Get GratiaVM runtime information.
      *
      * Returns the VM runtime type, number of deployed contracts,
@@ -3004,6 +3267,25 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
     callWithPointer {
     uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_init_vm(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Check if this node is permanently banned from staking.
+     *
+     * WHY: Banned nodes cannot participate in mining or consensus. The mobile
+     * UI needs to detect this and show an appropriate message.
+     */
+    @Throws(FfiException::class)override fun `isNodeBanned`(): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_is_node_banned(
         it, _status)
 }
     }
@@ -3649,6 +3931,26 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
 
     
     /**
+     * Verify a Bulletproofs Proof of Life ZK proof against the given thresholds.
+     *
+     * WHY: Every validator node verifies PoL proofs when validating blocks.
+     * Bulletproof verification is fast (~5ms on ARM), making it suitable for
+     * mobile validators processing blocks within the 3-5 second window.
+     */
+    @Throws(FfiException::class)override fun `verifyPolProof`(`proofBytesHex`: kotlin.String, `commitmentsHex`: List<kotlin.String>, `parameterCount`: kotlin.UByte, `epochDay`: kotlin.UInt, `minUnlocks`: kotlin.ULong, `minSpread`: kotlin.ULong, `minInteractions`: kotlin.ULong, `minBtEnvs`: kotlin.ULong): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_verify_pol_proof(
+        it, FfiConverterString.lower(`proofBytesHex`),FfiConverterSequenceString.lower(`commitmentsHex`),FfiConverterUByte.lower(`parameterCount`),FfiConverterUInt.lower(`epochDay`),FfiConverterULong.lower(`minUnlocks`),FfiConverterULong.lower(`minSpread`),FfiConverterULong.lower(`minInteractions`),FfiConverterULong.lower(`minBtEnvs`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Cast a vote on a poll.
      */
     @Throws(FfiException::class)override fun `voteOnPoll`(`pollIdHex`: kotlin.String, `optionIndex`: kotlin.UInt)
@@ -3712,6 +4014,73 @@ public object FfiConverterTypeGratiaNode: FfiConverter<GratiaNode, Pointer> {
         // The Rust code always expects pointers written as 8 bytes,
         // and will fail to compile if they don't fit.
         buf.putLong(Pointer.nativeValue(lower(value)))
+    }
+}
+
+
+
+/**
+ * Staking activation status for the mobile UI.
+ *
+ * WHY: Staking minimum is not enforced until the network crosses a miner
+ * threshold, then a grace period begins. The mobile app needs to show users
+ * whether staking is enforced, how long the grace period lasts, and what
+ * the effective minimum stake is right now.
+ */
+data class FfiActivationStatus (
+    /**
+     * Whether the staking minimum has been activated (threshold crossed).
+     */
+    var `isActivated`: kotlin.Boolean, 
+    /**
+     * Unix timestamp in milliseconds when staking was activated (0 if not yet).
+     */
+    var `activatedAtMillis`: kotlin.Long, 
+    /**
+     * Seconds remaining in the grace period (0 if grace has elapsed or not activated).
+     */
+    var `gracePeriodRemainingSecs`: kotlin.ULong, 
+    /**
+     * The effective minimum stake right now (0 during genesis/grace, full amount after).
+     */
+    var `effectiveMinimumStakeLux`: kotlin.ULong, 
+    /**
+     * Human-readable enforcement state: "genesis", "grace_period", or "enforced".
+     */
+    var `enforcementState`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiActivationStatus: FfiConverterRustBuffer<FfiActivationStatus> {
+    override fun read(buf: ByteBuffer): FfiActivationStatus {
+        return FfiActivationStatus(
+            FfiConverterBoolean.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiActivationStatus) = (
+            FfiConverterBoolean.allocationSize(value.`isActivated`) +
+            FfiConverterLong.allocationSize(value.`activatedAtMillis`) +
+            FfiConverterULong.allocationSize(value.`gracePeriodRemainingSecs`) +
+            FfiConverterULong.allocationSize(value.`effectiveMinimumStakeLux`) +
+            FfiConverterString.allocationSize(value.`enforcementState`)
+    )
+
+    override fun write(value: FfiActivationStatus, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`isActivated`, buf)
+            FfiConverterLong.write(value.`activatedAtMillis`, buf)
+            FfiConverterULong.write(value.`gracePeriodRemainingSecs`, buf)
+            FfiConverterULong.write(value.`effectiveMinimumStakeLux`, buf)
+            FfiConverterString.write(value.`enforcementState`, buf)
     }
 }
 
@@ -4262,6 +4631,66 @@ public object FfiConverterTypeFfiNetworkStatus: FfiConverterRustBuffer<FfiNetwor
 
 
 /**
+ * Proof of Life ZK range proof for the mobile UI.
+ *
+ * WHY: The Bulletproofs-based PoL proof is generated on-device and proves
+ * that the user's daily Proof of Life parameters meet the required thresholds
+ * without revealing the actual sensor values. Bytes are hex-encoded for safe
+ * transport across the FFI boundary.
+ */
+data class FfiPolRangeProof (
+    /**
+     * Hex-encoded serialized Bulletproof proof bytes.
+     */
+    var `proofBytesHex`: kotlin.String, 
+    /**
+     * Hex-encoded Pedersen commitments (one per proven parameter).
+     */
+    var `commitmentsHex`: List<kotlin.String>, 
+    /**
+     * Number of parameters proven in this proof.
+     */
+    var `parameterCount`: kotlin.UByte, 
+    /**
+     * Epoch day (days since Unix epoch) this proof covers.
+     */
+    var `epochDay`: kotlin.UInt
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiPolRangeProof: FfiConverterRustBuffer<FfiPolRangeProof> {
+    override fun read(buf: ByteBuffer): FfiPolRangeProof {
+        return FfiPolRangeProof(
+            FfiConverterString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterUByte.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiPolRangeProof) = (
+            FfiConverterString.allocationSize(value.`proofBytesHex`) +
+            FfiConverterSequenceString.allocationSize(value.`commitmentsHex`) +
+            FfiConverterUByte.allocationSize(value.`parameterCount`) +
+            FfiConverterUInt.allocationSize(value.`epochDay`)
+    )
+
+    override fun write(value: FfiPolRangeProof, buf: ByteBuffer) {
+            FfiConverterString.write(value.`proofBytesHex`, buf)
+            FfiConverterSequenceString.write(value.`commitmentsHex`, buf)
+            FfiConverterUByte.write(value.`parameterCount`, buf)
+            FfiConverterUInt.write(value.`epochDay`, buf)
+    }
+}
+
+
+
+/**
  * An on-chain poll for the mobile UI.
  */
 data class FfiPoll (
@@ -4311,6 +4740,71 @@ public object FfiConverterTypeFfiPoll: FfiConverterRustBuffer<FfiPoll> {
             FfiConverterULong.write(value.`totalVoters`, buf)
             FfiConverterLong.write(value.`endMillis`, buf)
             FfiConverterString.write(value.`createdBy`, buf)
+    }
+}
+
+
+
+/**
+ * Network Security Pool status for the mobile UI.
+ *
+ * WHY: The mobile app needs to display how much overflow is in the pool,
+ * how many nodes contribute, and the user's share of accumulated yield.
+ */
+data class FfiPoolStatus (
+    /**
+     * Total overflow Lux in the Network Security Pool.
+     */
+    var `totalOverflowLux`: kotlin.ULong, 
+    /**
+     * Number of nodes contributing overflow to the pool.
+     */
+    var `contributorCount`: kotlin.UInt, 
+    /**
+     * Total accumulated yield in the pool (Lux).
+     */
+    var `accumulatedYieldLux`: kotlin.ULong, 
+    /**
+     * This node's overflow contribution (Lux), 0 if none.
+     */
+    var `yourOverflowLux`: kotlin.ULong, 
+    /**
+     * This node's estimated yield share (Lux), 0 if none.
+     */
+    var `yourEstimatedYieldLux`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiPoolStatus: FfiConverterRustBuffer<FfiPoolStatus> {
+    override fun read(buf: ByteBuffer): FfiPoolStatus {
+        return FfiPoolStatus(
+            FfiConverterULong.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiPoolStatus) = (
+            FfiConverterULong.allocationSize(value.`totalOverflowLux`) +
+            FfiConverterUInt.allocationSize(value.`contributorCount`) +
+            FfiConverterULong.allocationSize(value.`accumulatedYieldLux`) +
+            FfiConverterULong.allocationSize(value.`yourOverflowLux`) +
+            FfiConverterULong.allocationSize(value.`yourEstimatedYieldLux`)
+    )
+
+    override fun write(value: FfiPoolStatus, buf: ByteBuffer) {
+            FfiConverterULong.write(value.`totalOverflowLux`, buf)
+            FfiConverterUInt.write(value.`contributorCount`, buf)
+            FfiConverterULong.write(value.`accumulatedYieldLux`, buf)
+            FfiConverterULong.write(value.`yourOverflowLux`, buf)
+            FfiConverterULong.write(value.`yourEstimatedYieldLux`, buf)
     }
 }
 
@@ -4690,6 +5184,65 @@ public object FfiConverterTypeFfiTransactionInfo: FfiConverterRustBuffer<FfiTran
             FfiConverterULong.write(value.`amountLux`, buf)
             FfiConverterLong.write(value.`timestampMillis`, buf)
             FfiConverterString.write(value.`status`, buf)
+    }
+}
+
+
+
+/**
+ * Pending unstake status for the mobile UI.
+ *
+ * WHY: The mobile app needs to show users whether they have a pending unstake,
+ * how much is pending, and how long until the cooldown expires so they can
+ * call `complete_unstake()`.
+ */
+data class FfiUnstakeStatus (
+    /**
+     * Whether there is a pending unstake request.
+     */
+    var `hasPendingUnstake`: kotlin.Boolean, 
+    /**
+     * Amount of Lux pending release (0 if no pending unstake).
+     */
+    var `pendingAmountLux`: kotlin.ULong, 
+    /**
+     * Unix timestamp in milliseconds when the unstake was requested (0 if none).
+     */
+    var `requestedAtMillis`: kotlin.Long, 
+    /**
+     * Seconds remaining in the cooldown period (0 if cooldown has elapsed or no pending).
+     */
+    var `remainingCooldownSecs`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiUnstakeStatus: FfiConverterRustBuffer<FfiUnstakeStatus> {
+    override fun read(buf: ByteBuffer): FfiUnstakeStatus {
+        return FfiUnstakeStatus(
+            FfiConverterBoolean.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiUnstakeStatus) = (
+            FfiConverterBoolean.allocationSize(value.`hasPendingUnstake`) +
+            FfiConverterULong.allocationSize(value.`pendingAmountLux`) +
+            FfiConverterLong.allocationSize(value.`requestedAtMillis`) +
+            FfiConverterULong.allocationSize(value.`remainingCooldownSecs`)
+    )
+
+    override fun write(value: FfiUnstakeStatus, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`hasPendingUnstake`, buf)
+            FfiConverterULong.write(value.`pendingAmountLux`, buf)
+            FfiConverterLong.write(value.`requestedAtMillis`, buf)
+            FfiConverterULong.write(value.`remainingCooldownSecs`, buf)
     }
 }
 
@@ -5579,6 +6132,38 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
         } else {
             buf.put(1)
             FfiConverterString.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeFfiPolRangeProof: FfiConverterRustBuffer<FfiPolRangeProof?> {
+    override fun read(buf: ByteBuffer): FfiPolRangeProof? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeFfiPolRangeProof.read(buf)
+    }
+
+    override fun allocationSize(value: FfiPolRangeProof?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeFfiPolRangeProof.allocationSize(value)
+        }
+    }
+
+    override fun write(value: FfiPolRangeProof?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeFfiPolRangeProof.write(value, buf)
         }
     }
 }

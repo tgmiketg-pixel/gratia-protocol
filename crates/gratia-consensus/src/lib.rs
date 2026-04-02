@@ -32,7 +32,6 @@ use crate::block_production::{BlockProducer, PendingBlock, sign_block};
 use crate::committee::{
     EligibleNode, ValidatorCommittee,
 };
-use crate::validation::ValidationContext;
 use crate::vrf::VrfSecretKey;
 
 // ============================================================================

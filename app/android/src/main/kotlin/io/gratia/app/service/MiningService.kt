@@ -25,6 +25,7 @@ import kotlinx.coroutines.launch
 
 import io.gratia.app.bridge.GratiaCoreManager
 import io.gratia.app.bridge.MiningStatus
+import io.gratia.app.bridge.NetworkEvent
 
 /**
  * Foreground service for active GRAT mining.
@@ -527,8 +528,19 @@ class MiningService : Service() {
             try {
                 if (GratiaCoreManager.isInitialized) {
                     val events = GratiaCoreManager.pollNetworkEvents()
-                    if (events.isNotEmpty()) {
-                        Log.d(TAG, "Processed ${events.size} network events")
+                    for (ev in events) {
+                        when (ev) {
+                            is NetworkEvent.PeerConnected ->
+                                Log.i(TAG, "PEER CONNECTED: ${ev.peerId.take(16)}...")
+                            is NetworkEvent.PeerDisconnected ->
+                                Log.i(TAG, "PEER DISCONNECTED: ${ev.peerId.take(16)}...")
+                            is NetworkEvent.BlockReceived ->
+                                Log.i(TAG, "BLOCK RECEIVED: height=${ev.height} producer=${ev.producer.take(16)}...")
+                            is NetworkEvent.TransactionReceived ->
+                                Log.i(TAG, "TX RECEIVED: ${ev.hashHex.take(16)}...")
+                            is NetworkEvent.LuxPostReceived ->
+                                Log.d(TAG, "LUX POST: ${ev.hash.take(16)}...")
+                        }
                     }
                 }
             } catch (e: Exception) {

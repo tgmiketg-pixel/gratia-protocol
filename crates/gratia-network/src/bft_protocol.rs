@@ -22,7 +22,6 @@ use libp2p::request_response::{self, Codec, ProtocolSupport};
 use serde::{Deserialize, Serialize};
 
 use gratia_core::types::ValidatorSignature;
-use libp2p::PeerId;
 
 /// Protocol identifier for direct BFT signature delivery.
 pub const BFT_SIG_PROTOCOL: &str = "/gratia/bft-sig/1";

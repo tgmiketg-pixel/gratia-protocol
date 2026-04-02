@@ -48,10 +48,9 @@ use gratia_pol::ProofOfLifeManager;
 use gratia_governance::GovernanceManager;
 use gratia_core::types::Vote;
 use gratia_staking::StakingManager;
-use gratia_state::db::{InMemoryStore, StorageBackend, StorageBackendConfig, open_storage};
+use gratia_state::db::{StorageBackend, StorageBackendConfig, open_storage};
 use gratia_state::StateManager;
 use gratia_vm::interpreter::InterpreterRuntime;
-use gratia_vm::runtime::{MockRuntime, ContractValue};
 use gratia_vm::host_functions::HostEnvironment;
 use gratia_vm::sandbox::ContractPermissions;
 use gratia_vm::{GratiaVm, ContractCall};
@@ -254,6 +253,79 @@ pub struct FfiStakeInfo {
     pub staked_at_millis: i64,
     /// Whether this node meets the minimum stake requirement.
     pub meets_minimum: bool,
+}
+
+/// Pending unstake status for the mobile UI.
+///
+/// WHY: The mobile app needs to show users whether they have a pending unstake,
+/// how much is pending, and how long until the cooldown expires so they can
+/// call `complete_unstake()`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FfiUnstakeStatus {
+    /// Whether there is a pending unstake request.
+    pub has_pending_unstake: bool,
+    /// Amount of Lux pending release (0 if no pending unstake).
+    pub pending_amount_lux: u64,
+    /// Unix timestamp in milliseconds when the unstake was requested (0 if none).
+    pub requested_at_millis: i64,
+    /// Seconds remaining in the cooldown period (0 if cooldown has elapsed or no pending).
+    pub remaining_cooldown_secs: u64,
+}
+
+/// Network Security Pool status for the mobile UI.
+///
+/// WHY: The mobile app needs to display how much overflow is in the pool,
+/// how many nodes contribute, and the user's share of accumulated yield.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FfiPoolStatus {
+    /// Total overflow Lux in the Network Security Pool.
+    pub total_overflow_lux: u64,
+    /// Number of nodes contributing overflow to the pool.
+    pub contributor_count: u32,
+    /// Total accumulated yield in the pool (Lux).
+    pub accumulated_yield_lux: u64,
+    /// This node's overflow contribution (Lux), 0 if none.
+    pub your_overflow_lux: u64,
+    /// This node's estimated yield share (Lux), 0 if none.
+    pub your_estimated_yield_lux: u64,
+}
+
+/// Staking activation status for the mobile UI.
+///
+/// WHY: Staking minimum is not enforced until the network crosses a miner
+/// threshold, then a grace period begins. The mobile app needs to show users
+/// whether staking is enforced, how long the grace period lasts, and what
+/// the effective minimum stake is right now.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FfiActivationStatus {
+    /// Whether the staking minimum has been activated (threshold crossed).
+    pub is_activated: bool,
+    /// Unix timestamp in milliseconds when staking was activated (0 if not yet).
+    pub activated_at_millis: i64,
+    /// Seconds remaining in the grace period (0 if grace has elapsed or not activated).
+    pub grace_period_remaining_secs: u64,
+    /// The effective minimum stake right now (0 during genesis/grace, full amount after).
+    pub effective_minimum_stake_lux: u64,
+    /// Human-readable enforcement state: "genesis", "grace_period", or "enforced".
+    pub enforcement_state: String,
+}
+
+/// Proof of Life ZK range proof for the mobile UI.
+///
+/// WHY: The Bulletproofs-based PoL proof is generated on-device and proves
+/// that the user's daily Proof of Life parameters meet the required thresholds
+/// without revealing the actual sensor values. Bytes are hex-encoded for safe
+/// transport across the FFI boundary.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FfiPolRangeProof {
+    /// Hex-encoded serialized Bulletproof proof bytes.
+    pub proof_bytes_hex: String,
+    /// Hex-encoded Pedersen commitments (one per proven parameter).
+    pub commitments_hex: Vec<String>,
+    /// Number of parameters proven in this proof.
+    pub parameter_count: u8,
+    /// Epoch day (days since Unix epoch) this proof covers.
+    pub epoch_day: u32,
 }
 
 /// Network status for the mobile UI.
@@ -1735,6 +1807,132 @@ impl GratiaNode {
         }
     }
 
+    /// Complete a pending unstake after the cooldown period has elapsed.
+    ///
+    /// Returns the amount of Lux released back to the node's wallet.
+    /// Fails if no pending unstake exists or cooldown hasn't elapsed.
+    pub fn complete_unstake(&self) -> Result<u64, FfiError> {
+        let mut inner = self.lock_inner()?;
+        let node_id = self.get_node_id_or_default(&inner);
+        let now = Utc::now();
+
+        let released = inner.staking.complete_unstake(node_id, now).map_err(|e| {
+            error!("FFI: complete_unstake error: {}", e);
+            FfiError::StakingError {
+                reason: e.to_string(),
+            }
+        })?;
+
+        info!("FFI: unstake completed, {} Lux released", released);
+        Ok(released)
+    }
+
+    /// Get pending unstake status for this node.
+    ///
+    /// WHY: The mobile UI needs to display cooldown countdown and pending
+    /// amount so the user knows when they can call `complete_unstake()`.
+    pub fn get_unstake_status(&self) -> Result<FfiUnstakeStatus, FfiError> {
+        let inner = self.lock_inner()?;
+        let node_id = self.get_node_id_or_default(&inner);
+        let now = Utc::now();
+
+        match inner.staking.get_pending_unstake(&node_id) {
+            Some((pending_amount, requested_at)) => {
+                let elapsed = now
+                    .signed_duration_since(requested_at)
+                    .num_seconds()
+                    .max(0) as u64;
+                let cooldown = inner.staking.config().unstake_cooldown_secs;
+                let remaining = cooldown.saturating_sub(elapsed);
+
+                Ok(FfiUnstakeStatus {
+                    has_pending_unstake: true,
+                    pending_amount_lux: pending_amount,
+                    requested_at_millis: requested_at.timestamp_millis(),
+                    remaining_cooldown_secs: remaining,
+                })
+            }
+            None => Ok(FfiUnstakeStatus {
+                has_pending_unstake: false,
+                pending_amount_lux: 0,
+                requested_at_millis: 0,
+                remaining_cooldown_secs: 0,
+            }),
+        }
+    }
+
+    /// Get Network Security Pool status.
+    ///
+    /// WHY: The mobile UI displays pool stats — total overflow, contributor
+    /// count, accumulated yield, and the user's personal share.
+    pub fn get_pool_status(&self) -> Result<FfiPoolStatus, FfiError> {
+        let inner = self.lock_inner()?;
+        let node_id = self.get_node_id_or_default(&inner);
+        let pool = inner.staking.pool();
+
+        let your_overflow = pool
+            .get_contribution(&node_id)
+            .map(|c| c.amount)
+            .unwrap_or(0);
+        let your_yield = pool.calculate_yield_share(&node_id).unwrap_or(0);
+
+        Ok(FfiPoolStatus {
+            total_overflow_lux: pool.total_overflow(),
+            contributor_count: pool.contributor_count() as u32,
+            accumulated_yield_lux: pool.accumulated_yield(),
+            your_overflow_lux: your_overflow,
+            your_estimated_yield_lux: your_yield,
+        })
+    }
+
+    /// Get staking activation status.
+    ///
+    /// WHY: The mobile UI needs to show whether staking minimum is enforced,
+    /// the grace period countdown, and the effective minimum stake amount.
+    pub fn get_activation_status(&self) -> Result<FfiActivationStatus, FfiError> {
+        let inner = self.lock_inner()?;
+        let now = Utc::now();
+
+        let is_activated = inner.staking.is_staking_activated();
+        let activated_at = inner.staking.staking_activated_at();
+        let effective_min = inner.staking.effective_minimum_stake(now);
+
+        let (activated_at_millis, grace_remaining, state) = match activated_at {
+            None => (0i64, 0u64, "genesis".to_string()),
+            Some(at) => {
+                let elapsed = now.signed_duration_since(at).num_seconds().max(0) as u64;
+                let grace = inner.staking.config().staking_activation_grace_secs;
+                if elapsed < grace {
+                    (
+                        at.timestamp_millis(),
+                        grace - elapsed,
+                        "grace_period".to_string(),
+                    )
+                } else {
+                    (at.timestamp_millis(), 0, "enforced".to_string())
+                }
+            }
+        };
+
+        Ok(FfiActivationStatus {
+            is_activated,
+            activated_at_millis,
+            grace_period_remaining_secs: grace_remaining,
+            effective_minimum_stake_lux: effective_min,
+            enforcement_state: state,
+        })
+    }
+
+    /// Check if this node is permanently banned from staking.
+    ///
+    /// WHY: Banned nodes cannot participate in mining or consensus. The mobile
+    /// UI needs to detect this and show an appropriate message.
+    pub fn is_node_banned(&self) -> Result<bool, FfiError> {
+        let inner = self.lock_inner()?;
+        let node_id = self.get_node_id_or_default(&inner);
+        Ok(inner.staking.is_banned(&node_id))
+    }
+
     // ========================================================================
     // Network methods
     // ========================================================================
@@ -2968,7 +3166,7 @@ impl GratiaNode {
                                                         signature: vec![1u8; 64],
                                                     },
                                                 };
-                                                let (notarized, fin) = streamlet.add_vote(sv);
+                                                let (_notarized, fin) = streamlet.add_vote(sv);
                                                 if let Some(f) = fin {
                                                     rust_log(&format!("STREAMLET: finality at height {}", f));
                                                 }
@@ -4524,6 +4722,151 @@ impl GratiaNode {
 
         rust_log(&format!("Groth16: verification result={}", valid));
         Ok(valid)
+    }
+
+    // ========================================================================
+    // Bulletproofs — Proof of Life ZK Attestation
+    // ========================================================================
+
+    /// Generate a Bulletproofs zero-knowledge proof that the daily Proof of Life
+    /// parameters meet the required thresholds, without revealing actual values.
+    ///
+    /// WHY: This is the core privacy mechanism for Proof of Life. The phone
+    /// collects sensor data locally, then proves to the network that it met
+    /// every threshold (unlock count, spread, interactions, BT environments)
+    /// without disclosing how much it exceeded each threshold by. The proof is
+    /// compact (~700 bytes) and fast to verify on other mobile devices.
+    pub fn generate_pol_proof(
+        &self,
+        unlock_count: u64,
+        unlock_spread_hours: u64,
+        interaction_sessions: u64,
+        bt_environments: u64,
+        min_unlocks: u64,
+        min_spread: u64,
+        min_interactions: u64,
+        min_bt_envs: u64,
+        epoch_day: u32,
+    ) -> Result<FfiPolRangeProof, FfiError> {
+        let _inner = self.lock_inner()?;
+
+        let input = gratia_zk::PolProofInput {
+            unlock_count,
+            unlock_spread_hours,
+            interaction_sessions,
+            bt_environments,
+        };
+
+        let thresholds = gratia_zk::PolThresholds {
+            min_unlocks,
+            min_spread,
+            min_interactions,
+            min_bt_envs,
+        };
+
+        let proof = gratia_zk::generate_pol_proof(&input, &thresholds, epoch_day)
+            .map_err(|e| FfiError::InternalError {
+                reason: format!("Bulletproofs PoL proof generation failed: {}", e),
+            })?;
+
+        let ffi_proof = FfiPolRangeProof {
+            proof_bytes_hex: hex::encode(&proof.proof_bytes),
+            commitments_hex: proof.commitments.iter().map(|c| hex::encode(c)).collect(),
+            parameter_count: proof.parameter_count,
+            epoch_day: proof.epoch_day,
+        };
+
+        rust_log(&format!(
+            "Bulletproofs: generated PoL proof for epoch_day={}, {} params, {} proof bytes",
+            epoch_day, ffi_proof.parameter_count, proof.proof_bytes.len()
+        ));
+        Ok(ffi_proof)
+    }
+
+    /// Verify a Bulletproofs Proof of Life ZK proof against the given thresholds.
+    ///
+    /// WHY: Every validator node verifies PoL proofs when validating blocks.
+    /// Bulletproof verification is fast (~5ms on ARM), making it suitable for
+    /// mobile validators processing blocks within the 3-5 second window.
+    pub fn verify_pol_proof(
+        &self,
+        proof_bytes_hex: String,
+        commitments_hex: Vec<String>,
+        parameter_count: u8,
+        epoch_day: u32,
+        min_unlocks: u64,
+        min_spread: u64,
+        min_interactions: u64,
+        min_bt_envs: u64,
+    ) -> Result<bool, FfiError> {
+        let _inner = self.lock_inner()?;
+
+        let proof_bytes = hex::decode(&proof_bytes_hex).map_err(|e| FfiError::InternalError {
+            reason: format!("invalid proof_bytes hex: {}", e),
+        })?;
+
+        let commitments: Result<Vec<Vec<u8>>, _> = commitments_hex
+            .iter()
+            .map(|c| hex::decode(c))
+            .collect();
+        let commitments = commitments.map_err(|e| FfiError::InternalError {
+            reason: format!("invalid commitment hex: {}", e),
+        })?;
+
+        let proof = gratia_zk::PolRangeProof {
+            proof_bytes,
+            commitments,
+            parameter_count,
+            epoch_day,
+        };
+
+        let thresholds = gratia_zk::PolThresholds {
+            min_unlocks,
+            min_spread,
+            min_interactions,
+            min_bt_envs,
+        };
+
+        let valid = gratia_zk::verify_pol_proof(&proof, &thresholds, epoch_day)
+            .map_err(|e| FfiError::InternalError {
+                reason: format!("Bulletproofs PoL verification failed: {}", e),
+            })?;
+
+        rust_log(&format!(
+            "Bulletproofs: PoL verification result={} for epoch_day={}",
+            valid, epoch_day
+        ));
+        Ok(valid)
+    }
+
+    /// Retrieve the last successfully generated Proof of Life ZK proof from the
+    /// PoL manager, if one exists.
+    ///
+    /// WHY: After the PoL manager runs its daily attestation cycle and generates
+    /// a ZK proof internally, the mobile app needs to retrieve it for display
+    /// and for broadcasting to the network. This avoids regenerating the proof.
+    pub fn get_last_pol_proof(&self) -> Result<Option<FfiPolRangeProof>, FfiError> {
+        let inner = self.lock_inner()?;
+
+        match inner.pol.last_zk_proof() {
+            Some(proof) => {
+                let ffi_proof = FfiPolRangeProof {
+                    proof_bytes_hex: hex::encode(&proof.proof_bytes),
+                    commitments_hex: proof.commitments.iter().map(|c| hex::encode(c)).collect(),
+                    parameter_count: proof.parameter_count,
+                    epoch_day: proof.epoch_day,
+                };
+                rust_log(&format!(
+                    "Retrieved last PoL proof: epoch_day={}, {} params",
+                    ffi_proof.epoch_day, ffi_proof.parameter_count
+                ));
+                Ok(Some(ffi_proof))
+            }
+            None => {
+                rust_log("No PoL proof available yet");
+                Ok(None)
+            }
+        }
     }
 
     // ========================================================================
