@@ -36,6 +36,7 @@ fn make_node(index: u16, presence_score: u8, pol_days: u64) -> EligibleNode {
         has_valid_pol: true,
         meets_minimum_stake: true,
         pol_days,
+        signing_pubkey: vec![],
     }
 }
 

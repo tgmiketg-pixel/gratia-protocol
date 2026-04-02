@@ -167,6 +167,13 @@ pub struct EligibleNode {
     /// WHY: Progressive trust model — only Established+ nodes (30+ days)
     /// are eligible for validator committees.
     pub pol_days: u64,
+    /// Ed25519 signing public key bytes (32 bytes).
+    /// WHY: Required for cryptographic verification of block signatures.
+    /// Validators sign blocks with their Ed25519 key; the committee must
+    /// store these keys to verify incoming signatures. Empty means unknown
+    /// (e.g., synthetic nodes during bootstrap) — signatures from such
+    /// validators will be rejected.
+    pub signing_pubkey: Vec<u8>,
 }
 
 impl EligibleNode {
@@ -199,6 +206,11 @@ pub struct CommitteeMember {
     pub selection_proof: VrfProof,
     /// The weighted selection value (lower = higher priority).
     pub selection_value: f64,
+    /// Ed25519 signing public key bytes (32 bytes).
+    /// WHY: Used to cryptographically verify block signatures from this
+    /// validator. Without this, anyone could forge signatures claiming to
+    /// be a committee member.
+    pub signing_pubkey: Vec<u8>,
 }
 
 /// Tracks the current epoch and its committee.
@@ -242,6 +254,15 @@ impl ValidatorCommittee {
     /// Get a committee member by node ID.
     pub fn get_member(&self, node_id: &NodeId) -> Option<&CommitteeMember> {
         self.members.iter().find(|m| m.node_id == *node_id)
+    }
+
+    /// Get the Ed25519 signing public key for a committee member.
+    /// WHY: Required for cryptographic verification of block/vote signatures.
+    /// Returns None if the member is not found or has no signing key.
+    pub fn get_signing_pubkey(&self, node_id: &NodeId) -> Option<&[u8]> {
+        self.get_member(node_id)
+            .filter(|m| !m.signing_pubkey.is_empty())
+            .map(|m| m.signing_pubkey.as_slice())
     }
 
     /// Get the block producer for a given slot within this epoch.
@@ -460,6 +481,7 @@ pub fn select_committee_with_network_size(
             presence_score: node.presence_score,
             selection_proof,
             selection_value,
+            signing_pubkey: node.signing_pubkey.clone(),
         });
     }
 
@@ -612,6 +634,7 @@ mod tests {
             has_valid_pol: true,
             meets_minimum_stake: true,
             pol_days: 90, // Default to Trusted tier for backward compat
+            signing_pubkey: vec![id_byte; 32], // Test placeholder
         }
     }
 
@@ -986,6 +1009,7 @@ mod tests {
             presence_score: 60,
             selection_proof: VrfProof { output: [0; 32], proof_bytes: vec![] },
             selection_value: 0.5,
+            signing_pubkey: vec![],
         }]);
 
         // node_a is in cooldown for 1 round, node_b is not
@@ -999,6 +1023,7 @@ mod tests {
             presence_score: 60,
             selection_proof: VrfProof { output: [0; 32], proof_bytes: vec![] },
             selection_value: 0.5,
+            signing_pubkey: vec![],
         }]);
 
         // node_a is no longer in cooldown for 1 round, but would be for 2
@@ -1017,6 +1042,7 @@ mod tests {
             presence_score: 60,
             selection_proof: VrfProof { output: [0; 32], proof_bytes: vec![] },
             selection_value: 0.5,
+            signing_pubkey: vec![],
         }]);
 
         assert!(!tracker.is_in_cooldown(&node_a, 0));

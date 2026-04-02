@@ -493,13 +493,38 @@ impl SyncManager {
                 }
             }
 
-            // Verify blocks are contiguous
+            // Verify blocks are contiguous by height
             for window in blocks.windows(2) {
                 if window[1].header.height != window[0].header.height + 1 {
                     self.consecutive_failures += 1;
                     return Err(NetworkError::SyncError(
                         "Received non-contiguous blocks".to_string(),
                     ));
+                }
+            }
+
+            // WHY: Verify parent hash chain integrity. Height contiguity alone
+            // doesn't prove the blocks form a valid chain — a malicious peer
+            // could send blocks at the right heights but with unrelated content.
+            // Each block's parent_hash must match the hash of the previous block.
+            for window in blocks.windows(2) {
+                match window[0].header.hash() {
+                    Ok(prev_hash) => {
+                        if window[1].header.parent_hash != prev_hash {
+                            self.consecutive_failures += 1;
+                            return Err(NetworkError::SyncError(format!(
+                                "Hash chain broken at height {}: parent_hash mismatch",
+                                window[1].header.height
+                            )));
+                        }
+                    }
+                    Err(e) => {
+                        self.consecutive_failures += 1;
+                        return Err(NetworkError::SyncError(format!(
+                            "Failed to hash block at height {}: {}",
+                            window[0].header.height, e
+                        )));
+                    }
                 }
             }
         }

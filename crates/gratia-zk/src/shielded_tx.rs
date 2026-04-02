@@ -89,18 +89,34 @@ pub struct ShieldedTransferSecret {
 // Proof Generation
 // ============================================================================
 
+/// Context that binds a shielded proof to a specific transaction,
+/// preventing proof detachment and replay.
+#[derive(Debug, Clone)]
+pub struct ShieldedTransferContext {
+    /// Sender's public key (32 bytes).
+    pub sender_pubkey: Vec<u8>,
+    /// Recipient address (32 bytes).
+    pub recipient: [u8; 32],
+    /// Transaction nonce (prevents replay within the same chain).
+    pub nonce: u64,
+    /// Chain ID (prevents replay across networks: 1=mainnet, 2=testnet).
+    pub chain_id: u32,
+}
+
 /// Generate a shielded transfer proof.
 ///
 /// Proves that:
 /// 1. `amount` is in range [0, 2^64) — non-negative
 /// 2. `sender_balance - amount - fee` is in range [0, 2^64) — sufficient balance
 ///
-/// The proof does NOT reveal amount, balance, or change to verifiers.
+/// The proof is bound to the transaction context (sender, recipient, nonce,
+/// chain_id) via the Merlin transcript, preventing proof detachment and replay.
 ///
 /// # Arguments
 /// * `amount` - Transfer amount in Lux
 /// * `sender_balance` - Sender's current balance in Lux (known only to sender)
 /// * `fee` - Transaction fee in Lux (public, burned)
+/// * `context` - Transaction-specific binding data (sender, recipient, nonce, chain_id)
 ///
 /// # Returns
 /// * `ShieldedTransactionProof` - The ZK proof (goes on chain)
@@ -109,6 +125,7 @@ pub fn prove_transfer(
     amount: Lux,
     sender_balance: Lux,
     fee: Lux,
+    context: &ShieldedTransferContext,
 ) -> Result<(ShieldedTransactionProof, ShieldedTransferSecret), GratiaError> {
     // Validate inputs
     let total_debit = amount
@@ -136,6 +153,15 @@ pub fn prove_transfer(
 
     // Create transcript with domain separation
     let mut transcript = Transcript::new(TX_TRANSCRIPT_DOMAIN);
+
+    // WHY: Bind the proof to this specific transaction's context so it cannot
+    // be detached and replayed in a different transaction. Without these bindings,
+    // an attacker could take a valid proof from one transaction and attach it to
+    // a different one with the same amount.
+    transcript.append_message(b"sender_pubkey", &context.sender_pubkey);
+    transcript.append_message(b"recipient", &context.recipient);
+    transcript.append_message(b"nonce", &context.nonce.to_le_bytes());
+    transcript.append_message(b"chain_id", &context.chain_id.to_le_bytes());
 
     // Prove both values simultaneously in an aggregated range proof.
     // WHY: Aggregated proofs are more compact and faster to verify than
@@ -189,13 +215,21 @@ pub fn prove_transfer(
 /// (in range [0, 2^64)), which implicitly proves the sender had sufficient
 /// balance. The verifier learns nothing about the actual values.
 ///
+/// The proof is verified against the same transaction context that was used
+/// during proof generation. A proof generated for a different transaction
+/// will fail verification.
+///
 /// # Arguments
 /// * `proof` - The shielded transaction proof from the chain
+/// * `context` - Transaction-specific binding data (must match what was used in prove_transfer)
 ///
 /// # Returns
 /// * `Ok(())` if the proof is valid
 /// * `Err(GratiaError)` if the proof is invalid
-pub fn verify_transfer(proof: &ShieldedTransactionProof) -> Result<(), GratiaError> {
+pub fn verify_transfer(
+    proof: &ShieldedTransactionProof,
+    context: &ShieldedTransferContext,
+) -> Result<(), GratiaError> {
     let bp_gens = BulletproofGens::new(TX_RANGE_PROOF_BITS, TX_PROOF_VALUES);
     let pc_gens = PedersenGens::default();
 
@@ -223,8 +257,12 @@ pub fn verify_transfer(proof: &ShieldedTransactionProof) -> Result<(), GratiaErr
 
     let commitments = vec![amount_point, change_point];
 
-    // Recreate transcript with same domain separator
+    // Recreate transcript with same domain separator and context bindings
     let mut transcript = Transcript::new(TX_TRANSCRIPT_DOMAIN);
+    transcript.append_message(b"sender_pubkey", &context.sender_pubkey);
+    transcript.append_message(b"recipient", &context.recipient);
+    transcript.append_message(b"nonce", &context.nonce.to_le_bytes());
+    transcript.append_message(b"chain_id", &context.chain_id.to_le_bytes());
 
     // Verify the aggregated range proof
     range_proof
@@ -291,19 +329,30 @@ mod tests {
     use super::*;
     use gratia_core::types::LUX_PER_GRAT;
 
+    /// Create a test context for shielded transfer proofs.
+    fn test_context() -> ShieldedTransferContext {
+        ShieldedTransferContext {
+            sender_pubkey: vec![1u8; 32],
+            recipient: [2u8; 32],
+            nonce: 42,
+            chain_id: 2, // testnet
+        }
+    }
+
     #[test]
     fn test_prove_and_verify_shielded_transfer() {
         let amount = 50 * LUX_PER_GRAT; // 50 GRAT
         let balance = 1000 * LUX_PER_GRAT; // 1000 GRAT
         let fee = 1000; // 1000 Lux fee
+        let ctx = test_context();
 
         let (proof, secret) =
-            prove_transfer(amount, balance, fee).expect("proof generation should succeed");
+            prove_transfer(amount, balance, fee, &ctx).expect("proof generation should succeed");
 
         assert_eq!(secret.amount, amount);
         assert_eq!(secret.change, balance - amount - fee);
 
-        let result = verify_transfer(&proof);
+        let result = verify_transfer(&proof, &ctx);
         assert!(result.is_ok(), "verification failed: {:?}", result.err());
     }
 
@@ -312,8 +361,9 @@ mod tests {
         let amount = 1000 * LUX_PER_GRAT;
         let balance = 500 * LUX_PER_GRAT; // Not enough
         let fee = 1000;
+        let ctx = test_context();
 
-        let result = prove_transfer(amount, balance, fee);
+        let result = prove_transfer(amount, balance, fee, &ctx);
         assert!(result.is_err());
         match result.unwrap_err() {
             GratiaError::InsufficientBalance { .. } => {} // Expected
@@ -326,45 +376,61 @@ mod tests {
         let fee = 1000;
         let amount = 100 * LUX_PER_GRAT;
         let balance = amount + fee; // Exactly enough, zero change
+        let ctx = test_context();
 
         let (proof, secret) =
-            prove_transfer(amount, balance, fee).expect("exact balance should work");
+            prove_transfer(amount, balance, fee, &ctx).expect("exact balance should work");
 
         assert_eq!(secret.change, 0);
-        assert!(verify_transfer(&proof).is_ok());
+        assert!(verify_transfer(&proof, &ctx).is_ok());
     }
 
     #[test]
     fn test_transfer_zero_amount() {
         // Zero-amount transfers should be valid (used for some protocol operations)
+        let ctx = test_context();
         let (proof, secret) =
-            prove_transfer(0, 1000 * LUX_PER_GRAT, 1000).expect("zero amount should work");
+            prove_transfer(0, 1000 * LUX_PER_GRAT, 1000, &ctx).expect("zero amount should work");
 
         assert_eq!(secret.amount, 0);
-        assert!(verify_transfer(&proof).is_ok());
+        assert!(verify_transfer(&proof, &ctx).is_ok());
     }
 
     #[test]
     fn test_tampered_proof_fails() {
-        let (mut proof, _) = prove_transfer(50 * LUX_PER_GRAT, 1000 * LUX_PER_GRAT, 1000)
+        let ctx = test_context();
+        let (mut proof, _) = prove_transfer(50 * LUX_PER_GRAT, 1000 * LUX_PER_GRAT, 1000, &ctx)
             .expect("proof generation should succeed");
 
         // Tamper with the amount commitment
         proof.amount_commitment.point = [0u8; 32];
 
-        assert!(verify_transfer(&proof).is_err());
+        assert!(verify_transfer(&proof, &ctx).is_err());
     }
 
     #[test]
     fn test_proof_serialization_roundtrip() {
-        let (proof, _) = prove_transfer(50 * LUX_PER_GRAT, 1000 * LUX_PER_GRAT, 1000)
+        let ctx = test_context();
+        let (proof, _) = prove_transfer(50 * LUX_PER_GRAT, 1000 * LUX_PER_GRAT, 1000, &ctx)
             .expect("proof generation should succeed");
 
         let json = serde_json::to_string(&proof).expect("serialization should succeed");
         let deserialized: ShieldedTransactionProof =
             serde_json::from_str(&json).expect("deserialization should succeed");
 
-        assert!(verify_transfer(&deserialized).is_ok());
+        assert!(verify_transfer(&deserialized, &ctx).is_ok());
+    }
+
+    #[test]
+    fn test_proof_with_wrong_context_fails() {
+        let ctx = test_context();
+        let (proof, _) = prove_transfer(50 * LUX_PER_GRAT, 1000 * LUX_PER_GRAT, 1000, &ctx)
+            .expect("proof generation should succeed");
+
+        // Verify with a different context (different nonce) — should fail
+        let mut wrong_ctx = test_context();
+        wrong_ctx.nonce = 999;
+        assert!(verify_transfer(&proof, &wrong_ctx).is_err());
     }
 
     #[test]
@@ -417,7 +483,8 @@ mod tests {
 
     #[test]
     fn test_amount_plus_fee_overflow() {
-        let result = prove_transfer(u64::MAX, 0, 1);
+        let ctx = test_context();
+        let result = prove_transfer(u64::MAX, 0, 1, &ctx);
         assert!(result.is_err());
     }
 }

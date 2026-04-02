@@ -7,7 +7,9 @@
 use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
+use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
+use sha2::{Sha256, Digest};
 
 use gratia_core::types::{Block, NodeId, ProofOfLifeAttestation, Transaction, ValidatorSignature};
 
@@ -64,6 +66,17 @@ pub struct NodeAnnouncement {
     pub pol_days: u64,
     /// Timestamp of this announcement.
     pub timestamp: DateTime<Utc>,
+    /// Ed25519 public key of the announcing node (32 bytes).
+    /// WHY: NodeId is a SHA-256 hash of the pubkey, so we can't recover the
+    /// pubkey from it. Including the raw pubkey allows gossip-layer signature
+    /// verification without a lookup table.
+    #[serde(default)]
+    pub ed25519_pubkey: [u8; 32],
+    /// Ed25519 signature over (node_id || vrf_pubkey_bytes || presence_score || pol_days || timestamp).
+    /// WHY: Without a signature, any peer can claim any node_id with any score,
+    /// enabling trivial committee takeover attacks.
+    #[serde(default)]
+    pub signature: Vec<u8>,
 }
 
 /// A validator's signature on a pending block, broadcast for BFT finality.
@@ -80,6 +93,12 @@ pub struct ValidatorSignatureMessage {
     pub height: u64,
     /// The validator's signature (includes validator NodeId and Ed25519 sig).
     pub signature: ValidatorSignature,
+    /// Ed25519 public key of the signing validator (32 bytes).
+    /// WHY: NodeId in ValidatorSignature is a SHA-256 hash — can't recover
+    /// the pubkey from it. Including the raw pubkey allows gossip-layer
+    /// cryptographic verification before propagation.
+    #[serde(default)]
+    pub validator_pubkey: [u8; 32],
 }
 
 /// A gossip message wrapping the different types of data propagated
@@ -185,6 +204,50 @@ impl GossipMessage {
 }
 
 // ============================================================================
+// Signature Helpers
+// ============================================================================
+
+/// Build the canonical byte payload for NodeAnnouncement signing.
+/// WHY: Both the signing side (FFI/application) and verification side (gossip
+/// validation) must produce the exact same byte sequence. This function is the
+/// single source of truth for that encoding.
+pub fn node_announcement_signing_payload(ann: &NodeAnnouncement) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(32 + 32 + 1 + 8 + 8);
+    payload.extend_from_slice(&ann.node_id.0);
+    payload.extend_from_slice(&ann.vrf_pubkey_bytes);
+    payload.push(ann.presence_score);
+    payload.extend_from_slice(&ann.pol_days.to_be_bytes());
+    payload.extend_from_slice(&ann.timestamp.timestamp().to_be_bytes());
+    payload
+}
+
+/// Verify an Ed25519 signature given raw pubkey bytes, message, and signature bytes.
+/// Returns Ok(()) on success, Err with description on failure.
+fn verify_ed25519(pubkey_bytes: &[u8; 32], message: &[u8], sig_bytes: &[u8]) -> Result<(), String> {
+    let pubkey = VerifyingKey::from_bytes(pubkey_bytes)
+        .map_err(|e| format!("Invalid Ed25519 public key: {}", e))?;
+    let sig_array: [u8; 64] = sig_bytes
+        .try_into()
+        .map_err(|_| format!("Invalid signature length: {} (expected 64)", sig_bytes.len()))?;
+    let sig = Ed25519Signature::from_bytes(&sig_array);
+    pubkey
+        .verify_strict(message, &sig)
+        .map_err(|e| format!("Signature verification failed: {}", e))
+}
+
+/// Derive a NodeId from an Ed25519 public key (SHA-256 hash).
+/// WHY: Used to verify that a claimed ed25519_pubkey actually corresponds
+/// to the claimed node_id.
+fn node_id_from_pubkey(pubkey_bytes: &[u8; 32]) -> NodeId {
+    let mut hasher = Sha256::new();
+    hasher.update(pubkey_bytes);
+    let result = hasher.finalize();
+    let mut id = [0u8; 32];
+    id.copy_from_slice(&result);
+    NodeId(id)
+}
+
+// ============================================================================
 // Message Validation
 // ============================================================================
 
@@ -217,6 +280,31 @@ pub fn validate_incoming_message(data: &[u8]) -> Result<GossipMessage, NetworkEr
                 return Err(NetworkError::InvalidMessage(
                     "Block contains too many transactions".to_string(),
                 ));
+            }
+            // WHY: Verify the block has at least one validator signature from
+            // the claimed producer. Without this, any peer can broadcast a block
+            // claiming to be from any producer, and it would be re-propagated
+            // through the network before the consensus layer rejects it.
+            let producer_sig = block.validator_signatures.iter()
+                .find(|vs| vs.validator == block.header.producer);
+            if block.header.height > 0 {
+                match producer_sig {
+                    None => {
+                        return Err(NetworkError::InvalidMessage(
+                            "Block has no signature from its claimed producer".to_string(),
+                        ));
+                    }
+                    Some(vs) => {
+                        if vs.signature.len() != 64 {
+                            return Err(NetworkError::InvalidMessage(
+                                format!(
+                                    "Block producer signature length invalid: {} (expected 64)",
+                                    vs.signature.len()
+                                ),
+                            ));
+                        }
+                    }
+                }
             }
         }
         GossipMessage::NewTransaction(tx) => {
@@ -259,6 +347,28 @@ pub fn validate_incoming_message(data: &[u8]) -> Result<GossipMessage, NetworkEr
                     ann.presence_score
                 )));
             }
+            // WHY: Cryptographic verification of NodeAnnouncement prevents
+            // any peer from impersonating another node_id or inflating scores.
+            // Without this, a single malicious peer can take over the committee.
+            if !ann.signature.is_empty() {
+                // Verify ed25519_pubkey hashes to the claimed node_id
+                let derived_id = node_id_from_pubkey(&ann.ed25519_pubkey);
+                if derived_id != ann.node_id {
+                    return Err(NetworkError::InvalidMessage(
+                        "NodeAnnouncement pubkey does not match node_id".to_string(),
+                    ));
+                }
+                // Verify signature over the canonical payload
+                let payload = node_announcement_signing_payload(ann);
+                if let Err(e) = verify_ed25519(&ann.ed25519_pubkey, &payload, &ann.signature) {
+                    return Err(NetworkError::InvalidMessage(
+                        format!("NodeAnnouncement signature invalid: {}", e),
+                    ));
+                }
+            }
+            // NOTE: Unsigned announcements are accepted during the transition
+            // period (old nodes don't sign yet). Once all nodes are updated,
+            // this should reject unsigned announcements.
         }
         GossipMessage::NewLuxPost(post) => {
             // WHY: Reject posts with empty content or missing signature at the
@@ -296,6 +406,32 @@ pub fn validate_incoming_message(data: &[u8]) -> Result<GossipMessage, NetworkEr
                     "Validator signature has zero block hash".to_string(),
                 ));
             }
+            // WHY: Cryptographic verification of validator signatures at the
+            // gossip layer prevents amplification attacks where a malicious peer
+            // floods the network with forged signatures. Without this, invalid
+            // sigs propagate to all nodes before the consensus layer rejects them.
+            if msg.validator_pubkey != [0u8; 32] {
+                // Verify pubkey matches claimed validator NodeId
+                let derived_id = node_id_from_pubkey(&msg.validator_pubkey);
+                if derived_id != msg.signature.validator {
+                    return Err(NetworkError::InvalidMessage(
+                        "Validator pubkey does not match validator NodeId".to_string(),
+                    ));
+                }
+                // Verify Ed25519 signature over the block hash
+                if let Err(e) = verify_ed25519(
+                    &msg.validator_pubkey,
+                    &msg.block_hash,
+                    &msg.signature.signature,
+                ) {
+                    return Err(NetworkError::InvalidMessage(
+                        format!("Validator signature cryptographically invalid: {}", e),
+                    ));
+                }
+            }
+            // NOTE: Messages with zero validator_pubkey are accepted during
+            // the transition period. Once all nodes include pubkeys, this
+            // should reject messages without them.
         }
     }
 
@@ -566,6 +702,7 @@ mod tests {
     use gratia_core::types::*;
 
     fn make_test_block() -> Block {
+        let producer = NodeId([1u8; 32]);
         Block {
             header: BlockHeader {
                 height: 1,
@@ -574,14 +711,19 @@ mod tests {
                 transactions_root: [0u8; 32],
                 state_root: [0u8; 32],
                 attestations_root: [0u8; 32],
-                producer: NodeId([1u8; 32]),
+                producer,
                 vrf_proof: vec![0u8; 64],
                 active_miners: 100,
                 geographic_diversity: 5,
             },
             transactions: vec![],
             attestations: vec![],
-            validator_signatures: vec![],
+            // WHY: Blocks at height > 0 must include a signature from the
+            // producer to pass gossip-layer validation.
+            validator_signatures: vec![ValidatorSignature {
+                validator: producer,
+                signature: vec![0u8; 64],
+            }],
         }
     }
 

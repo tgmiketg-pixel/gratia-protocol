@@ -52,9 +52,8 @@ fn make_chain(length: u64) -> Vec<Block> {
     let mut parent = BlockHash([0u8; 32]);
     for h in 1..=length {
         let block = make_block_at_height(h, parent);
-        // WHY: Use a deterministic hash based on height since we can't call
-        // header.hash() without setting up valid block fields.
-        parent = BlockHash([h as u8; 32]);
+        // WHY: Use the real header hash so sync's hash-chain verification passes.
+        parent = block.header.hash().unwrap_or(BlockHash([h as u8; 32]));
         chain.push(block);
     }
     chain

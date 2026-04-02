@@ -272,6 +272,53 @@ impl NfcSession {
     pub fn label(&self) -> Option<&str> {
         self.label.as_deref()
     }
+
+    /// Validate a PaymentConfirmation against this receiver session.
+    ///
+    /// WHY: The receiver MUST verify that the confirmation's session_nonce
+    /// matches the nonce from their PaymentRequest. Without this check, an
+    /// attacker could replay a PaymentConfirmation from a previous session,
+    /// or substitute a confirmation meant for a different receiver.
+    pub fn validate_confirmation<'a>(
+        &self,
+        confirmation: &'a NfcSessionMessage,
+    ) -> Result<&'a Transaction, GratiaError> {
+        if self.role != NfcRole::Receiver {
+            return Err(GratiaError::Other(
+                "only the receiver can validate a confirmation".into(),
+            ));
+        }
+
+        if self.is_expired() {
+            return Err(GratiaError::Other("NFC session has expired".into()));
+        }
+
+        match confirmation {
+            NfcSessionMessage::PaymentConfirmation {
+                version,
+                transaction,
+                session_nonce,
+            } => {
+                if *version != NFC_PROTOCOL_VERSION {
+                    return Err(GratiaError::Other(format!(
+                        "unsupported NFC protocol version: {} (expected {})",
+                        version, NFC_PROTOCOL_VERSION
+                    )));
+                }
+
+                if *session_nonce != self.session_nonce {
+                    return Err(GratiaError::Other(
+                        "session nonce mismatch: confirmation does not match this payment request".into(),
+                    ));
+                }
+
+                Ok(transaction)
+            }
+            _ => Err(GratiaError::Other(
+                "expected PaymentConfirmation message".into(),
+            )),
+        }
+    }
 }
 
 // ============================================================================

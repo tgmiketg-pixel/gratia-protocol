@@ -168,14 +168,52 @@ pub struct SlashingHistory {
 }
 
 impl SlashingHistory {
+    /// Count minor and major slashing events within the rolling offense window.
+    ///
+    /// WHY: The lifetime counters (minor_slashes, major_slashes) don't account
+    /// for the 90-day rolling window. After 90 days of clean participation,
+    /// old offenses should not contribute to escalation. This method filters
+    /// events by timestamp to compute the windowed counts.
+    fn windowed_counts(
+        &self,
+        config: &SlashingConfig,
+        now: DateTime<Utc>,
+    ) -> (u32, u32) {
+        let window_start = now - chrono::Duration::seconds(config.offense_window_secs as i64);
+        let mut minor_count = 0u32;
+        let mut major_count = 0u32;
+
+        for event in &self.events {
+            if event.timestamp >= window_start {
+                match event.severity {
+                    SlashingSeverity::Minor => minor_count += 1,
+                    SlashingSeverity::Major => major_count += 1,
+                    _ => {}
+                }
+            }
+        }
+
+        (minor_count, major_count)
+    }
+
     /// Determine the effective severity after applying escalation rules.
     ///
-    /// If a node accumulates too many offenses at a given level,
-    /// the severity automatically escalates.
+    /// If a node accumulates too many offenses within the rolling window
+    /// (default 90 days), the severity automatically escalates.
     pub fn effective_severity(
         &self,
         base_severity: SlashingSeverity,
         config: &SlashingConfig,
+    ) -> SlashingSeverity {
+        self.effective_severity_at(base_severity, config, Utc::now())
+    }
+
+    /// Same as `effective_severity` but accepts an explicit timestamp for testing.
+    pub fn effective_severity_at(
+        &self,
+        base_severity: SlashingSeverity,
+        config: &SlashingConfig,
+        now: DateTime<Utc>,
     ) -> SlashingSeverity {
         if self.is_banned {
             // WHY: A banned node should not accumulate further events, but if
@@ -183,20 +221,22 @@ impl SlashingHistory {
             return SlashingSeverity::Critical;
         }
 
+        let (windowed_minor, windowed_major) = self.windowed_counts(config, now);
+
         match base_severity {
             SlashingSeverity::Warning => {
                 // Warnings don't escalate on their own, but they're recorded.
                 SlashingSeverity::Warning
             }
             SlashingSeverity::Minor => {
-                if self.minor_slashes >= config.minor_escalation_threshold {
+                if windowed_minor >= config.minor_escalation_threshold {
                     SlashingSeverity::Major
                 } else {
                     SlashingSeverity::Minor
                 }
             }
             SlashingSeverity::Major => {
-                if self.major_slashes >= config.major_escalation_threshold {
+                if windowed_major >= config.major_escalation_threshold {
                     SlashingSeverity::Critical
                 } else {
                     SlashingSeverity::Major
@@ -388,11 +428,33 @@ mod tests {
         assert_eq!(from_overflow, 300_000);
     }
 
+    /// Helper: create a slashing event at a given time with a given severity.
+    fn make_event(severity: SlashingSeverity, timestamp: DateTime<Utc>) -> SlashingEvent {
+        SlashingEvent {
+            node_id: test_node(1),
+            pillar: SlashingPillar::ProofOfLife,
+            severity,
+            amount_slashed: 0,
+            reason: "test".into(),
+            timestamp,
+            mining_paused: false,
+            mining_pause_duration_secs: 0,
+            permanently_banned: false,
+            block_height: 0,
+        }
+    }
+
     #[test]
     fn test_escalation_minor_to_major() {
         let config = default_config();
+        let recent = now();
         let history = SlashingHistory {
             minor_slashes: 3, // At threshold
+            events: vec![
+                make_event(SlashingSeverity::Minor, recent),
+                make_event(SlashingSeverity::Minor, recent),
+                make_event(SlashingSeverity::Minor, recent),
+            ],
             ..Default::default()
         };
 
@@ -403,8 +465,13 @@ mod tests {
     #[test]
     fn test_escalation_major_to_critical() {
         let config = default_config();
+        let recent = now();
         let history = SlashingHistory {
             major_slashes: 2, // At threshold
+            events: vec![
+                make_event(SlashingSeverity::Major, recent),
+                make_event(SlashingSeverity::Major, recent),
+            ],
             ..Default::default()
         };
 
@@ -415,11 +482,36 @@ mod tests {
     #[test]
     fn test_no_escalation_below_threshold() {
         let config = default_config();
+        let recent = now();
         let history = SlashingHistory {
             minor_slashes: 1,
+            events: vec![
+                make_event(SlashingSeverity::Minor, recent),
+            ],
             ..Default::default()
         };
 
+        let severity = history.effective_severity(SlashingSeverity::Minor, &config);
+        assert_eq!(severity, SlashingSeverity::Minor);
+    }
+
+    #[test]
+    fn test_old_offenses_outside_window_dont_escalate() {
+        let config = default_config();
+        // Events from 100 days ago — outside the 90-day window
+        let old = Utc::now() - chrono::Duration::days(100);
+        let history = SlashingHistory {
+            minor_slashes: 3,
+            events: vec![
+                make_event(SlashingSeverity::Minor, old),
+                make_event(SlashingSeverity::Minor, old),
+                make_event(SlashingSeverity::Minor, old),
+            ],
+            ..Default::default()
+        };
+
+        // Even though lifetime minor_slashes is 3, all events are outside the
+        // 90-day window, so no escalation should occur.
         let severity = history.effective_severity(SlashingSeverity::Minor, &config);
         assert_eq!(severity, SlashingSeverity::Minor);
     }

@@ -584,6 +584,7 @@ mod tests {
                     has_valid_pol: true,
                     meets_minimum_stake: true,
                     pol_days: 90,
+                    signing_pubkey: vec![i; 32],
                 }
             })
             .collect();

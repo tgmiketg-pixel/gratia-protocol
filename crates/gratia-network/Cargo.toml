@@ -18,3 +18,4 @@ futures = "0.3"
 bytes = { workspace = true }
 sha2 = { workspace = true }
 gratia-lux = { path = "../gratia-lux" }
+ed25519-dalek = { workspace = true }

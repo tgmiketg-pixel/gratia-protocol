@@ -49,6 +49,7 @@ fn make_eligible_nodes(count: u8) -> Vec<EligibleNode> {
                 has_valid_pol: true,
                 meets_minimum_stake: true,
                 pol_days: 100,
+                signing_pubkey: vec![],
             }
         })
         .collect()

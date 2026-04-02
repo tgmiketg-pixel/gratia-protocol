@@ -361,6 +361,11 @@ impl ConsensusEngine {
     }
 
     /// Add a committee member's signature to the pending block.
+    ///
+    /// WHY: This is the network-facing entry point for incoming signatures.
+    /// We MUST cryptographically verify each signature before accepting it.
+    /// Without verification, any node could forge signatures claiming to be
+    /// any committee member, trivially breaking BFT finality.
     pub fn add_block_signature(
         &mut self,
         signature: ValidatorSignature,
@@ -380,6 +385,24 @@ impl ConsensusEngine {
                         signature.validator,
                     ),
                 });
+            }
+
+            // SECURITY: Cryptographically verify the Ed25519 signature.
+            // WHY: Without this, anyone can submit forged signatures claiming
+            // to be a committee member. The committee membership check above
+            // only verifies the NodeId is known — it does NOT prove the sender
+            // actually controls that identity's private key.
+            if let Some(pubkey) = committee.get_signing_pubkey(&signature.validator) {
+                block_production::verify_block_signature(
+                    &pending.block.header,
+                    &signature,
+                    pubkey,
+                )?;
+            } else {
+                warn!(
+                    validator = %signature.validator,
+                    "Accepting unverified signature: no signing pubkey for validator (bootstrap/synthetic)",
+                );
             }
         }
 
@@ -406,7 +429,31 @@ impl ConsensusEngine {
     /// WHY: During bootstrap with only synthetic committee members, normal
     /// finality can never be reached. This uses force_finalize which only
     /// requires at least 1 signature (the producer's own).
+    ///
+    /// SECURITY: Only allowed when the committee has at most 1 real member
+    /// (bootstrap/solo mode). In multi-node mode, blocks MUST reach the
+    /// normal BFT finality threshold to prevent a single node from
+    /// unilaterally finalizing blocks.
     pub fn force_finalize_pending_block(&mut self) -> Result<Block, GratiaError> {
+        // SECURITY: Gate force_finalize to bootstrap/solo mode only.
+        // WHY: In a real multi-node network, force_finalize bypasses BFT
+        // threshold, allowing a single node to finalize blocks without
+        // committee agreement. This would completely defeat Byzantine
+        // fault tolerance.
+        if let Some(ref committee) = self.current_committee {
+            // Count real members (those with non-empty signing keys).
+            let real_members = committee.members.iter()
+                .filter(|m| !m.signing_pubkey.is_empty())
+                .count();
+            if real_members > 1 {
+                return Err(GratiaError::BlockValidationFailed {
+                    reason: format!(
+                        "force_finalize blocked: {} real committee members (only allowed in solo/bootstrap mode)",
+                        real_members,
+                    ),
+                });
+            }
+        }
         self.finalize_pending_block_inner(true)
     }
 
@@ -551,6 +598,65 @@ impl ConsensusEngine {
             }
         }
         } // closes !is_fast_forward producer check
+
+        // SECURITY: Validate incoming block signatures meet finality threshold.
+        // WHY: Without this check, a malicious node can broadcast blocks with
+        // zero or insufficient signatures, and we'd accept them as finalized.
+        // This is the primary defense against forged blocks from the network.
+        if let Some(ref committee) = self.current_committee {
+            let sig_count = block.validator_signatures.len();
+            let threshold = committee.finality_threshold;
+
+            // WHY: In bootstrap/solo mode (committee of 1 real + synthetics),
+            // require at least 1 signature. In multi-node mode, require the
+            // full BFT finality threshold.
+            let required = if threshold <= 1 { 1 } else { threshold };
+
+            if sig_count < required {
+                warn!(
+                    height = incoming_height,
+                    signatures = sig_count,
+                    required = required,
+                    "Rejecting block: insufficient signatures for finality",
+                );
+                return Err(GratiaError::InsufficientSignatures {
+                    count: sig_count,
+                    required,
+                });
+            }
+
+            // SECURITY: Verify each validator signature cryptographically.
+            // WHY: Checking signature count alone doesn't prevent forged sigs.
+            // We must verify that each signature was actually produced by the
+            // claimed committee member's Ed25519 private key.
+            for vs in &block.validator_signatures {
+                if !committee.is_committee_member(&vs.validator) {
+                    return Err(GratiaError::BlockValidationFailed {
+                        reason: format!(
+                            "Block signature from non-committee member: {}",
+                            vs.validator,
+                        ),
+                    });
+                }
+                if let Some(pubkey) = committee.get_signing_pubkey(&vs.validator) {
+                    block_production::verify_block_signature(
+                        &block.header,
+                        vs,
+                        pubkey,
+                    ).map_err(|e| {
+                        GratiaError::BlockValidationFailed {
+                            reason: format!(
+                                "Invalid signature from validator {}: {}",
+                                vs.validator, e,
+                            ),
+                        }
+                    })?;
+                }
+                // WHY: If signing_pubkey is empty (synthetic/bootstrap), we skip
+                // cryptographic verification but still check committee membership.
+                // This is acceptable during bootstrap when synthetic nodes exist.
+            }
+        }
 
         // Block is valid — update state
         let block_hash = block.header.hash()?;
@@ -817,6 +923,7 @@ mod tests {
                     has_valid_pol: true,
                     meets_minimum_stake: true,
                     pol_days: 90,
+                    signing_pubkey: vec![i; 32],
                 }
             })
             .collect()

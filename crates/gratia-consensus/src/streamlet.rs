@@ -108,6 +108,11 @@ pub struct StreamletState {
     voted_epochs: HashMap<u64, [u8; 32]>,
     /// The highest notarized block height this node knows about.
     pub highest_notarized_height: u64,
+    /// WHY: Tracks (epoch, validator) -> block_hash for equivocation detection.
+    /// If a vote arrives from the same validator for the same epoch but a
+    /// DIFFERENT block hash, that validator is equivocating (double-voting).
+    /// This is evidence of Byzantine behavior and the vote is rejected.
+    remote_votes: HashMap<(u64, NodeId), [u8; 32]>,
 }
 
 impl StreamletState {
@@ -121,6 +126,7 @@ impl StreamletState {
             finalized_hash: [0u8; 32],
             voted_epochs: HashMap::new(),
             highest_notarized_height: 0,
+            remote_votes: HashMap::new(),
         }
     }
 
@@ -191,6 +197,31 @@ impl StreamletState {
     /// newly finalized blocks, or None.
     pub fn add_vote(&mut self, vote: StreamletVote) -> (bool, Option<u64>) {
         let block_hash = vote.block_hash;
+        let voter = vote.signature.validator;
+        let epoch = vote.epoch;
+
+        // WHY: Equivocation detection — check if this validator already voted
+        // for a DIFFERENT block in the same epoch. If so, reject the vote and
+        // log the evidence. This is Byzantine behavior: honest validators
+        // never vote for two different blocks in the same epoch.
+        let equivocation_key = (epoch, voter);
+        if let Some(&existing_hash) = self.remote_votes.get(&equivocation_key) {
+            if existing_hash != block_hash {
+                tracing::warn!(
+                    epoch = epoch,
+                    validator = ?voter,
+                    existing_block = ?&existing_hash[..8],
+                    conflicting_block = ?&block_hash[..8],
+                    "EQUIVOCATION DETECTED: validator voted for two different blocks in same epoch"
+                );
+                return (false, None);
+            }
+            // Same validator, same epoch, same block — duplicate, will be
+            // caught by ProposedBlock::add_vote's dedup check below.
+        }
+
+        // Record this vote for future equivocation detection
+        self.remote_votes.insert(equivocation_key, block_hash);
 
         let just_notarized = if let Some(proposed) = self.proposed_blocks.get_mut(&block_hash) {
             proposed.add_vote(vote, self.committee_size)
@@ -278,14 +309,26 @@ impl StreamletState {
             }
         }
 
-        // Prune old voted_epochs
+        // Prune old voted_epochs — remove entries more than 100 epochs behind
+        // the current maximum epoch.
+        // WHY: The previous condition compared epoch numbers against the map's
+        // length, which is semantically wrong (map length is a count, not an
+        // epoch number). The correct behavior is to discard epochs that are
+        // far enough behind the current tip that they can never be relevant.
+        let max_epoch = self.voted_epochs.keys().copied().max().unwrap_or(0);
         let old_epochs: Vec<u64> = self.voted_epochs.keys()
             .copied()
-            .filter(|e| *e + 100 < self.voted_epochs.len() as u64)
+            .filter(|e| *e + 100 < max_epoch)
             .collect();
         for e in old_epochs {
             self.voted_epochs.remove(&e);
         }
+
+        // Prune old remote_votes entries for epochs that are far behind.
+        // WHY: Without pruning, remote_votes grows without bound as new
+        // epochs arrive. Only recent epochs matter for equivocation detection.
+        let remote_max_epoch = self.remote_votes.keys().map(|(e, _)| *e).max().unwrap_or(0);
+        self.remote_votes.retain(|(e, _), _| *e + 100 >= remote_max_epoch);
     }
 
     /// Get the height of the longest notarized chain tip.
@@ -309,6 +352,7 @@ impl StreamletState {
         let fh = self.finalized_height;
         self.prune_below(fh + 1);
         self.voted_epochs.clear();
+        self.remote_votes.clear();
         self.highest_notarized_height = self.finalized_height;
     }
 

@@ -120,11 +120,19 @@ impl RecoveryClaim {
     /// Advance the claim to the Pending state or update match confidence.
     ///
     /// Called daily as new behavioral data arrives from the claimant device.
+    ///
+    /// # Validation
+    /// - `new_confidence` is clamped to [0, 100]
+    /// - `days_collected` must be monotonically increasing (cannot go backwards)
     pub fn update_behavioral_match(
         &mut self,
         new_confidence: u32,
         days_collected: u32,
     ) -> Result<(), GratiaError> {
+        // WHY: Confidence is a percentage (0-100). Values above 100 are invalid
+        // and could cause misleading match results or bypass threshold checks.
+        let new_confidence = new_confidence.min(100);
+
         match &self.state {
             RecoveryState::NewClaim {
                 claimant_address,
@@ -141,8 +149,20 @@ impl RecoveryClaim {
             RecoveryState::Pending {
                 claimant_address,
                 claimed_at,
+                days_collected: prev_days,
                 ..
             } => {
+                // WHY: days_collected must be monotonically increasing. Going backwards
+                // would indicate data corruption or an attempt to reset the collection
+                // window to avoid auto-rejection at MAX_RECOVERY_DAYS.
+                if days_collected < *prev_days {
+                    return Err(GratiaError::Other(
+                        format!(
+                            "days_collected must be monotonically increasing: {} < {}",
+                            days_collected, prev_days
+                        ),
+                    ));
+                }
                 // Check if we should auto-verify or auto-reject
                 if new_confidence >= RECOVERY_MATCH_THRESHOLD
                     && days_collected >= MIN_RECOVERY_DAYS

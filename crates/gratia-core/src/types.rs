@@ -20,9 +20,20 @@ pub type Lux = u64;
 /// Number of Lux per GRAT.
 pub const LUX_PER_GRAT: Lux = 1_000_000;
 
-/// Convert GRAT (as f64) to Lux.
+/// Convert GRAT (as f64) to Lux with saturating overflow protection.
+///
+/// WHY: The previous `(grat * LUX_PER_GRAT as f64) as Lux` could overflow u64
+/// for large f64 values (anything above ~1.8e13 GRAT), producing undefined
+/// behavior in the cast. Negative values are clamped to 0.
 pub fn grat_to_lux(grat: f64) -> Lux {
-    (grat * LUX_PER_GRAT as f64) as Lux
+    if grat <= 0.0 || grat.is_nan() {
+        return 0;
+    }
+    let result = grat * LUX_PER_GRAT as f64;
+    if result >= u64::MAX as f64 {
+        return u64::MAX;
+    }
+    result as Lux
 }
 
 /// Convert Lux to GRAT (as f64).

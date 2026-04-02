@@ -193,13 +193,123 @@ impl FileKeystore {
     /// Returns None if the file doesn't exist or contains invalid data.
     fn load_key(path: &str) -> Option<SigningKey> {
         let bytes = std::fs::read(path).ok()?;
-        // WHY: Ed25519 secret keys are exactly 32 bytes. Reject anything else
-        // to avoid silently loading a corrupted or truncated file.
-        let arr: [u8; 32] = bytes.try_into().ok()?;
+
+        // In release builds, expect encrypted format (EncryptedKeyMaterial JSON).
+        // In debug builds, try encrypted first, fall back to raw 32-byte plaintext
+        // for backwards compatibility with existing dev key files.
+        if let Some(key) = Self::load_encrypted_key(&bytes) {
+            return Some(key);
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            // SECURITY: Dev-only plaintext fallback. Release builds never reach here.
+            if bytes.len() == 32 {
+                tracing::warn!(
+                    "FileKeystore: loaded UNENCRYPTED key from {}. \
+                     This is only permitted in debug builds.",
+                    path
+                );
+                let arr: [u8; 32] = bytes.try_into().ok()?;
+                return Some(SigningKey::from_bytes(&arr));
+            }
+        }
+
+        None
+    }
+
+    /// Attempt to load an EncryptedKeyMaterial JSON file and decrypt it.
+    fn load_encrypted_key(bytes: &[u8]) -> Option<SigningKey> {
+        let ekm: EncryptedKeyMaterial = serde_json::from_slice(bytes).ok()?;
+        let decrypted = Self::decrypt_key_material(&ekm).ok()?;
+        let arr: [u8; 32] = decrypted.try_into().ok()?;
         Some(SigningKey::from_bytes(&arr))
     }
 
-    /// Write the 32-byte secret key to the key file.
+    /// Derive a 32-byte encryption key from a domain string and salt using SHA-256.
+    ///
+    /// TODO(audit): Replace with a proper KDF (Argon2 or HKDF) and use a real
+    /// device-bound key from Android Keystore / iOS Secure Enclave instead of
+    /// a hardcoded domain string. The current approach provides obfuscation and
+    /// format correctness but not strong protection against a local attacker.
+    fn derive_encryption_key(salt: &[u8]) -> [u8; 32] {
+        use sha2::{Sha256, Digest};
+        let mut hasher = Sha256::new();
+        hasher.update(b"gratia-keystore-v1");
+        hasher.update(salt);
+        let result = hasher.finalize();
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&result);
+        key
+    }
+
+    /// Encrypt secret key bytes into EncryptedKeyMaterial.
+    ///
+    /// Uses XOR with a SHA-256 derived keystream. This is NOT a secure cipher
+    /// (no authentication, simple XOR) but prevents plaintext key storage on disk.
+    ///
+    /// TODO(audit): Replace with AES-256-GCM via the `ring` crate once it is
+    /// added as a dependency. The current XOR scheme is an interim measure that
+    /// ensures the on-disk format is correct (salt, nonce, ciphertext fields)
+    /// so the upgrade is a drop-in replacement without format migration.
+    fn encrypt_key_material(
+        secret_bytes: &[u8; 32],
+        address: Address,
+    ) -> EncryptedKeyMaterial {
+        use sha2::{Sha256, Digest};
+
+        // Generate random salt and nonce
+        let mut salt = vec![0u8; 32];
+        let mut nonce = vec![0u8; 12];
+        let mut rng = OsRng;
+        use rand::RngCore;
+        rng.fill_bytes(&mut salt);
+        rng.fill_bytes(&mut nonce);
+
+        // Derive keystream: SHA-256(derived_key || nonce)
+        let enc_key = Self::derive_encryption_key(&salt);
+        let mut hasher = Sha256::new();
+        hasher.update(&enc_key);
+        hasher.update(&nonce);
+        let keystream = hasher.finalize();
+
+        // XOR encrypt
+        let mut ciphertext = vec![0u8; 32];
+        for i in 0..32 {
+            ciphertext[i] = secret_bytes[i] ^ keystream[i];
+        }
+
+        EncryptedKeyMaterial {
+            ciphertext,
+            salt,
+            nonce,
+            address,
+        }
+    }
+
+    /// Decrypt an EncryptedKeyMaterial back to raw secret key bytes.
+    fn decrypt_key_material(ekm: &EncryptedKeyMaterial) -> Result<Vec<u8>, GratiaError> {
+        use sha2::{Sha256, Digest};
+
+        if ekm.ciphertext.len() != 32 {
+            return Err(GratiaError::Other("invalid ciphertext length".into()));
+        }
+
+        let enc_key = Self::derive_encryption_key(&ekm.salt);
+        let mut hasher = Sha256::new();
+        hasher.update(&enc_key);
+        hasher.update(&ekm.nonce);
+        let keystream = hasher.finalize();
+
+        let mut plaintext = vec![0u8; 32];
+        for i in 0..32 {
+            plaintext[i] = ekm.ciphertext[i] ^ keystream[i];
+        }
+
+        Ok(plaintext)
+    }
+
+    /// Write the secret key to disk as encrypted EncryptedKeyMaterial JSON.
     fn save_key(path: &str, key: &SigningKey) -> Result<(), GratiaError> {
         // WHY: Create parent directories if they don't exist. On first launch
         // the data directory may not have been fully created yet.
@@ -208,7 +318,16 @@ impl FileKeystore {
                 GratiaError::Other(format!("failed to create key directory: {}", e))
             })?;
         }
-        std::fs::write(path, key.to_bytes()).map_err(|e| {
+
+        // Derive the address for the EncryptedKeyMaterial metadata
+        let address = Address::from_public_key(&key.verifying_key());
+
+        let ekm = Self::encrypt_key_material(&key.to_bytes(), address);
+        let json = serde_json::to_vec(&ekm).map_err(|e| {
+            GratiaError::Other(format!("failed to serialize encrypted key: {}", e))
+        })?;
+
+        std::fs::write(path, json).map_err(|e| {
             GratiaError::Other(format!("failed to write key file: {}", e))
         })
     }

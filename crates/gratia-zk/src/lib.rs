@@ -41,4 +41,4 @@ pub use groth16::{
     prove_range, prove_merkle_inclusion, prove_balance_conservation,
 };
 pub use pedersen::{PedersenCommitment, PedersenOpening};
-pub use shielded_tx::{ShieldedTransactionProof, ShieldedTransferSecret, prove_transfer, verify_transfer};
+pub use shielded_tx::{ShieldedTransactionProof, ShieldedTransferSecret, ShieldedTransferContext, prove_transfer, verify_transfer};

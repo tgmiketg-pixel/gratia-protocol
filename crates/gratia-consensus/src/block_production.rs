@@ -86,10 +86,27 @@ impl PendingBlock {
     /// we finalize with whatever signatures exist. The block has weaker
     /// finality guarantees but the chain keeps producing. As more nodes
     /// join, the graduated scaling increases the threshold automatically.
+    ///
+    /// SECURITY: Callers MUST verify this is only used in bootstrap/solo mode
+    /// (committee_size <= 1 real member). ConsensusEngine::force_finalize_pending_block
+    /// enforces this. Do NOT call this directly from network-facing code.
     pub fn force_finalize(mut self) -> Result<Block, GratiaError> {
         if self.signatures.is_empty() {
             return Err(GratiaError::BlockValidationFailed {
                 reason: "Cannot finalize block with zero signatures".into(),
+            });
+        }
+        // SECURITY: Only allow force_finalize for single-node committees.
+        // WHY: If the finality_threshold indicates a multi-node committee
+        // (threshold > 1), force_finalize would bypass BFT entirely.
+        // The threshold of 1 occurs only in solo/bootstrap mode.
+        if self.finality_threshold > 1 && self.signatures.len() < self.finality_threshold {
+            return Err(GratiaError::BlockValidationFailed {
+                reason: format!(
+                    "force_finalize blocked: finality_threshold={} but only {} signatures (multi-node mode)",
+                    self.finality_threshold,
+                    self.signatures.len(),
+                ),
             });
         }
         self.block.validator_signatures = self.signatures;
@@ -256,6 +273,7 @@ mod tests {
                     has_valid_pol: true,
                     meets_minimum_stake: true,
                     pol_days: 90,
+                    signing_pubkey: vec![i; 32],
                 }
             })
             .collect();

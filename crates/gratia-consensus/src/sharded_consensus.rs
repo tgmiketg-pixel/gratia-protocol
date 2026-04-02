@@ -86,6 +86,7 @@ impl ValidatorInfo {
             has_valid_pol: self.has_valid_pol,
             meets_minimum_stake: self.meets_minimum_stake,
             pol_days: self.pol_days,
+            signing_pubkey: vec![], // TODO: populate from ValidatorInfo when available
         }
     }
 }

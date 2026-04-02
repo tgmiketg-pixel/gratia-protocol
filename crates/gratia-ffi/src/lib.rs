@@ -2198,13 +2198,20 @@ impl GratiaNode {
                                 ) {
                                     let local_node_id = self.get_node_id_or_default(&inner);
                                     let vrf_pk = VrfSecretKey::from_ed25519_bytes(&sk_bytes).public_key();
-                                    let announcement = NodeAnnouncement {
+                                    let mut announcement = NodeAnnouncement {
                                         node_id: local_node_id,
                                         vrf_pubkey_bytes: vrf_pk.bytes,
                                         presence_score: 100,
                                         pol_days: 90,
                                         timestamp: Utc::now(),
+                                        ed25519_pubkey: [0u8; 32],
+                                        signature: Vec::new(),
                                     };
+                                    // Sign the announcement with our Ed25519 key
+                                    let keypair = gratia_core::crypto::Keypair::from_secret_key_bytes(&sk_bytes);
+                                    announcement.ed25519_pubkey = *keypair.public_key().as_bytes();
+                                    let payload = gratia_network::gossip::node_announcement_signing_payload(&announcement);
+                                    announcement.signature = keypair.sign(&payload);
                                     if let Err(e) = network.try_direct_announce(&announcement, peer_id) {
                                         warn!("Failed to direct-announce on peer connect: {}", e);
                                     } else {
@@ -2469,6 +2476,7 @@ impl GratiaNode {
                                                         block_hash: block_hash_bytes,
                                                         height,
                                                         signature: our_sig,
+                                                        validator_pubkey: *keypair.public_key().as_bytes(),
                                                     };
                                                     let _ = network.try_broadcast_validator_signature_sync(&sig_msg);
                                                     rust_log(&format!(
@@ -2685,6 +2693,7 @@ impl GratiaNode {
                                                                 block_hash: blk_hash,
                                                                 height,
                                                                 signature: our_sig,
+                                                                validator_pubkey: *keypair.public_key().as_bytes(),
                                                             };
                                                             let _ = network.try_broadcast_validator_signature_sync(&sig_msg);
                                                         }
@@ -2695,6 +2704,7 @@ impl GratiaNode {
                                                         block_hash: blk_hash,
                                                         height,
                                                         signature: our_sig,
+                                                        validator_pubkey: *keypair.public_key().as_bytes(),
                                                     };
                                                     let _ = network.try_broadcast_validator_signature_sync(&sig_msg);
                                                     rust_log(&format!(
@@ -2854,6 +2864,7 @@ impl GratiaNode {
                                         else { 75u8 };
                                     let vrf_pubkey = VrfSecretKey::from_ed25519_bytes(sk_bytes).public_key();
 
+                                    let local_signing_pubkey = gratia_core::crypto::Keypair::from_secret_key_bytes(sk_bytes).public_key_bytes();
                                     let mut all_eligible = vec![EligibleNode {
                                         node_id: local_node_id,
                                         vrf_pubkey,
@@ -2861,6 +2872,7 @@ impl GratiaNode {
                                         has_valid_pol: true,
                                         meets_minimum_stake: true,
                                         pol_days: 90,
+                                        signing_pubkey: local_signing_pubkey,
                                     }];
 
                                     // WHY: Convert each known peer's NodeAnnouncement
@@ -2873,6 +2885,7 @@ impl GratiaNode {
                                             has_valid_pol: true,
                                             meets_minimum_stake: true,
                                             pol_days: peer.pol_days,
+                                            signing_pubkey: peer.ed25519_pubkey.to_vec(),
                                         });
                                     }
 
@@ -2891,6 +2904,7 @@ impl GratiaNode {
                                                 has_valid_pol: true,
                                                 meets_minimum_stake: true,
                                                 pol_days: 90,
+                                                signing_pubkey: vec![], // Synthetic — no real key
                                             });
                                         }
                                     }
@@ -3595,6 +3609,7 @@ impl GratiaNode {
         // real nodes exist (the minimum for committee operation).
         let vrf_pubkey = VrfSecretKey::from_ed25519_bytes(&signing_key_bytes).public_key();
         let vrf_pubkey_bytes = vrf_pubkey.bytes; // Save before move
+        let local_signing_pubkey = gratia_core::crypto::Keypair::from_secret_key_bytes(&signing_key_bytes).public_key_bytes();
         let mut all_eligible = vec![EligibleNode {
             node_id,
             vrf_pubkey,
@@ -3602,6 +3617,7 @@ impl GratiaNode {
             has_valid_pol: true,
             meets_minimum_stake: true,
             pol_days: 90,
+            signing_pubkey: local_signing_pubkey,
         }];
 
         // WHY: Convert each known peer's NodeAnnouncement into an EligibleNode.
@@ -3614,6 +3630,7 @@ impl GratiaNode {
                 has_valid_pol: true,
                 meets_minimum_stake: true,
                 pol_days: peer.pol_days,
+                signing_pubkey: peer.ed25519_pubkey.to_vec(),
             });
         }
 
@@ -3633,6 +3650,7 @@ impl GratiaNode {
                     has_valid_pol: true,
                     meets_minimum_stake: true,
                     pol_days: 90,
+                    signing_pubkey: vec![], // Synthetic — no real key
                 });
             }
         }
@@ -3765,13 +3783,18 @@ impl GratiaNode {
         // each phone announces itself, and all phones rebuild their committees
         // with the real peer data.
         if let Some(ref network) = inner.network {
-            let announcement = NodeAnnouncement {
+            let keypair_for_ann = gratia_core::crypto::Keypair::from_secret_key_bytes(&signing_key_bytes);
+            let mut announcement = NodeAnnouncement {
                 node_id,
                 vrf_pubkey_bytes: vrf_pubkey_bytes,
                 presence_score: presence_score,
                 pol_days: 90,
                 timestamp: Utc::now(),
+                ed25519_pubkey: *keypair_for_ann.public_key().as_bytes(),
+                signature: Vec::new(),
             };
+            let payload = gratia_network::gossip::node_announcement_signing_payload(&announcement);
+            announcement.signature = keypair_for_ann.sign(&payload);
             if let Err(e) = network.try_announce_node_sync(&announcement) {
                 warn!("Failed to announce node after consensus start: {}", e);
             } else {
@@ -5477,13 +5500,18 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                         .map(|addr| NodeId(addr.0))
                         .unwrap_or(NodeId([0u8; 32]));
                     let vrf_pk = VrfSecretKey::from_ed25519_bytes(&sk_bytes).public_key();
-                    let announcement = NodeAnnouncement {
+                    let keypair_for_ann = gratia_core::crypto::Keypair::from_secret_key_bytes(&sk_bytes);
+                    let mut announcement = NodeAnnouncement {
                         node_id: local_node_id,
                         vrf_pubkey_bytes: vrf_pk.bytes,
                         presence_score: 100, // Demo score
                         pol_days: 90,
                         timestamp: Utc::now(),
+                        ed25519_pubkey: *keypair_for_ann.public_key().as_bytes(),
+                        signature: Vec::new(),
                     };
+                    let payload = gratia_network::gossip::node_announcement_signing_payload(&announcement);
+                    announcement.signature = keypair_for_ann.sign(&payload);
                     if let Err(e) = network.try_announce_node_sync(&announcement) {
                         // Channel full or network not running — not critical
                         tracing::trace!("Periodic re-announce failed: {}", e);
@@ -5645,6 +5673,7 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                             &sk_bytes_opt,
                         ) {
                             let vrf_pubkey = VrfSecretKey::from_ed25519_bytes(sk_bytes).public_key();
+                            let local_signing_pubkey = gratia_core::crypto::Keypair::from_secret_key_bytes(sk_bytes).public_key_bytes();
                             let mut all_eligible = vec![EligibleNode {
                                 node_id: local_node_id,
                                 vrf_pubkey,
@@ -5652,6 +5681,7 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                                 has_valid_pol: true,
                                 meets_minimum_stake: true,
                                 pol_days: 90,
+                                signing_pubkey: local_signing_pubkey,
                             }];
                             for i in 1..=2u8 {
                                 let mut fake_id = [0u8; 32];
@@ -5664,6 +5694,7 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                                     has_valid_pol: true,
                                     meets_minimum_stake: true,
                                     pol_days: 90,
+                                    signing_pubkey: vec![],
                                 });
                             }
                             all_eligible.sort_by(|a, b| a.node_id.0.cmp(&b.node_id.0));
@@ -5722,9 +5753,11 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                     let local_score = if guard.presence_score > 0 { guard.presence_score } else { 75u8 };
                     if let (Some(ref mut consensus), Some(ref sk_bytes)) = (&mut guard.consensus, &sk_bytes_opt) {
                         let vrf_pubkey = VrfSecretKey::from_ed25519_bytes(sk_bytes).public_key();
+                        let local_signing_pubkey = gratia_core::crypto::Keypair::from_secret_key_bytes(sk_bytes).public_key_bytes();
                         let mut all_eligible = vec![EligibleNode {
                             node_id: local_node_id, vrf_pubkey, presence_score: local_score,
                             has_valid_pol: true, meets_minimum_stake: true, pol_days: 90,
+                            signing_pubkey: local_signing_pubkey,
                         }];
                         for i in 1..=2u8 {
                             let mut fake_id = [0u8; 32]; fake_id[0] = i; fake_id[31] = 0xFF;
@@ -5733,6 +5766,7 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                                 vrf_pubkey: VrfSecretKey::from_ed25519_bytes(&[i; 32]).public_key(),
                                 presence_score: 40, has_valid_pol: true,
                                 meets_minimum_stake: true, pol_days: 90,
+                                signing_pubkey: vec![],
                             });
                         }
                         all_eligible.sort_by(|a, b| a.node_id.0.cmp(&b.node_id.0));
@@ -5801,8 +5835,11 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                     // borrow on guard.consensus while also accessing guard.wallet
                     // or guard.network. So we extract what we need in phases.
 
-                    // Phase 1: Get signing key bytes (immutable borrow on wallet).
+                    // Phase 1: Get signing key bytes and pubkey (immutable borrow on wallet).
                     let sk_bytes_opt = guard.wallet.signing_key_bytes().ok();
+                    let our_pubkey_bytes: [u8; 32] = sk_bytes_opt.as_ref()
+                        .map(|sk| *gratia_core::crypto::Keypair::from_secret_key_bytes(sk).public_key().as_bytes())
+                        .unwrap_or([0u8; 32]);
 
                     // Phase 2: Read committee info and sign (mutable borrow on consensus).
                     let (threshold, member_count, our_sig, pending_finalized, block_hash_for_broadcast, pending_block_clone) = {
@@ -5894,6 +5931,7 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                                 block_hash: block_hash_for_broadcast,
                                 height: block_height,
                                 signature: our_sig.clone(),
+                                validator_pubkey: our_pubkey_bytes,
                             };
                             let _ = network.try_broadcast_validator_signature_sync(&sig_msg);
 

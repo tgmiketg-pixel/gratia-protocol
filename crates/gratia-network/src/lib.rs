@@ -1064,6 +1064,12 @@ async fn run_swarm_event_loop(
     // happen where messages first arrive (here), not in the application layer.
     let mut gossip_handler = GossipHandler::new();
 
+    // WHY: Rate limiter and reputation manager protect against spam and
+    // malicious peers. Instantiated here because the event loop is where
+    // all incoming messages first arrive.
+    let mut rate_limiter = crate::reputation::RateLimiter::new();
+    let mut reputation_mgr = crate::reputation::ReputationManager::new();
+
     // WHY: The event loop owns its own SyncManager to track peer chain tips
     // and coordinate block fetching. This avoids sharing mutable state with
     // the NetworkManager across the channel boundary.
@@ -1150,8 +1156,44 @@ async fn run_swarm_event_loop(
                             continue;
                         }
 
+                        // WHY: Rate-limit and reputation-check BEFORE spending
+                        // CPU on deserialization and validation. A banned or
+                        // rate-limited peer's messages are dropped immediately.
+                        let peer_id_str = message.source
+                            .map(|p| p.to_string())
+                            .unwrap_or_default();
+
+                        if !peer_id_str.is_empty() {
+                            // Check if peer is banned
+                            if reputation_mgr.is_banned(&peer_id_str) {
+                                tracing::debug!(peer = %peer_id_str, "Dropping message from banned peer");
+                                continue;
+                            }
+
+                            // Determine rate-limit action type from topic
+                            let rate_action = match topic {
+                                gossip::TOPIC_BLOCKS => "block",
+                                gossip::TOPIC_TRANSACTIONS => "tx",
+                                _ => "message",
+                            };
+                            if !rate_limiter.check_rate(&peer_id_str, rate_action) {
+                                tracing::debug!(peer = %peer_id_str, topic, "Rate limited, dropping message");
+                                reputation_mgr.record_spam(&peer_id_str);
+                                continue;
+                            }
+                        }
+
                         match gossip_handler.process_incoming(topic, &message.data) {
                             Ok(Some(msg)) => {
+                                // WHY: Record valid message reception for reputation
+                                if !peer_id_str.is_empty() {
+                                    match &msg {
+                                        GossipMessage::NewBlock(_) => reputation_mgr.record_valid_block(&peer_id_str),
+                                        GossipMessage::NewTransaction(_) => reputation_mgr.record_valid_tx(&peer_id_str),
+                                        _ => {} // Other types don't adjust reputation
+                                    }
+                                }
+
                                 let net_event = match msg {
                                     GossipMessage::NewBlock(block) => {
                                         tracing::debug!(
@@ -1218,6 +1260,12 @@ async fn run_swarm_event_loop(
                             }
                             Err(e) => {
                                 tracing::debug!("Gossip message rejected: {}", e);
+                                // WHY: Penalize peers that send invalid messages.
+                                // This covers malformed data, failed signature checks,
+                                // and structural validation failures.
+                                if !peer_id_str.is_empty() {
+                                    reputation_mgr.record_invalid_block(&peer_id_str);
+                                }
                             }
                         }
                     }
@@ -1463,6 +1511,7 @@ async fn run_swarm_event_loop(
                                     block_hash,
                                     height,
                                     signature,
+                                    validator_pubkey: [0u8; 32],
                                 };
                                 let _ = event_tx.send(NetworkEvent::ValidatorSignatureReceived(
                                     Box::new(sig_msg)
@@ -1485,6 +1534,7 @@ async fn run_swarm_event_loop(
                                     block_hash,
                                     height,
                                     signature: producer_signature,
+                                    validator_pubkey: [0u8; 32],
                                 };
                                 let _ = event_tx.send(NetworkEvent::ValidatorSignatureReceived(
                                     Box::new(sig_msg)
@@ -2149,7 +2199,12 @@ mod tests {
             },
             transactions: vec![],
             attestations: vec![],
-            validator_signatures: vec![],
+            validator_signatures: vec![
+                gratia_core::types::ValidatorSignature {
+                    validator: NodeId([1u8; 32]),
+                    signature: vec![0u8; 64],
+                },
+            ],
         };
 
         let msg = gossip::GossipMessage::NewBlock(Box::new(block));

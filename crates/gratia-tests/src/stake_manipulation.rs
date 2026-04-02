@@ -322,22 +322,48 @@ fn test_slashing_fully_drains_stake() {
     assert!(err.is_err(), "Banned node should not be able to stake");
 }
 
-/// Progressive slashing: repeated minor offenses escalate to major.
+/// Progressive slashing: repeated minor offenses within the rolling window escalate to major.
 #[test]
 fn test_progressive_slashing_escalation() {
+    use gratia_staking::slashing::SlashingEvent;
+
     let slash_config = SlashingConfig::default();
-
     let mut history = SlashingHistory::default();
+    let now = chrono::Utc::now();
 
-    // First 2 minor offenses stay minor.
-    for _ in 0..2 {
+    // First 2 minor offenses stay minor — add events within rolling window.
+    for i in 0..2 {
         let severity = history.effective_severity(SlashingSeverity::Minor, &slash_config);
         assert_eq!(severity, SlashingSeverity::Minor);
         history.minor_slashes += 1;
+        history.events.push(SlashingEvent {
+            node_id: gratia_core::types::NodeId([0u8; 32]),
+            severity: SlashingSeverity::Minor,
+            pillar: gratia_staking::slashing::SlashingPillar::ProofOfLife,
+            amount_slashed: 0,
+            reason: format!("test offense {}", i + 1),
+            timestamp: now - chrono::Duration::hours(i + 1),
+            mining_paused: false,
+            mining_pause_duration_secs: 0,
+            permanently_banned: false,
+            block_height: 0,
+        });
     }
 
     // 3rd minor offense escalates to major (threshold = 3).
     history.minor_slashes = 3;
+    history.events.push(SlashingEvent {
+        node_id: gratia_core::types::NodeId([0u8; 32]),
+        severity: SlashingSeverity::Minor,
+        pillar: gratia_staking::slashing::SlashingPillar::ProofOfLife,
+        amount_slashed: 0,
+        reason: "test offense 3".to_string(),
+        timestamp: now,
+        mining_paused: false,
+        mining_pause_duration_secs: 0,
+        permanently_banned: false,
+        block_height: 0,
+    });
     let severity = history.effective_severity(SlashingSeverity::Minor, &slash_config);
     assert_eq!(severity, SlashingSeverity::Major);
 }
