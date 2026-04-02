@@ -41,7 +41,7 @@ use std::time::Duration;
 use libp2p::futures::StreamExt;
 use libp2p::swarm::NetworkBehaviour;
 use libp2p::{
-    gossipsub, identify, mdns, swarm::SwarmEvent, Multiaddr, PeerId, Swarm, SwarmBuilder,
+    gossipsub, identify, kad, mdns, swarm::SwarmEvent, Multiaddr, PeerId, Swarm, SwarmBuilder,
 };
 use tokio::sync::mpsc;
 
@@ -240,6 +240,10 @@ struct GratiaBehaviour {
     /// entire network. Direct delivery is sub-second vs 0-10s gossipsub.
     /// Also eliminates information leak of voting patterns to observers.
     bft_rr: libp2p::request_response::Behaviour<bft_protocol::BftSigCodec>,
+    /// Kademlia DHT for internet-wide peer discovery.
+    /// WHY: mDNS only works on the same LAN. Kademlia lets phones discover
+    /// each other across the internet via the bootstrap node's DHT.
+    kad: kad::Behaviour<kad::store::MemoryStore>,
 }
 
 // ============================================================================
@@ -479,12 +483,24 @@ impl NetworkManager {
                         let sync_rr = sync_protocol::sync_behaviour();
                         let bft_rr = bft_protocol::bft_sig_behaviour();
 
+                        // WHY: Kademlia DHT enables internet-wide peer discovery.
+                        // Without it, phones can only find each other via mDNS (same LAN)
+                        // or by relaying through the bootstrap node's gossipsub.
+                        let local_peer_id = key.public().to_peer_id();
+                        let kad_store = kad::store::MemoryStore::new(local_peer_id);
+                        let mut kad_config = kad::Config::default();
+                        kad_config.set_protocol_names(vec![
+                            libp2p::StreamProtocol::new("/gratia/kad/1.0.0")
+                        ]);
+                        let kad = kad::Behaviour::with_config(local_peer_id, kad_store, kad_config);
+
                         Ok(GratiaBehaviour {
                             gossipsub,
                             identify,
                             mdns,
                             sync_rr,
                             bft_rr,
+                            kad,
                         })
                     })
                     .map_err(|e| NetworkError::Transport(e.to_string()))?
@@ -1082,6 +1098,27 @@ async fn run_swarm_event_loop(
         .collect();
     let mut bootstrap_connected = false;
 
+    // WHY: Register bootstrap peers in Kademlia's routing table so DHT
+    // lookups can start from a known node. Then trigger bootstrap to
+    // populate the routing table with nearby peers.
+    for (addr, peer_id) in &bootstrap_addrs {
+        if let Some(pid) = peer_id {
+            // Strip the /p2p/ suffix for the address Kademlia needs
+            let clean_addr: Multiaddr = addr.iter()
+                .filter(|p| !matches!(p, libp2p::multiaddr::Protocol::P2p(_)))
+                .collect();
+            swarm.behaviour_mut().kad.add_address(pid, clean_addr);
+            tracing::info!(%pid, "Added bootstrap peer to Kademlia DHT");
+        }
+    }
+    if let Err(e) = swarm.behaviour_mut().kad.bootstrap() {
+        tracing::debug!("Kademlia bootstrap (initial): {:?}", e);
+    }
+
+    // WHY: Periodic Kademlia refresh keeps the routing table current as
+    // mobile peers go on/offline throughout the day.
+    let mut kad_refresh_interval = tokio::time::interval(Duration::from_secs(300));
+
     // WHY: Get our own PeerId bytes once for filtering incoming sync messages.
     let local_peer_id = *swarm.local_peer_id();
     let local_peer_bytes = local_peer_id.to_bytes();
@@ -1247,6 +1284,41 @@ async fn run_swarm_event_loop(
                             agent = %info.agent_version,
                             "Peer identified"
                         );
+                        // WHY: Feed identified peer's addresses into Kademlia so
+                        // the DHT routing table grows as we discover more peers.
+                        for addr in &info.listen_addrs {
+                            swarm.behaviour_mut().kad.add_address(&peer_id, addr.clone());
+                        }
+                    }
+
+                    // Kademlia DHT events
+                    SwarmEvent::Behaviour(GratiaBehaviourEvent::Kad(event)) => {
+                        match event {
+                            kad::Event::RoutingUpdated { peer, .. } => {
+                                tracing::debug!(%peer, "Kademlia routing table updated");
+                            }
+                            kad::Event::OutboundQueryProgressed { result, .. } => {
+                                match result {
+                                    kad::QueryResult::Bootstrap(Ok(kad::BootstrapOk { num_remaining, .. })) => {
+                                        tracing::info!(num_remaining, "Kademlia bootstrap progress");
+                                    }
+                                    kad::QueryResult::GetClosestPeers(Ok(ok)) => {
+                                        // WHY: When we discover peers via DHT, add them to
+                                        // gossipsub so block/tx propagation reaches them.
+                                        for peer in &ok.peers {
+                                            swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer.peer_id);
+                                        }
+                                        tracing::debug!(count = ok.peers.len(), "Kademlia found peers");
+                                    }
+                                    _ => {
+                                        tracing::trace!("Kademlia query result: {:?}", result);
+                                    }
+                                }
+                            }
+                            _ => {
+                                tracing::trace!("Kademlia event: {:?}", event);
+                            }
+                        }
                     }
 
                     // ── Sync request-response protocol events ──────────────
@@ -1628,7 +1700,11 @@ async fn run_swarm_event_loop(
                         pid.as_ref().map(|p| connected.contains(p)).unwrap_or(false)
                     });
 
-                    if !bootstrap_connected {
+                    if bootstrap_connected {
+                        // WHY: Now that we're connected to bootstrap, re-trigger
+                        // Kademlia bootstrap to populate the routing table.
+                        let _ = swarm.behaviour_mut().kad.bootstrap();
+                    } else {
                         for (addr, _) in &bootstrap_addrs {
                             tracing::info!(%addr, "Retrying bootstrap peer connection");
                             if let Err(e) = swarm.dial(addr.clone()) {
@@ -1636,6 +1712,13 @@ async fn run_swarm_event_loop(
                             }
                         }
                     }
+                }
+            }
+
+            // ── Periodic Kademlia DHT refresh ────────────────────────────
+            _ = kad_refresh_interval.tick() => {
+                if let Err(e) = swarm.behaviour_mut().kad.bootstrap() {
+                    tracing::trace!("Kademlia refresh: {:?}", e);
                 }
             }
 
