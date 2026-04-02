@@ -52,6 +52,7 @@ impl Lexer {
         Some(ch)
     }
 
+    #[allow(dead_code)]
     fn span_here(&self) -> Span {
         Span::new(self.pos, self.pos, self.line, self.col)
     }

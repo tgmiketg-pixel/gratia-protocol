@@ -16,6 +16,7 @@
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
 
 use gratia_core::error::GratiaError;
 use gratia_core::types::Address;
@@ -298,6 +299,12 @@ impl SeedPhrase {
         let bytes = hex::decode(hex_str)
             .map_err(|e| GratiaError::Other(format!("invalid hex seed phrase: {}", e)))?;
         Self::from_secret_key(&bytes)
+    }
+}
+
+impl Drop for SeedPhrase {
+    fn drop(&mut self) {
+        self.entropy.zeroize();
     }
 }
 

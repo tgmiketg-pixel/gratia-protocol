@@ -5,7 +5,7 @@
 
 use crate::types::*;
 use chrono::{DateTime, Utc};
-use ed25519_dalek::{Signer, SigningKey, VerifyingKey, Verifier, Signature};
+use ed25519_dalek::{Signer, SigningKey};
 use serde::{Serialize, Deserialize};
 use sha2::{Sha256, Digest};
 use std::collections::{HashMap, HashSet};
@@ -782,7 +782,7 @@ mod tests {
         let mut store = LuxStore::new();
         let key = SigningKey::generate(&mut OsRng);
 
-        let h1 = store.create_post("grat:a", "First", &key, None).unwrap();
+        let _h1 = store.create_post("grat:a", "First", &key, None).unwrap();
         let h2 = store.create_post("grat:a", "Second", &key, None).unwrap();
         let h3 = store.create_post("grat:a", "Third", &key, None).unwrap();
 

@@ -50,6 +50,7 @@ fn make_eligible_nodes(count: u8) -> Vec<EligibleNode> {
                 meets_minimum_stake: true,
                 pol_days: 100,
                 signing_pubkey: vec![],
+                vrf_proof: vec![],
             }
         })
         .collect()
@@ -68,6 +69,7 @@ fn make_block(height: u64, parent_hash: BlockHash, producer: NodeId) -> Block {
             vrf_proof: vec![0; 96],
             active_miners: 100,
             geographic_diversity: 5,
+            producer_pubkey: vec![],
         },
         transactions: Vec::new(),
         attestations: Vec::new(),

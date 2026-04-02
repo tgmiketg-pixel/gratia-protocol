@@ -193,6 +193,7 @@ impl BlockProducer {
             vrf_proof: vrf_proof.proof_bytes.clone(),
             active_miners: self.active_miners,
             geographic_diversity: self.geographic_diversity,
+            producer_pubkey: vec![], // Set by FFI layer from signing key
         };
 
         let block = Block {
@@ -274,6 +275,7 @@ mod tests {
                     meets_minimum_stake: true,
                     pol_days: 90,
                     signing_pubkey: vec![i; 32],
+                    vrf_proof: vec![],
                 }
             })
             .collect();
@@ -473,6 +475,7 @@ mod tests {
             vrf_proof: vec![],
             active_miners: 100,
             geographic_diversity: 5,
+            producer_pubkey: vec![],
         };
 
         let sig = sign_block(&header, node_id, &keypair).unwrap();
@@ -500,6 +503,7 @@ mod tests {
             vrf_proof: vec![],
             active_miners: 100,
             geographic_diversity: 5,
+            producer_pubkey: vec![],
         };
 
         let sig = sign_block(&header, node_id, &keypair1).unwrap();

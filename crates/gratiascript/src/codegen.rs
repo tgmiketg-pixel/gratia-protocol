@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! WASM code generator for GratiaScript.
 //!
 //! Transforms the AST into WebAssembly binary format that GratiaVM can execute.

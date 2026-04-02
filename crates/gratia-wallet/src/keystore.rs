@@ -11,6 +11,7 @@
 use ed25519_dalek::{SigningKey, Signer, VerifyingKey};
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 use gratia_core::error::GratiaError;
 use gratia_core::types::{Address, NodeId};
@@ -43,7 +44,7 @@ pub trait Keystore: Send + Sync {
     /// This is only available on software keystores for backup/seed-phrase
     /// purposes. Hardware secure enclave implementations MUST return
     /// `GratiaError::WalletLocked` — the private key never leaves the chip.
-    fn export_secret_key(&self) -> Result<Vec<u8>, GratiaError>;
+    fn export_secret_key(&self) -> Result<Zeroizing<Vec<u8>>, GratiaError>;
 
     /// Import a keypair from raw secret key bytes (32 bytes).
     ///
@@ -142,9 +143,9 @@ impl Keystore for SoftwareKeystore {
         self.signing_key.is_some()
     }
 
-    fn export_secret_key(&self) -> Result<Vec<u8>, GratiaError> {
+    fn export_secret_key(&self) -> Result<Zeroizing<Vec<u8>>, GratiaError> {
         let key = self.signing_key.as_ref().ok_or(GratiaError::WalletLocked)?;
-        Ok(key.to_bytes().to_vec())
+        Ok(Zeroizing::new(key.to_bytes().to_vec()))
     }
 
     fn import_secret_key(&mut self, secret: &[u8]) -> Result<Vec<u8>, GratiaError> {
@@ -437,9 +438,9 @@ impl Keystore for FileKeystore {
         self.signing_key.is_some()
     }
 
-    fn export_secret_key(&self) -> Result<Vec<u8>, GratiaError> {
+    fn export_secret_key(&self) -> Result<Zeroizing<Vec<u8>>, GratiaError> {
         let key = self.signing_key.as_ref().ok_or(GratiaError::WalletLocked)?;
-        Ok(key.to_bytes().to_vec())
+        Ok(Zeroizing::new(key.to_bytes().to_vec()))
     }
 
     fn import_secret_key(&mut self, secret: &[u8]) -> Result<Vec<u8>, GratiaError> {

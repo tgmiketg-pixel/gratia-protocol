@@ -17,6 +17,7 @@ pub mod sharded_consensus;
 pub mod streamlet;
 pub mod sync;
 
+use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
@@ -107,6 +108,10 @@ pub struct ConsensusEngine {
     /// Timestamp when the engine started. Used for uptime tracking (Phase 2).
     #[allow(dead_code)]
     started_at: DateTime<Utc>,
+    /// Tracks seen block proposals by (height, producer) -> block hash.
+    /// Used to detect equivocation (same producer proposing different blocks
+    /// at the same height).
+    seen_proposals: HashMap<(u64, NodeId), BlockHash>,
 }
 
 /// The result of processing an incoming block.
@@ -147,6 +152,7 @@ impl ConsensusEngine {
             trust_aware: true,
             syncing_slots: 0,
             started_at: Utc::now(),
+            seen_proposals: HashMap::new(),
         }
     }
 
@@ -580,6 +586,30 @@ impl ConsensusEngine {
             return Ok(BlockProcessResult::ForkDetected);
         }
 
+        // Equivocation detection: check if we've seen a different block from
+        // the same producer at the same height. This detects double-block attacks.
+        let block_hash_for_dedup = block.header.hash()?;
+        let proposal_key = (incoming_height, block.header.producer);
+        if let Some(prev_hash) = self.seen_proposals.get(&proposal_key) {
+            if *prev_hash != block_hash_for_dedup {
+                warn!(
+                    height = incoming_height,
+                    producer = %block.header.producer,
+                    "Equivocation detected: producer proposed different blocks at same height",
+                );
+                return Err(GratiaError::BlockValidationFailed {
+                    reason: "equivocation: producer proposed different blocks at same height".into(),
+                });
+            }
+        }
+        self.seen_proposals.insert(proposal_key, block_hash_for_dedup);
+
+        // Prune old entries >100 heights behind current to bound memory
+        if self.current_height > 100 {
+            let cutoff = self.current_height - 100;
+            self.seen_proposals.retain(|&(h, _), _| h > cutoff);
+        }
+
         // Normal case: block at expected next height with correct parent.
         // WHY: Validate that the block producer is a legitimate committee
         // member for this height. Skip for fast-forwards (gap=2) since
@@ -996,6 +1026,7 @@ mod tests {
                     meets_minimum_stake: true,
                     pol_days: 90,
                     signing_pubkey: vec![i; 32],
+                    vrf_proof: vec![],
                 }
             })
             .collect()
@@ -1149,6 +1180,7 @@ mod tests {
             vrf_proof: vec![],
             active_miners: 100,
             geographic_diversity: 5,
+            producer_pubkey: vec![],
         };
 
         // No committee yet, should fail

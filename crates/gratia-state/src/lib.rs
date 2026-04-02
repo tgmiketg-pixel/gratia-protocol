@@ -648,6 +648,7 @@ mod tests {
             vrf_proof: vec![],
             active_miners: 1,
             geographic_diversity: 1,
+            producer_pubkey: vec![],
         };
         Block {
             header,

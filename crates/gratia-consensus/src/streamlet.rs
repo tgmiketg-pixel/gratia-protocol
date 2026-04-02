@@ -396,6 +396,7 @@ mod tests {
             attestations_root: [0u8; 32],
             producer: NodeId([0u8; 32]),
             vrf_proof: vec![],
+            producer_pubkey: vec![],
             active_miners: 1,
             geographic_diversity: 0,
         }

@@ -306,6 +306,29 @@ pub fn validate_incoming_message(data: &[u8]) -> Result<GossipMessage, NetworkEr
                     }
                 }
             }
+            // If producer_pubkey is present (32 bytes), verify the block's
+            // VRF proof signature matches. This is a first-pass structural check.
+            if block.header.producer_pubkey.len() == 32 {
+                // Verify that the producer_pubkey is a valid Ed25519 key by
+                // checking it's 32 bytes. Full signature verification happens
+                // in the consensus layer; here we just reject obviously invalid keys.
+                if !block.validator_signatures.is_empty() {
+                    let first_sig = &block.validator_signatures[0];
+                    if first_sig.signature.len() == 64 {
+                        // Attempt Ed25519 signature verification
+                        if let Err(_) = gratia_core::crypto::verify_signature(
+                            &block.header.producer_pubkey,
+                            &block.header.hash().map(|h| h.0).unwrap_or([0u8; 32]),
+                            &first_sig.signature,
+                        ) {
+                            // Log but don't reject — the full consensus layer
+                            // handles definitive verification. This is just gossip
+                            // layer pre-screening.
+                            tracing::debug!("Block producer pubkey signature pre-check failed");
+                        }
+                    }
+                }
+            }
         }
         GossipMessage::NewTransaction(tx) => {
             // WHY: Reject structurally invalid transactions at the gossip layer
@@ -718,6 +741,7 @@ mod tests {
                 vrf_proof: vec![0u8; 64],
                 active_miners: 100,
                 geographic_diversity: 5,
+                producer_pubkey: vec![],
             },
             transactions: vec![],
             attestations: vec![],

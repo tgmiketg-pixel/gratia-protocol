@@ -493,7 +493,7 @@ impl<K: Keystore> WalletManager<K> {
     /// or if the keystore doesn't support key export (hardware enclaves).
     pub fn signing_key_bytes(&self) -> Result<[u8; 32], GratiaError> {
         let bytes = self.keystore.export_secret_key()?;
-        let arr: [u8; 32] = bytes
+        let arr: [u8; 32] = bytes.as_slice()
             .try_into()
             .map_err(|_| GratiaError::Other("signing key is not 32 bytes".into()))?;
         Ok(arr)

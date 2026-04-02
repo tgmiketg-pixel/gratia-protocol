@@ -488,10 +488,9 @@ impl NetworkManager {
                         // or by relaying through the bootstrap node's gossipsub.
                         let local_peer_id = key.public().to_peer_id();
                         let kad_store = kad::store::MemoryStore::new(local_peer_id);
-                        let mut kad_config = kad::Config::default();
-                        kad_config.set_protocol_names(vec![
+                        let kad_config = kad::Config::new(
                             libp2p::StreamProtocol::new("/gratia/kad/1.0.0")
-                        ]);
+                        );
                         let kad = kad::Behaviour::with_config(local_peer_id, kad_store, kad_config);
 
                         Ok(GratiaBehaviour {
@@ -2216,6 +2215,7 @@ mod tests {
                 vrf_proof: vec![0u8; 64],
                 active_miners: 10,
                 geographic_diversity: 2,
+                producer_pubkey: vec![],
             },
             transactions: vec![],
             attestations: vec![],
@@ -2274,6 +2274,7 @@ mod tests {
                 vrf_proof: vec![],
                 active_miners: 0,
                 geographic_diversity: 0,
+                producer_pubkey: vec![],
             },
             transactions: vec![],
             attestations: vec![],

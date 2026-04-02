@@ -174,6 +174,9 @@ pub struct EligibleNode {
     /// (e.g., synthetic nodes during bootstrap) — signatures from such
     /// validators will be rejected.
     pub signing_pubkey: Vec<u8>,
+    /// Optional VRF proof for committee selection. If non-empty, the selection
+    /// algorithm verifies it and uses the VRF output instead of SHA-256 hash.
+    pub vrf_proof: Vec<u8>,
 }
 
 impl EligibleNode {
@@ -460,19 +463,35 @@ pub fn select_committee_with_network_size(
     let mut candidates: Vec<CommitteeMember> = Vec::with_capacity(eligible.len());
 
     for node in &eligible {
-        // Deterministic pseudo-VRF for committee selection using node ID as entropy.
-        // WHY: In a real network, each node would generate their own VRF proof
-        // with their secret key. For selection purposes, we use a deterministic
-        // hash of the node ID + seed so that all nodes compute the same committee.
-        let mut node_input = selection_input.clone();
-        node_input.extend_from_slice(&node.node_id.0);
+        // If the node submitted a real VRF proof, verify and use it.
+        // Otherwise, fall back to the deterministic SHA-256 method (PoC mode).
+        let (output, proof_bytes) = if !node.vrf_proof.is_empty() {
+            let vrf_proof_obj = VrfProof {
+                output: [0u8; 32], // will be filled by verify
+                proof_bytes: node.vrf_proof.clone(),
+            };
+            match vrf::verify_vrf_proof(&node.vrf_pubkey, &selection_input, &vrf_proof_obj) {
+                Ok(verified_output) => (verified_output, node.vrf_proof.clone()),
+                Err(_) => {
+                    // Invalid VRF proof — skip this node
+                    continue;
+                }
+            }
+        } else {
+            // Deterministic pseudo-VRF for committee selection using node ID as entropy.
+            // WHY: In a real network, each node would generate their own VRF proof
+            // with their secret key. For selection purposes, we use a deterministic
+            // hash of the node ID + seed so that all nodes compute the same committee.
+            let mut node_input = selection_input.clone();
+            node_input.extend_from_slice(&node.node_id.0);
+            let output = gratia_core::crypto::sha256(&node_input);
+            (output, Vec::new())
+        };
 
-        let output = gratia_core::crypto::sha256(&node_input);
-
-        // Create a synthetic proof for the selection record
+        // Create a proof record for the selection
         let selection_proof = VrfProof {
             output,
-            proof_bytes: Vec::new(), // Placeholder — real proofs submitted by nodes
+            proof_bytes,
         };
 
         let selection_value = vrf::vrf_output_to_selection(&output, node.presence_score);
@@ -575,6 +594,31 @@ pub fn rotate_committee_with_network_size(
     )
 }
 
+/// Derive an epoch seed by accumulating hashes from the last N blocks
+/// (RANDAO-style). This makes the seed harder to manipulate than using
+/// a single block hash — an attacker would need to control multiple
+/// consecutive block producers to bias the seed.
+///
+/// If fewer than 8 block hashes are available (early network), all
+/// available hashes are used.
+pub fn derive_epoch_seed(block_hashes: &[[u8; 32]], epoch: u64) -> [u8; 32] {
+    // Use up to the last 8 blocks for seed accumulation
+    let relevant = if block_hashes.len() > 8 {
+        &block_hashes[block_hashes.len() - 8..]
+    } else {
+        block_hashes
+    };
+
+    let epoch_bytes = epoch.to_be_bytes();
+    let mut inputs: Vec<&[u8]> = vec![b"gratia-randao-seed-v1:"];
+    for hash in relevant {
+        inputs.push(hash.as_slice());
+    }
+    inputs.push(&epoch_bytes);
+
+    gratia_core::crypto::sha256_multi(&inputs)
+}
+
 /// Verify that a node was legitimately selected for a committee by checking
 /// their VRF proof against the epoch seed.
 pub fn verify_committee_membership(
@@ -635,6 +679,7 @@ mod tests {
             meets_minimum_stake: true,
             pol_days: 90, // Default to Trusted tier for backward compat
             signing_pubkey: vec![id_byte; 32], // Test placeholder
+            vrf_proof: vec![],
         }
     }
 

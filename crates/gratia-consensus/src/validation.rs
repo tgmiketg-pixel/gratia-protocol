@@ -585,6 +585,7 @@ mod tests {
                     meets_minimum_stake: true,
                     pol_days: 90,
                     signing_pubkey: vec![i; 32],
+                    vrf_proof: vec![],
                 }
             })
             .collect();
@@ -738,6 +739,7 @@ mod tests {
             vrf_proof: vec![],
             active_miners: 100,
             geographic_diversity: 5,
+            producer_pubkey: vec![],
         };
 
         let ctx = ValidationContext {
@@ -769,6 +771,7 @@ mod tests {
             vrf_proof: vec![],
             active_miners: 100,
             geographic_diversity: 5,
+            producer_pubkey: vec![],
         };
 
         let ctx = ValidationContext {
@@ -799,6 +802,7 @@ mod tests {
             vrf_proof: vec![],
             active_miners: 100,
             geographic_diversity: 5,
+            producer_pubkey: vec![],
         };
 
         let ctx = ValidationContext {
@@ -830,6 +834,7 @@ mod tests {
             vrf_proof: vec![],
             active_miners: 100,
             geographic_diversity: 5,
+            producer_pubkey: vec![],
         };
 
         let ctx = ValidationContext {
@@ -863,6 +868,7 @@ mod tests {
             vrf_proof: vec![],
             active_miners: 100,
             geographic_diversity: 5,
+            producer_pubkey: vec![],
         };
 
         let ctx = ValidationContext {
@@ -897,6 +903,7 @@ mod tests {
             vrf_proof: vec![],
             active_miners: 100,
             geographic_diversity: 5,
+            producer_pubkey: vec![],
         };
 
         let ctx = ValidationContext {

@@ -293,6 +293,7 @@ impl From<GasError> for InterpError {
 // ============================================================================
 
 /// A call frame on the interpreter's call stack.
+#[allow(dead_code)]
 struct CallFrame {
     /// Local variables (params + declared locals).
     locals: Vec<Value>,
@@ -834,7 +835,7 @@ fn execute_block(
             // block
             0x02 => {
                 let _block_type = reader.read_byte()?; // 0x40 = void
-                let block_start = reader.pos;
+                let _block_start = reader.pos;
                 // Execute the block body
                 match execute_block(
                     module, reader, stack, locals, globals, memory, gas_meter, host_env,
@@ -2089,6 +2090,7 @@ struct LoadedContract {
     /// Linear memory (initialized from memory section + data segments).
     memory: Vec<u8>,
     /// SHA-256 hash of the bytecode.
+    #[allow(dead_code)]
     bytecode_hash: [u8; 32],
 }
 

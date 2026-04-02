@@ -71,6 +71,9 @@ hex = "0.4"
 # Bytes
 bytes = "1.0"
 
+# Secret key zeroization
+zeroize = { version = "1", features = ["derive"] }
+
 [profile.release]
 opt-level = 3
 lto = true

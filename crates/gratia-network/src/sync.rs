@@ -902,6 +902,7 @@ mod tests {
                 vrf_proof: vec![],
                 active_miners: 0,
                 geographic_diversity: 0,
+                producer_pubkey: vec![],
             },
             transactions: vec![],
             attestations: vec![],

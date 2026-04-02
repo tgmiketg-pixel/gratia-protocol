@@ -40,6 +40,7 @@ fn make_block_at_height(height: u64, parent: BlockHash) -> Block {
             vrf_proof: vec![],
             active_miners: 1,
             geographic_diversity: 1,
+            producer_pubkey: vec![],
         },
         transactions: vec![],
         attestations: vec![],

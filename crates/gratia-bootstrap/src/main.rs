@@ -16,7 +16,7 @@ use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 
-use gratia_core::types::{BlockHash, NodeId};
+use gratia_core::types::NodeId;
 use gratia_network::{NetworkConfig, NetworkEvent, NetworkManager, NoBlockProvider};
 
 // WHY: Fixed node ID for the bootstrap server. This allows phones to hardcode

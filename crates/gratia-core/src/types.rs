@@ -157,6 +157,11 @@ pub struct BlockHeader {
     pub active_miners: u64,
     /// Geographic distribution metric (number of distinct geographic shards represented).
     pub geographic_diversity: u16,
+    /// Ed25519 public key of the block producer (32 bytes).
+    /// Used for signature verification at the gossip layer.
+    /// Empty for legacy blocks; new blocks set this from the signing key.
+    #[serde(default)]
+    pub producer_pubkey: Vec<u8>,
 }
 
 impl BlockHeader {

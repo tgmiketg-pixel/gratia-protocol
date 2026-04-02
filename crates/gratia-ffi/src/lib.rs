@@ -51,6 +51,7 @@ use gratia_staking::StakingManager;
 use gratia_state::db::{StorageBackend, StorageBackendConfig, open_storage};
 use gratia_state::StateManager;
 use gratia_vm::interpreter::InterpreterRuntime;
+// MockRuntime used for VM initialization in deploy_contract
 use gratia_vm::host_functions::HostEnvironment;
 use gratia_vm::sandbox::ContractPermissions;
 use gratia_vm::{GratiaVm, ContractCall};
@@ -2873,6 +2874,7 @@ impl GratiaNode {
                                         meets_minimum_stake: true,
                                         pol_days: 90,
                                         signing_pubkey: local_signing_pubkey,
+                                        vrf_proof: vec![],
                                     }];
 
                                     // WHY: Convert each known peer's NodeAnnouncement
@@ -2886,6 +2888,7 @@ impl GratiaNode {
                                             meets_minimum_stake: true,
                                             pol_days: peer.pol_days,
                                             signing_pubkey: peer.ed25519_pubkey.to_vec(),
+                                            vrf_proof: vec![],
                                         });
                                     }
 
@@ -2905,6 +2908,7 @@ impl GratiaNode {
                                                 meets_minimum_stake: true,
                                                 pol_days: 90,
                                                 signing_pubkey: vec![], // Synthetic — no real key
+                                                vrf_proof: vec![],
                                             });
                                         }
                                     }
@@ -3618,6 +3622,7 @@ impl GratiaNode {
             meets_minimum_stake: true,
             pol_days: 90,
             signing_pubkey: local_signing_pubkey,
+            vrf_proof: vec![],
         }];
 
         // WHY: Convert each known peer's NodeAnnouncement into an EligibleNode.
@@ -3631,6 +3636,7 @@ impl GratiaNode {
                 meets_minimum_stake: true,
                 pol_days: peer.pol_days,
                 signing_pubkey: peer.ed25519_pubkey.to_vec(),
+                vrf_proof: vec![],
             });
         }
 
@@ -3651,6 +3657,7 @@ impl GratiaNode {
                     meets_minimum_stake: true,
                     pol_days: 90,
                     signing_pubkey: vec![], // Synthetic — no real key
+                    vrf_proof: vec![],
                 });
             }
         }
@@ -5682,6 +5689,7 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                                 meets_minimum_stake: true,
                                 pol_days: 90,
                                 signing_pubkey: local_signing_pubkey,
+                                vrf_proof: vec![],
                             }];
                             for i in 1..=2u8 {
                                 let mut fake_id = [0u8; 32];
@@ -5695,6 +5703,7 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                                     meets_minimum_stake: true,
                                     pol_days: 90,
                                     signing_pubkey: vec![],
+                                    vrf_proof: vec![],
                                 });
                             }
                             all_eligible.sort_by(|a, b| a.node_id.0.cmp(&b.node_id.0));
@@ -5758,6 +5767,7 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                             node_id: local_node_id, vrf_pubkey, presence_score: local_score,
                             has_valid_pol: true, meets_minimum_stake: true, pol_days: 90,
                             signing_pubkey: local_signing_pubkey,
+                            vrf_proof: vec![],
                         }];
                         for i in 1..=2u8 {
                             let mut fake_id = [0u8; 32]; fake_id[0] = i; fake_id[31] = 0xFF;
@@ -5767,6 +5777,7 @@ async fn run_slot_timer(inner: Arc<Mutex<GratiaNodeInner>>) {
                                 presence_score: 40, has_valid_pol: true,
                                 meets_minimum_stake: true, pol_days: 90,
                                 signing_pubkey: vec![],
+                                vrf_proof: vec![],
                             });
                         }
                         all_eligible.sort_by(|a, b| a.node_id.0.cmp(&b.node_id.0));
