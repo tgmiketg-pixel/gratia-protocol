@@ -1,0 +1,7 @@
+[advisories]
+ignore = [
+    # ring 0.16.20 AES overflow - transitive via libp2p-tls/rcgen
+    # Mitigated: overflow checks disabled in release, not in our AES path
+    # Tracking: waiting for libp2p to upgrade rcgen dependency
+    "RUSTSEC-2025-0009",
+]

@@ -17,7 +17,7 @@
 </head>
 <body>
 
-  <!-- ═══════════════ NAV ═══════════════ -->
+  <!-- NAV -->
   <nav id="nav">
     <div class="nav-inner">
       <a href="#" class="nav-brand">
@@ -27,9 +27,10 @@
       <div class="nav-links">
         <a href="#how-it-works">How It Works</a>
         <a href="#difference">Why Gratia</a>
+        <a href="#polling">Polling</a>
         <a href="#specs">Specs</a>
         <a href="#roadmap">Roadmap</a>
-        <a href="#testnet" class="btn btn-sm">Join Testnet</a>
+        <a href="#download" class="btn btn-sm">Download APK</a>
       </div>
       <button class="nav-toggle" aria-label="Menu" onclick="document.querySelector('.nav-links').classList.toggle('open')">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
@@ -37,7 +38,7 @@
     </div>
   </nav>
 
-  <!-- ═══════════════ HERO ═══════════════ -->
+  <!-- HERO -->
   <section class="hero">
     <div class="hero-bg-glow"></div>
     <div class="hero-content">
@@ -46,29 +47,25 @@
         <h1>The blockchain that proves you're&nbsp;human.</h1>
         <p class="hero-sub">Your phone is the miner. Your life is the proof. Every person has an equal voice. No ASICs. No staking cartels. No&nbsp;datacenter&nbsp;required.</p>
         <div class="hero-ctas">
-          <a href="#testnet" class="btn btn-lg">Join the Testnet</a>
+          <a href="#download" class="btn btn-lg">Download &amp; Start Mining</a>
           <a href="#how-it-works" class="btn btn-lg btn-outline">How It Works</a>
         </div>
         <div class="hero-stats">
           <div class="hero-stat">
-            <span class="hero-stat-num">866</span>
-            <span class="hero-stat-label">Tests Passing</span>
+            <span class="hero-stat-num">1,056</span>
+            <span class="hero-stat-label">Tests, 0 Failures</span>
           </div>
           <div class="hero-stat">
-            <span class="hero-stat-num">4s</span>
-            <span class="hero-stat-label">Block Time</span>
+            <span class="hero-stat-num">100</span>
+            <span class="hero-stat-label">Node Simulation</span>
           </div>
           <div class="hero-stat">
-            <span class="hero-stat-num">15</span>
-            <span class="hero-stat-label">Rust Crates</span>
+            <span class="hero-stat-num">2-Phone</span>
+            <span class="hero-stat-label">BFT Consensus Live</span>
           </div>
           <div class="hero-stat">
-            <span class="hero-stat-num">$50</span>
-            <span class="hero-stat-label">Min Phone</span>
-          </div>
-          <div class="hero-stat">
-            <span class="hero-stat-num">iOS + Android</span>
-            <span class="hero-stat-label">Both Platforms</span>
+            <span class="hero-stat-num">16 MB</span>
+            <span class="hero-stat-label">App Size</span>
           </div>
         </div>
       </div>
@@ -83,7 +80,7 @@
     </div>
   </section>
 
-  <!-- ═══════════════ PROBLEM ═══════════════ -->
+  <!-- PROBLEM -->
   <section class="section section-dark" id="problem">
     <div class="container">
       <h2 class="section-title">The promise of crypto was <span class="gold">"one&nbsp;CPU, one&nbsp;vote."</span></h2>
@@ -101,40 +98,45 @@
         </div>
         <div class="problem-card">
           <div class="problem-icon">&#127959;</div>
-          <h3>Solana & Others</h3>
+          <h3>Solana &amp; Others</h3>
           <p>Requires datacenter-grade hardware with high bandwidth. "Decentralized" networks running on AWS instances. The blockchain industry replicated the banks.</p>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ═══════════════ HOW IT WORKS ═══════════════ -->
+  <!-- HOW IT WORKS -->
   <section class="section" id="how-it-works">
     <div class="container">
       <h2 class="section-title">How Gratia Works</h2>
-      <p class="section-subtitle">Three steps. No special hardware. No upfront cost. Just your phone.</p>
+      <p class="section-subtitle">Four steps. No special hardware. No upfront cost. Just your phone.</p>
 
-      <div class="steps-grid">
+      <div class="steps-grid steps-grid-4">
         <div class="step-card">
           <div class="step-num">01</div>
-          <h3>Live Your Life</h3>
-          <p><strong>Proof of Life</strong> runs silently in the background. Unlock your phone, carry it, connect to Wi-Fi, charge it at night — normal daily use generates the cryptographic attestation that proves you're a real person with a real phone. Zero battery impact. Zero user action required.</p>
+          <h3>Install the App</h3>
+          <p>Download the APK (16 MB). Install it. Open it. Your wallet is created automatically using your phone's secure enclave. No account, no signup, no seed phrase to write down. You're ready in under a minute.</p>
         </div>
         <div class="step-card">
           <div class="step-num">02</div>
-          <h3>Plug In to Mine</h3>
-          <p><strong>Proof of Presence</strong> activates when your phone is plugged in and above 80% battery. Mining earns GRAT at a flat rate — every minute of mining pays the same. No diminishing returns. No time-of-day restrictions. Your phone charges first, then mines.</p>
+          <h3>Use Your Phone Normally</h3>
+          <p><strong>Proof of Life</strong> runs silently in the background. Unlock your phone, carry it, connect to Wi-Fi, charge it at night — normal daily use generates the cryptographic attestation that proves you're a real person. Zero battery impact. Zero action required.</p>
         </div>
         <div class="step-card">
           <div class="step-num">03</div>
-          <h3>Spend &amp; Govern</h3>
-          <p>Send GRAT to anyone — tap phones with NFC, scan a QR code, or paste an address. Vote on protocol changes with <strong>one phone, one vote</strong> governance. No token-weighted voting. Your voice is equal regardless of your balance.</p>
+          <h3>Plug In When Battery &gt; 80%</h3>
+          <p><strong>Proof of Presence</strong> activates automatically when your phone is plugged in and above 80% battery. Your phone charges first — your needs always come first. Then mining begins. No settings to configure.</p>
+        </div>
+        <div class="step-card">
+          <div class="step-num">04</div>
+          <h3>Earn GRAT While You Sleep</h3>
+          <p>Mining earns GRAT at a flat rate — every minute pays the same. No diminishing returns. No time-of-day restrictions. Plug in at night, wake up to GRAT in your wallet. Spend it, stake it, or vote with it.</p>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ═══════════════ THREE PILLARS ═══════════════ -->
+  <!-- THREE PILLARS -->
   <section class="section section-dark" id="difference">
     <div class="container">
       <h2 class="section-title">Three-Pillar Consensus Security</h2>
@@ -163,7 +165,7 @@
     </div>
   </section>
 
-  <!-- ═══════════════ HARDWARE MOAT ═══════════════ -->
+  <!-- HARDWARE MOAT -->
   <section class="section">
     <div class="container">
       <h2 class="section-title">The Hardware Moat</h2>
@@ -187,57 +189,61 @@
     </div>
   </section>
 
-  <!-- ═══════════════ PHASE 3 FEATURES ═══════════════ -->
-  <section class="section section-dark" id="features">
+  <!-- ON-CHAIN POLLING -->
+  <section class="section section-dark" id="polling">
     <div class="container">
-      <h2 class="section-title">Phase 3 Complete</h2>
-      <p class="section-subtitle">The latest milestone brings cross-platform support, scalability, advanced privacy, and offline resilience.</p>
+      <h2 class="section-title">On-Chain Polling: <span class="gold">Every Vote Is Human</span></h2>
+      <p class="section-subtitle">The first platform where every vote is from a verified unique human. No bots. No duplicate accounts.</p>
 
-      <div class="features-grid">
-        <div class="feature-card">
-          <div class="feature-icon">&#128241;</div>
-          <h3>iOS Support</h3>
-          <p>Full iOS app built with SwiftUI, all sensor managers (Core Motion, Core Location, Core Bluetooth, Core NFC), and the same shared Rust core via UniFFI Swift bindings. One codebase, both platforms.</p>
+      <div class="polling-grid">
+        <div class="polling-feature">
+          <div class="polling-icon">&#9989;</div>
+          <h3>One Phone, One Vote</h3>
+          <p>Every response comes from a Proof-of-Life-verified unique person. Sybil attacks are structurally impossible — you can't fake daily human behavior on a thousand phones.</p>
         </div>
-        <div class="feature-card">
-          <div class="feature-icon">&#128752;</div>
-          <h3>Bluetooth Mesh</h3>
-          <p>Offline transactions via Bluetooth LE and Wi-Fi Direct. Bridge peers relay mesh transactions to the consensus layer. Works without any internet connection — true peer-to-peer.</p>
+        <div class="polling-feature">
+          <div class="polling-icon">&#128279;</div>
+          <h3>On-Chain &amp; Auditable</h3>
+          <p>Results are recorded on the blockchain. Publicly verifiable, tamper-proof, and permanent. No black-box algorithms. No trust required.</p>
         </div>
-        <div class="feature-card">
-          <div class="feature-icon">&#127760;</div>
-          <h3>Geographic Sharding</h3>
-          <p>10 geographic shards scale throughput to ~2,000 TPS while keeping each phone's storage requirements low. Cross-shard transactions handled transparently with finality proofs.</p>
-        </div>
-        <div class="feature-card">
-          <div class="feature-icon">&#128274;</div>
-          <h3>Groth16 ZK Proofs</h3>
-          <p>Complex privacy-preserving smart contract interactions via Groth16 zero-knowledge proofs. Proof generation runs during Mining Mode when the phone has power to spare.</p>
+        <div class="polling-feature">
+          <div class="polling-icon">&#127760;</div>
+          <h3>Beyond Crypto Governance</h3>
+          <p>Political polling, market research, community decisions, dispute resolution — any question that needs honest answers from verified humans. Poll creation costs GRAT (burned).</p>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ═══════════════ SPECS ═══════════════ -->
+  <!-- SPECS -->
   <section class="section" id="specs">
     <div class="container">
       <h2 class="section-title">Technical Specs</h2>
+      <p class="section-subtitle">Proven numbers from real hardware. Not projections — measurements.</p>
       <div class="specs-grid">
         <div class="spec-card">
           <div class="spec-label">Block Time</div>
           <div class="spec-value">4 seconds</div>
         </div>
         <div class="spec-card">
-          <div class="spec-label">Base Throughput</div>
-          <div class="spec-value">128 TPS</div>
-        </div>
-        <div class="spec-card">
-          <div class="spec-label">With Sharding</div>
-          <div class="spec-value">2,560 TPS</div>
-        </div>
-        <div class="spec-card">
           <div class="spec-label">Consensus</div>
-          <div class="spec-value">VRF + 14/21</div>
+          <div class="spec-value">BFT + Threshold Sigs</div>
+        </div>
+        <div class="spec-card">
+          <div class="spec-label">Committee Scaling</div>
+          <div class="spec-value">7-Tier Graduated</div>
+        </div>
+        <div class="spec-card">
+          <div class="spec-label">Signing</div>
+          <div class="spec-value">Ed25519</div>
+        </div>
+        <div class="spec-card">
+          <div class="spec-label">Zero-Knowledge</div>
+          <div class="spec-value">Bulletproofs</div>
+        </div>
+        <div class="spec-card">
+          <div class="spec-label">Block Selection</div>
+          <div class="spec-value">ECVRF (RFC 9381)</div>
         </div>
         <div class="spec-card">
           <div class="spec-label">Core Language</div>
@@ -245,15 +251,23 @@
         </div>
         <div class="spec-card">
           <div class="spec-label">Networking</div>
-          <div class="spec-value">libp2p</div>
-        </div>
-        <div class="spec-card">
-          <div class="spec-label">Zero-Knowledge</div>
-          <div class="spec-value">Bulletproofs + Groth16</div>
+          <div class="spec-value">libp2p + Kademlia</div>
         </div>
         <div class="spec-card">
           <div class="spec-label">Smart Contracts</div>
           <div class="spec-value">WASM (wasmer)</div>
+        </div>
+        <div class="spec-card">
+          <div class="spec-label">Min Hardware</div>
+          <div class="spec-value">$50 ARM phone</div>
+        </div>
+        <div class="spec-card">
+          <div class="spec-label">App Size</div>
+          <div class="spec-value">16 MB</div>
+        </div>
+        <div class="spec-card">
+          <div class="spec-label">Max Block Size</div>
+          <div class="spec-value">256 KB</div>
         </div>
         <div class="spec-card">
           <div class="spec-label">Ticker</div>
@@ -268,14 +282,14 @@
           <div class="spec-value">25%/yr reduction</div>
         </div>
         <div class="spec-card">
-          <div class="spec-label">Max Block Size</div>
-          <div class="spec-value">256 KB</div>
+          <div class="spec-label">Test Suite</div>
+          <div class="spec-value">1,056 tests, 0 fail</div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ═══════════════ COMPARISON ═══════════════ -->
+  <!-- COMPARISON -->
   <section class="section">
     <div class="container">
       <h2 class="section-title">Gratia vs. Everyone Else</h2>
@@ -346,64 +360,73 @@
     </div>
   </section>
 
-  <!-- ═══════════════ ROADMAP ═══════════════ -->
+  <!-- ROADMAP -->
   <section class="section section-dark" id="roadmap">
     <div class="container">
       <h2 class="section-title">Roadmap</h2>
       <div class="roadmap">
         <div class="roadmap-phase roadmap-done">
           <div class="roadmap-marker">&#10003;</div>
-          <h3>Phase 1 — Proof of Concept</h3>
-          <p>Rust core (14 crates, 725 tests), Android app with wallet/mining/staking/governance, phone-to-phone consensus over internet, NFC tap-to-transact, Bulletproofs ZK, block explorer. <strong>Two phones mining real blocks across the internet.</strong></p>
+          <h3>Phase 1 &mdash; Proof of Concept</h3>
+          <p>Rust core with 15 crates, Android app with wallet/mining/staking/governance, phone-to-phone BFT consensus over internet, NFC tap-to-transact, Bulletproofs ZK attestations, block explorer. Two phones mining real blocks across the internet. 1,056 tests, zero failures.</p>
         </div>
         <div class="roadmap-phase roadmap-done">
           <div class="roadmap-marker">&#10003;</div>
-          <h3>Phase 2 — Smart Contracts &amp; Sync</h3>
-          <p>GratiaScript compiler + WASM execution (interpreter + Wasmer), linear memory, contract storage, event emission, state sync protocol, block sync between peers, debug bypass hardened for release builds.</p>
+          <h3>Phase 2 &mdash; Smart Contracts &amp; Sync</h3>
+          <p>GratiaScript compiler + WASM execution (interpreter + Wasmer), linear memory, contract storage, event emission, state sync protocol, block sync between peers, 100-node network simulation, Kademlia DHT peer discovery, VRF committee selection.</p>
         </div>
         <div class="roadmap-phase roadmap-done">
           <div class="roadmap-marker">&#10003;</div>
-          <h3>Phase 3 — iOS, Sharding &amp; Mesh</h3>
-          <p>Full iOS app (SwiftUI + same Rust core), geographic sharding (10 shards, ~2,000 TPS), Bluetooth mesh + Wi-Fi Direct offline transactions, Groth16 ZK proofs for complex smart contracts, environmental oracle layer, 15 Rust crates, 866 tests.</p>
+          <h3>Phase 3 &mdash; Sharding &amp; Mesh</h3>
+          <p>Geographic sharding (10 shards, ~2,000 TPS), Bluetooth mesh + Wi-Fi Direct transaction relay, Groth16 ZK proofs for complex smart contracts, environmental oracle layer, 7-tier graduated committee scaling, internal security audit (23 findings, all closed).</p>
         </div>
         <div class="roadmap-phase roadmap-active">
           <div class="roadmap-marker roadmap-marker-active"></div>
-          <h3>Phase 4 — Public Mainnet</h3>
-          <p>Security audit by external firm, App Store submission (Google Play + Apple App Store), geographic sharding activation (10 shards live), multi-party ceremony for Groth16 trusted setup, community governance launch.</p>
+          <h3>Phase 4 &mdash; Public Launch</h3>
+          <p>APK available for sideloading now. External security audit in progress. Geographic sharding activation (10 shards live). Community governance launch. Bootstrap infrastructure on dedicated VPS.</p>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ═══════════════ TESTNET ═══════════════ -->
-  <section class="section" id="testnet">
+  <!-- DOWNLOAD -->
+  <section class="section" id="download">
     <div class="container container-narrow">
-      <h2 class="section-title">Join the Testnet</h2>
-      <p class="section-subtitle">Gratia is live on testnet. Install the app on any Android phone (ARM64, Android 8.0+), plug in, and start mining. No account needed. No signup. Just install and go.</p>
-      <div class="wp-card">
+      <h2 class="section-title">Download &amp; Start Mining</h2>
+      <p class="section-subtitle">Gratia is live. Install the app on any Android phone (ARM64, Android 8.0+), plug in, and start earning GRAT. No account needed. No signup. Just install and go.</p>
+      <div class="wp-card download-card">
         <div class="wp-icon">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#F5A623" stroke-width="1.5"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+          <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#F5A623" stroke-width="1.5"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
         </div>
-        <h3>Download Gratia for Android</h3>
-        <p>Testnet APK &mdash; sideload onto any ARM64 Android device</p>
-        <a href="gratia-testnet.apk" class="btn btn-lg" style="margin-top:1.5rem;">Download APK</a>
-        <p style="margin-top:1rem;font-size:0.85rem;opacity:0.7;">Requires: Android 8.0+, ARM64 processor. Enable "Install from unknown sources" in Settings.</p>
+        <h3>Gratia for Android</h3>
+        <p class="download-size">16 MB &mdash; ARM64 &mdash; Android 8.0+</p>
+        <a href="gratia.apk" class="btn btn-lg btn-download">Download APK</a>
       </div>
-      <div style="margin-top:2rem;text-align:center;">
-        <h3 style="margin-bottom:1rem;">Quick Start</h3>
-        <ol style="text-align:left;max-width:480px;margin:0 auto;line-height:1.8;">
-          <li>Install the APK and open Gratia</li>
-          <li>Your wallet is created automatically</li>
-          <li>Plug in your phone and let battery reach 80%</li>
-          <li>Mining starts automatically &mdash; you earn GRAT every minute</li>
-          <li>Use your phone normally &mdash; Proof of Life runs in the background</li>
+
+      <div class="install-steps">
+        <h3>Installation</h3>
+        <ol>
+          <li>Enable <strong>"Install from unknown sources"</strong> in your phone's Settings (Settings &gt; Apps &gt; Special access &gt; Install unknown apps)</li>
+          <li>Tap the downloaded APK to install</li>
+          <li>Open Gratia, plug in your phone, and start earning</li>
+        </ol>
+      </div>
+
+      <div class="quickstart-steps">
+        <h3>How It Works</h3>
+        <ol>
+          <li>Your wallet is created automatically — keys stored in your phone's secure enclave</li>
+          <li>Use your phone normally throughout the day — Proof of Life builds in the background</li>
+          <li>Plug in your phone when battery is above 80%</li>
+          <li>Mining starts automatically — you earn GRAT every minute, flat rate, no diminishing returns</li>
+          <li>That's it. Earn while you sleep.</li>
         </ol>
       </div>
     </div>
   </section>
 
-  <!-- ═══════════════ WHITEPAPER ═══════════════ -->
-  <section class="section" id="whitepaper">
+  <!-- WHITEPAPER -->
+  <section class="section section-dark" id="whitepaper">
     <div class="container container-narrow">
       <h2 class="section-title">Read the Whitepaper</h2>
       <p class="section-subtitle">The full technical specification — dual-proof system, three-pillar consensus, tokenomics, security model, smart contract platform, and implementation details.</p>
@@ -418,16 +441,16 @@
     </div>
   </section>
 
-  <!-- ═══════════════ BOTTOM LINE ═══════════════ -->
-  <section class="section section-dark section-bottom-line">
+  <!-- BOTTOM LINE -->
+  <section class="section section-bottom-line">
     <div class="container container-narrow">
       <blockquote class="bottom-quote">
-        "Most crypto projects raise millions on a PDF and never ship. Gratia has a protocol running on real hardware with real cryptography, real peer-to-peer networking, real block production, and real transactions flowing between phones — built before raising a&nbsp;dime."
+        "Most crypto projects raise millions on a PDF and never ship. Gratia has 1,056 passing tests, BFT consensus running on real phones, zero-knowledge proofs verified on ARM silicon, and peer-to-peer block production over the open internet — built before raising a&nbsp;dime."
       </blockquote>
     </div>
   </section>
 
-  <!-- ═══════════════ FOOTER ═══════════════ -->
+  <!-- FOOTER -->
   <footer>
     <div class="container">
       <div class="footer-inner">
@@ -442,6 +465,9 @@
           <a href="#whitepaper">Whitepaper</a>
           <a href="#specs">Technical Specs</a>
           <a href="#roadmap">Roadmap</a>
+          <a href="#download">Download</a>
+          <a href="gratia-whitepaper.pdf" target="_blank">Protocol Spec (PDF)</a>
+          <a href="/explorer/">Block Explorer</a>
         </div>
       </div>
       <div class="footer-bottom">

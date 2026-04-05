@@ -66,6 +66,16 @@ a:hover { text-decoration: underline; }
 .btn-outline:hover { background: var(--gold); color: var(--midnight); }
 .btn-sm { padding: 8px 20px; font-size: 0.85rem; }
 .btn-lg { padding: 14px 32px; font-size: 1rem; }
+.btn-download {
+  margin-top: 1.5rem;
+  padding: 16px 40px;
+  font-size: 1.1rem;
+  font-weight: 700;
+  box-shadow: 0 4px 24px rgba(245, 166, 35, 0.3);
+}
+.btn-download:hover {
+  box-shadow: 0 6px 32px rgba(245, 166, 35, 0.45);
+}
 
 /* --- Nav --- */
 nav {
@@ -255,6 +265,7 @@ nav.scrolled {
 
 /* --- Steps --- */
 .steps-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; }
+.steps-grid-4 { grid-template-columns: repeat(2, 1fr); }
 .step-card {
   background: var(--navy);
   border-radius: var(--radius);
@@ -320,19 +331,19 @@ nav.scrolled {
   font-style: italic;
 }
 
-/* --- Phase 3 Features --- */
-.features-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; }
-.feature-card {
+/* --- On-Chain Polling --- */
+.polling-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
+.polling-feature {
   background: var(--charcoal);
   border-radius: var(--radius);
   padding: 36px 28px;
   border: 1px solid rgba(245, 166, 35, 0.08);
   transition: border-color 0.3s, transform 0.3s;
 }
-.feature-card:hover { border-color: rgba(245, 166, 35, 0.25); transform: translateY(-2px); }
-.feature-icon { font-size: 2.5rem; margin-bottom: 16px; }
-.feature-card h3 { font-size: 1.3rem; font-weight: 700; margin-bottom: 12px; color: var(--gold); }
-.feature-card p { color: rgba(250, 245, 235, 0.7); font-size: 0.95rem; }
+.polling-feature:hover { border-color: rgba(245, 166, 35, 0.25); transform: translateY(-2px); }
+.polling-icon { font-size: 2.5rem; margin-bottom: 16px; }
+.polling-feature h3 { font-size: 1.3rem; font-weight: 700; margin-bottom: 12px; color: var(--gold); }
+.polling-feature p { color: rgba(250, 245, 235, 0.7); font-size: 0.95rem; }
 
 /* --- Specs --- */
 .specs-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
@@ -418,6 +429,38 @@ nav.scrolled {
 .roadmap-phase h3 { font-size: 1.2rem; font-weight: 700; margin-bottom: 8px; }
 .roadmap-phase p { color: rgba(250, 245, 235, 0.65); font-size: 0.95rem; }
 
+/* --- Download Section --- */
+.download-card {
+  border-color: rgba(245, 166, 35, 0.25);
+}
+.download-size {
+  color: rgba(250, 245, 235, 0.5);
+  font-size: 0.9rem;
+  margin-top: 4px;
+}
+.install-steps, .quickstart-steps {
+  margin-top: 2.5rem;
+  background: var(--navy);
+  border-radius: var(--radius);
+  padding: 32px 36px;
+  border: 1px solid rgba(245, 166, 35, 0.08);
+}
+.quickstart-steps { margin-top: 1.5rem; }
+.install-steps h3, .quickstart-steps h3 {
+  font-size: 1.15rem;
+  font-weight: 700;
+  margin-bottom: 16px;
+  color: var(--gold);
+}
+.install-steps ol, .quickstart-steps ol {
+  padding-left: 20px;
+  line-height: 2;
+  color: rgba(250, 245, 235, 0.75);
+}
+.install-steps ol li, .quickstart-steps ol li {
+  padding-left: 8px;
+}
+
 /* --- Whitepaper --- */
 .wp-card {
   background: var(--navy);
@@ -454,7 +497,7 @@ footer {
 .footer-brand { display: flex; align-items: center; gap: 16px; }
 .footer-wordmark { font-size: 1.1rem; font-weight: 700; color: var(--gold); }
 .footer-tagline { font-size: 0.8rem; color: rgba(250, 245, 235, 0.4); }
-.footer-links { display: flex; gap: 24px; }
+.footer-links { display: flex; gap: 24px; flex-wrap: wrap; }
 .footer-links a { color: rgba(250, 245, 235, 0.5); font-size: 0.85rem; }
 .footer-links a:hover { color: var(--gold); }
 .footer-bottom {
@@ -476,7 +519,7 @@ footer {
   .hero-stats { justify-content: center; }
   .hero-phones { min-height: 350px; margin-top: 40px; }
   .phone-frame { width: 180px; }
-  .problem-grid, .steps-grid, .pillars-grid, .features-grid { grid-template-columns: 1fr; }
+  .problem-grid, .steps-grid, .steps-grid-4, .pillars-grid, .features-grid, .polling-grid { grid-template-columns: 1fr; }
   .moat-grid { grid-template-columns: repeat(2, 1fr); }
   .specs-grid { grid-template-columns: repeat(2, 1fr); }
   .section-title { font-size: 1.8rem; }
@@ -484,6 +527,7 @@ footer {
   .nav-links.open { display: flex; }
   .nav-toggle { display: block; }
   .footer-inner { flex-direction: column; gap: 24px; text-align: center; }
+  .footer-links { justify-content: center; }
   .footer-bottom { flex-direction: column; gap: 8px; text-align: center; }
   .compare-table { font-size: 0.75rem; }
   .compare-table th, .compare-table td { padding: 10px 8px; }
@@ -498,4 +542,5 @@ footer {
   .section { padding: 64px 0; }
   .moat-grid { grid-template-columns: 1fr; }
   .specs-grid { grid-template-columns: repeat(2, 1fr); }
+  .install-steps, .quickstart-steps { padding: 24px 20px; }
 }

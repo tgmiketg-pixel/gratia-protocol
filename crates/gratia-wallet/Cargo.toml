@@ -19,3 +19,8 @@ rand = { workspace = true }
 hex = { workspace = true }
 ring = { workspace = true }
 zeroize = { workspace = true }
+bip39 = { workspace = true, optional = true }
+
+[features]
+default = []
+seed-phrase = ["bip39"]

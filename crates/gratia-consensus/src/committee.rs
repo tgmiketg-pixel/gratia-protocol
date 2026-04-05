@@ -283,7 +283,10 @@ impl ValidatorCommittee {
         // WHY: Simple modular index within the committee. The committee is already
         // VRF-selected and sorted, so round-robin within the epoch is fair.
         // A more sophisticated per-slot VRF selection could be added for mainnet.
-        let offset = (slot - self.epoch.start_slot) as usize;
+        let offset = match slot.checked_sub(self.epoch.start_slot) {
+            Some(o) => o as usize,
+            None => return None, // slot before epoch start
+        };
         let index = offset % self.members.len();
         self.members.get(index)
     }
@@ -530,11 +533,26 @@ pub fn select_committee_with_network_size(
         seed: *epoch_seed,
     };
 
+    // WHY: In solo/bootstrap mode, synthetic placeholder members have empty
+    // signing_pubkey and can never produce signatures. The tier's finality_threshold
+    // (e.g., 2 for tier-0 with committee_size=3) is unreachable when only 1 real
+    // signer exists. Override to 1 so force_finalize works in solo mode.
+    // Once a second real node joins (NodeAnnounced), the committee is rebuilt
+    // with real members and the tier threshold applies normally.
+    let real_signers = candidates.iter()
+        .filter(|m| !m.signing_pubkey.is_empty())
+        .count();
+    let effective_threshold = if real_signers <= 1 {
+        1
+    } else {
+        tier.finality_threshold
+    };
+
     Ok(ValidatorCommittee {
         epoch,
         members: candidates,
         committee_size: tier.committee_size,
-        finality_threshold: tier.finality_threshold,
+        finality_threshold: effective_threshold,
         network_size_snapshot: network_size,
     })
 }

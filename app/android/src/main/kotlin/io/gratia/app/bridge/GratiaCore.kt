@@ -52,6 +52,12 @@ object GratiaCoreManager {
     /** The UniFFI-generated Rust node instance. */
     private var node: GratiaNode? = null
 
+    /** Android BatteryManager for direct battery queries from the ViewModel.
+     * WHY: Before mining starts, Rust doesn't have battery state (Kotlin hasn't
+     * called update_power_state yet). The ViewModel uses this to show accurate
+     * battery info in the UI so the "Start Mining" button appears immediately. */
+    var batteryManager: android.os.BatteryManager? = null
+
     // ========================================================================
     // Initialization
     // ========================================================================

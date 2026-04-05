@@ -821,6 +821,25 @@ impl NetworkManager {
         Ok(())
     }
 
+    /// Send a NodeAnnouncement directly to ALL connected peers via request-response.
+    /// WHY: When gossipsub mesh is broken (one-directional Noise handshakes),
+    /// gossipsub publish can't deliver messages. This sends via request-response
+    /// which uses the already-established connection direction.
+    pub fn try_direct_announce_all(&self, announcement: &NodeAnnouncement) -> Result<usize, NetworkError> {
+        let tx = self.command_tx.as_ref().ok_or(NetworkError::NotStarted)?;
+        let peers: Vec<PeerId> = self.connected_peers().iter().cloned().collect();
+        let mut sent = 0;
+        for peer in &peers {
+            if tx.try_send(NetworkCommand::DirectAnnounce {
+                announcement: Box::new(announcement.clone()),
+                target_peer: *peer,
+            }).is_ok() {
+                sent += 1;
+            }
+        }
+        Ok(sent)
+    }
+
     /// Dial a remote peer by multiaddr string.
     ///
     /// Used for manual peer connection (e.g., entering another phone's address).
@@ -1176,14 +1195,27 @@ async fn run_swarm_event_loop(
                         }
 
                         // Determine rate-limit action type from topic
+                        // WHY: Each topic gets its own rate limit bucket so high-frequency
+                        // topics (blocks every 4s, announcements every 5s) don't starve
+                        // each other or hit a shared "message" limit that's too low.
                         let rate_action = match topic {
                             gossip::TOPIC_BLOCKS => "block",
                             gossip::TOPIC_TRANSACTIONS => "tx",
+                            gossip::TOPIC_NODE_ANNOUNCE => "announce",
+                            gossip::TOPIC_VALIDATOR_SIGS => "validator_sig",
                             _ => "message",
                         };
                         if !rate_limiter.check_rate(&peer_id_str, rate_action) {
                             tracing::debug!(peer = %peer_id_str, topic, "Rate limited, dropping message");
-                            reputation_mgr.record_spam(&peer_id_str);
+                            // WHY: Use lighter penalty for known action types (blocks, txs,
+                            // announcements, validator sigs) since rate-limit hits on these
+                            // can happen legitimately during bursts. Only unknown/generic
+                            // "message" actions get the full spam penalty.
+                            if rate_action == "message" {
+                                reputation_mgr.record_spam(&peer_id_str);
+                            } else {
+                                reputation_mgr.record_rate_limited(&peer_id_str, rate_action);
+                            }
                             continue;
                         }
 
@@ -1275,15 +1307,24 @@ async fn run_swarm_event_loop(
                                 }
                             }
                             Ok(None) => {
-                                // Duplicate message — silently ignore
+                                // Duplicate message, already processed
                             }
                             Err(e) => {
-                                tracing::debug!("Gossip message rejected: {}", e);
-                                // WHY: Penalize peers that send invalid messages.
-                                // This covers malformed data, failed signature checks,
-                                // and structural validation failures.
+                                tracing::debug!(topic, "Gossip message rejected: {}", e);
+                                // WHY: Only penalize heavily for invalid BLOCKS (most
+                                // damaging attack vector). Other message rejections
+                                // (NodeAnnouncements with clock skew, attestations with
+                                // out-of-range scores) use a lighter penalty. Without
+                                // this distinction, legitimate peers get banned when
+                                // their NodeAnnouncements fail validation (e.g., stale
+                                // timestamp during network partition recovery), killing
+                                // gossipsub relay and preventing peer discovery.
                                 if !peer_id_str.is_empty() {
-                                    reputation_mgr.record_invalid_block(&peer_id_str);
+                                    if topic == gossip::TOPIC_BLOCKS {
+                                        reputation_mgr.record_invalid_block(&peer_id_str);
+                                    }
+                                    // Other message types: no reputation penalty.
+                                    // The message is simply dropped.
                                 }
                             }
                         }
@@ -1302,31 +1343,9 @@ async fn run_swarm_event_loop(
                     )) => {
                         for (peer_id, addr) in peers {
                             tracing::info!(%peer_id, %addr, "mDNS discovered peer");
-                            // WHY: Log to file since tracing doesn't reach Android logcat
-                            let log_msg = format!("mDNS discovered peer: {} at {}", peer_id, addr);
-                            let log_path = "/data/user/0/io.gratia.app.debug/files/gratia-rust.log";
-                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log_path) {
-                                use std::io::Write;
-                                let _ = writeln!(f, "[{}] {}", chrono::Utc::now().format("%H:%M:%S"), log_msg);
-                            }
                             swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
-                            match swarm.dial(addr.clone()) {
-                                Ok(()) => {
-                                    let log_msg = format!("mDNS: dialing peer {} at {}", peer_id, addr);
-                                    let log_path = "/data/user/0/io.gratia.app.debug/files/gratia-rust.log";
-                                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log_path) {
-                                        use std::io::Write;
-                                        let _ = writeln!(f, "[{}] {}", chrono::Utc::now().format("%H:%M:%S"), log_msg);
-                                    }
-                                }
-                                Err(e) => {
-                                    let log_msg = format!("mDNS: FAILED to dial peer {} at {}: {}", peer_id, addr, e);
-                                    let log_path = "/data/user/0/io.gratia.app.debug/files/gratia-rust.log";
-                                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log_path) {
-                                        use std::io::Write;
-                                        let _ = writeln!(f, "[{}] {}", chrono::Utc::now().format("%H:%M:%S"), log_msg);
-                                    }
-                                }
+                            if let Err(e) = swarm.dial(addr.clone()) {
+                                tracing::warn!(%peer_id, %addr, "mDNS dial failed: {}", e);
                             }
                         }
                     }
@@ -1400,19 +1419,36 @@ async fn run_swarm_event_loop(
                             libp2p::request_response::Message::Request {
                                 request, channel, ..
                             } => {
-                                // Inbound sync request — serve blocks from local state
-                                tracing::debug!(%peer, ?request, "Sync v2: inbound request");
-                                let response = sync_manager.handle_sync_request(
-                                    &request,
-                                    |from, to| {
-                                        let blocks = block_provider.get_blocks(from, to);
-                                        if blocks.is_empty() { None } else { Some(blocks) }
-                                    },
-                                );
-                                if let Err(e) = swarm.behaviour_mut().sync_rr
-                                    .send_response(channel, response)
-                                {
-                                    tracing::debug!(%peer, "Failed to send sync v2 response: {:?}", e);
+                                // WHY: ForwardAnnouncement is a NodeAnnouncement sent
+                                // via request-response instead of gossipsub. This
+                                // bypasses the gossipsub mesh entirely, solving the
+                                // one-directional mesh problem where outbound Noise
+                                // handshakes fail but inbound connections work fine.
+                                if let SyncRequest::ForwardAnnouncement(ref ann_bytes) = request {
+                                    tracing::debug!(%peer, "Sync v2: received forwarded announcement");
+                                    if let Ok(ann) = bincode::deserialize::<crate::gossip::NodeAnnouncement>(ann_bytes) {
+                                        let _ = event_tx.send(NetworkEvent::NodeAnnounced(Box::new(ann))).await;
+                                    } else {
+                                        tracing::warn!(%peer, "Failed to deserialize forwarded announcement");
+                                    }
+                                    // Send ACK response
+                                    let _ = swarm.behaviour_mut().sync_rr
+                                        .send_response(channel, SyncResponse::AnnounceAck);
+                                } else {
+                                    // Inbound sync request — serve blocks from local state
+                                    tracing::debug!(%peer, ?request, "Sync v2: inbound request");
+                                    let response = sync_manager.handle_sync_request(
+                                        &request,
+                                        |from, to| {
+                                            let blocks = block_provider.get_blocks(from, to);
+                                            if blocks.is_empty() { None } else { Some(blocks) }
+                                        },
+                                    );
+                                    if let Err(e) = swarm.behaviour_mut().sync_rr
+                                        .send_response(channel, response)
+                                    {
+                                        tracing::debug!(%peer, "Failed to send sync v2 response: {:?}", e);
+                                    }
                                 }
                             }
                             libp2p::request_response::Message::Response {
@@ -1486,6 +1522,9 @@ async fn run_swarm_event_loop(
                                     }
                                     SyncResponse::Headers(_) => {
                                         tracing::debug!(%peer, "Sync v2: headers response (not yet used)");
+                                    }
+                                    SyncResponse::AnnounceAck => {
+                                        tracing::debug!(%peer, "Sync v2: announcement ACK received");
                                     }
                                     SyncResponse::Error(msg) => {
                                         tracing::warn!(%peer, "Sync v2 peer error: {}", msg);
@@ -1651,13 +1690,6 @@ async fn run_swarm_event_loop(
                             num_established = num_established.get(),
                             "Connection established"
                         );
-                        // WHY: Log to file since tracing doesn't reach Android logcat
-                        let log_msg = format!("PEER CONNECTED: {} ({}, connections: {})", peer_id, if is_inbound { "inbound" } else { "outbound" }, num_established.get());
-                        let log_path = "/data/user/0/io.gratia.app.debug/files/gratia-rust.log";
-                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log_path) {
-                            use std::io::Write;
-                            let _ = writeln!(f, "[{}] {}", chrono::Utc::now().format("%H:%M:%S"), log_msg);
-                        }
                         // WHY: Only emit PeerConnected for the FIRST connection to
                         // a peer. DON'T increment live_peer_count here — the FFI
                         // layer's on_peer_connected() handles that when it processes
@@ -1682,12 +1714,6 @@ async fn run_swarm_event_loop(
                         error,
                         connection_id: _,
                     } => {
-                        let log_msg = format!("CONNECTION FAILED: peer={:?} error={}", peer_id, error);
-                        let log_path = "/data/user/0/io.gratia.app.debug/files/gratia-rust.log";
-                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log_path) {
-                            use std::io::Write;
-                            let _ = writeln!(f, "[{}] {}", chrono::Utc::now().format("%H:%M:%S"), log_msg);
-                        }
                         tracing::warn!(?peer_id, %error, "Outgoing connection failed");
                     }
 
@@ -1836,19 +1862,27 @@ async fn run_swarm_event_loop(
                             }
                         }
                     }
-                    Some(NetworkCommand::DirectAnnounce { announcement, target_peer: _ }) => {
-                        // WHY: Publish via gossipsub with flood_publish=true, which
-                        // sends to ALL connected peers regardless of mesh state.
-                        // Do NOT emit locally — that would add our OWN announcement
-                        // to our known_peer_nodes, creating a phantom committee
-                        // member that inflates real_committee_members and breaks
-                        // BFT finality (the phantom can't sign).
+                    Some(NetworkCommand::DirectAnnounce { announcement, target_peer }) => {
+                        // WHY: Send via request-response protocol, NOT gossipsub.
+                        // Gossipsub publish fails when the mesh is one-directional
+                        // (e.g., S25's outbound Noise handshakes fail but A06's
+                        // inbound connection to S25 works). Request-response uses
+                        // the already-established connection direction and works
+                        // regardless of gossipsub mesh state.
+                        if let Ok(ann_bytes) = bincode::serialize(&*announcement) {
+                            swarm.behaviour_mut().sync_rr.send_request(
+                                &target_peer,
+                                SyncRequest::ForwardAnnouncement(ann_bytes),
+                            );
+                            tracing::debug!(%target_peer, "DirectAnnounce: sent via request-response");
+                        } else {
+                            tracing::warn!("DirectAnnounce: failed to serialize announcement");
+                        }
+                        // Also try gossipsub as a fallback (may work in some cases)
                         let msg = GossipMessage::NodeAnnouncement(announcement);
                         if let Ok(data) = msg.to_bytes() {
                             let topic = gossipsub::IdentTopic::new(gossip::TOPIC_NODE_ANNOUNCE);
-                            if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic, data) {
-                                tracing::warn!("DirectAnnounce publish failed: {}", e);
-                            }
+                            let _ = swarm.behaviour_mut().gossipsub.publish(topic, data);
                         }
                     }
                     Some(NetworkCommand::PublishLuxPost(post)) => {
@@ -2149,6 +2183,9 @@ async fn handle_sync_message(
                         "Sync error from peer: {}",
                         err
                     );
+                }
+                crate::sync::SyncResponse::AnnounceAck => {
+                    tracing::trace!(%source_peer, "Received announcement ACK (v1 sync path)");
                 }
             }
         }

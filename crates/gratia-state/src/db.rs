@@ -348,22 +348,48 @@ impl RocksDbStore {
         opts.create_if_missing(true);
         opts.create_missing_column_families(true);
 
-        // WHY: 16 MB write buffer keeps memory usage low on mobile devices
-        // while still providing reasonable batching for write performance.
-        opts.set_write_buffer_size(16 * 1024 * 1024);
+        // ── Mobile-optimized RocksDB settings ──────────────────────────
+        // WHY: Target devices are $50+ phones with 2-4 GB RAM. These
+        // settings minimize memory and flash wear while maintaining
+        // acceptable read/write performance for ~2 TPS throughput.
 
-        // WHY: 2 write buffers limits memory to ~32 MB for the write path,
-        // leaving room for the rest of the protocol on memory-constrained phones.
+        // WHY: 4 MB write buffer — smaller than default 64 MB to fit
+        // in mobile RAM. 2 buffers = 8 MB max write path memory.
+        opts.set_write_buffer_size(4 * 1024 * 1024);
         opts.set_max_write_buffer_number(2);
 
-        // WHY: Level compaction is better for flash storage than universal compaction
-        // because it produces more predictable write amplification patterns.
+        // WHY: Limit open file descriptors to avoid fd exhaustion on
+        // Android (default ulimit is often 1024, shared with the app).
+        opts.set_max_open_files(100);
+
+        // WHY: 8 MB block cache speeds up account lookups without
+        // excessive RAM usage. LRU eviction keeps hot accounts cached.
+        let cache = rocksdb::Cache::new_lru_cache(8 * 1024 * 1024);
+        let mut block_opts = rocksdb::BlockBasedOptions::default();
+        block_opts.set_block_cache(&cache);
+        // WHY: Bloom filters reduce disk reads for missing keys by ~99%.
+        // 10 bits/key ≈ 1% false positive rate, negligible memory cost.
+        block_opts.set_bloom_filter(10.0, false);
+        opts.set_block_based_table_factory(&block_opts);
+
+        // WHY: LZ4 compression — fast decompress on ARM, reduces DB size
+        // by ~50% vs uncompressed, less flash wear from fewer bytes written.
+        opts.set_compression_type(rocksdb::DBCompressionType::Lz4);
+
+        // WHY: 8 MB target file size — smaller files mean less write
+        // amplification on mobile NAND flash (fewer bytes rewritten
+        // during compaction).
+        opts.set_target_file_size_base(8 * 1024 * 1024);
+
+        // WHY: Level compaction with dynamic level bytes is flash-friendly —
+        // predictable write amplification, auto-adjusts level sizes.
         opts.set_level_compaction_dynamic_level_bytes(true);
 
         let cf_descriptors: Vec<rocksdb::ColumnFamilyDescriptor> = ALL_COLUMN_FAMILIES
             .iter()
             .map(|name| {
-                let cf_opts = Options::default();
+                let mut cf_opts = Options::default();
+                cf_opts.set_compression_type(rocksdb::DBCompressionType::Lz4);
                 rocksdb::ColumnFamilyDescriptor::new(*name, cf_opts)
             })
             .collect();
@@ -454,8 +480,18 @@ impl StateStore for RocksDbStore {
     }
 
     fn count_keys(&self, cf: &str) -> Result<u64, GratiaError> {
-        // WHY: RocksDB does not have an efficient count operation, so we iterate.
-        // For production use, consider maintaining a counter in the STATE cf.
+        // WHY: Use RocksDB's estimated key count property instead of loading
+        // all KV pairs into memory. The estimate is fast (O(1)) and accurate
+        // enough for display purposes. Falls back to exact count only if the
+        // property isn't available.
+        let cf_handle = self.db.cf_handle(cf)
+            .ok_or_else(|| GratiaError::StorageError(format!("Unknown CF: {}", cf)))?;
+        if let Ok(Some(count_str)) = self.db.property_value_cf(&cf_handle, "rocksdb.estimate-num-keys") {
+            if let Ok(count) = count_str.parse::<u64>() {
+                return Ok(count);
+            }
+        }
+        // Fallback: iterate (only if property unavailable)
         let pairs = self.iter_cf(cf)?;
         Ok(pairs.len() as u64)
     }

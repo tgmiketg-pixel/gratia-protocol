@@ -274,6 +274,30 @@ class MainActivity : FragmentActivity(), NfcAdapter.ReaderCallback {
     override fun onResume() {
         super.onResume()
         enableNfcReaderMode()
+
+        // WHY: Ensure mining auto-starts whenever the app comes to foreground.
+        // The PoL service can stop mining during background evaluation (stale
+        // state race). Re-evaluating here guarantees that if conditions are met
+        // (plugged in, 80%+, consensus running), mining restarts without the
+        // user needing to find and tap a button.
+        try {
+            val bridge = io.gratia.app.bridge.GratiaCoreManager
+            if (bridge.isInitialized && !bridge.userStoppedMining) {
+                val bm = getSystemService(BATTERY_SERVICE) as? android.os.BatteryManager
+                val charging = bm?.isCharging ?: false
+                val pct = bm?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 0
+                bridge.updatePowerState(charging, pct)
+                if (charging && pct >= 80) {
+                    bridge.startMining()
+                    val intent = android.content.Intent(this, io.gratia.app.service.MiningService::class.java)
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        startForegroundService(intent)
+                    } else {
+                        startService(intent)
+                    }
+                }
+            }
+        } catch (_: Exception) { /* best-effort */ }
     }
 
     override fun onPause() {

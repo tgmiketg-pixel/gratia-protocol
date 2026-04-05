@@ -692,8 +692,10 @@ fn execute_function(
     call_depth: u32,
 ) -> Result<Option<Value>, InterpError> {
     // WHY: Limit call depth to prevent stack overflow from recursive contracts.
-    // 256 is generous but bounded.
-    const MAX_CALL_DEPTH: u32 = 256;
+    // 32 is safe for all platforms including Windows debug builds where
+    // execute_function -> execute_block recursion creates large stack frames.
+    // Previously 256, which could overflow the host thread's stack.
+    const MAX_CALL_DEPTH: u32 = 32;
     if call_depth > MAX_CALL_DEPTH {
         return Err(InterpError::HostError("call depth exceeded".into()));
     }
@@ -835,7 +837,6 @@ fn execute_block(
             // block
             0x02 => {
                 let _block_type = reader.read_byte()?; // 0x40 = void
-                let _block_start = reader.pos;
                 // Execute the block body
                 match execute_block(
                     module, reader, stack, locals, globals, memory, gas_meter, host_env,
@@ -844,10 +845,13 @@ fn execute_block(
                     Ok(()) => {}
                     Err(InterpError::Branch(0)) => {
                         // Branch targets this block — break out of block.
-                        // Skip to the matching END.
+                        // Reader is mid-block; advance past remaining bytecode to matching end.
+                        skip_to_end(reader)?;
                     }
                     Err(InterpError::Branch(n)) => {
-                        // Branch targets an outer block — propagate with decremented depth.
+                        // Branch targets an outer block — advance past this block's end,
+                        // then propagate with decremented depth.
+                        skip_to_end(reader)?;
                         return Err(InterpError::Branch(n - 1));
                     }
                     Err(e) => return Err(e),
@@ -867,9 +871,13 @@ fn execute_block(
                         Ok(()) => break,
                         Err(InterpError::Branch(0)) => {
                             // Branch targets this loop — continue from the top.
+                            // Reader will be reset to loop_start on next iteration.
                             continue;
                         }
                         Err(InterpError::Branch(n)) => {
+                            // Branch targets an outer block — advance past this loop's end,
+                            // then propagate with decremented depth.
+                            skip_to_end(reader)?;
                             return Err(InterpError::Branch(n - 1));
                         }
                         Err(e) => return Err(e),
@@ -889,8 +897,14 @@ fn execute_block(
                         permissions, call_depth, &[],
                     ) {
                         Ok(()) => {}
-                        Err(InterpError::Branch(0)) => {}
-                        Err(InterpError::Branch(n)) => return Err(InterpError::Branch(n - 1)),
+                        Err(InterpError::Branch(0)) => {
+                            // Branch targets this if — skip remaining block to matching end.
+                            skip_to_end(reader)?;
+                        }
+                        Err(InterpError::Branch(n)) => {
+                            skip_to_end(reader)?;
+                            return Err(InterpError::Branch(n - 1));
+                        }
                         Err(e) => return Err(e),
                     }
                 } else {
@@ -903,8 +917,13 @@ fn execute_block(
                             permissions, call_depth, &[],
                         ) {
                             Ok(()) => {}
-                            Err(InterpError::Branch(0)) => {}
-                            Err(InterpError::Branch(n)) => return Err(InterpError::Branch(n - 1)),
+                            Err(InterpError::Branch(0)) => {
+                                skip_to_end(reader)?;
+                            }
+                            Err(InterpError::Branch(n)) => {
+                                skip_to_end(reader)?;
+                                return Err(InterpError::Branch(n - 1));
+                            }
                             Err(e) => return Err(e),
                         }
                     }
@@ -1845,6 +1864,15 @@ fn skip_to_end(reader: &mut Reader) -> Result<(), InterpError> {
             }
             0x20 | 0x21 | 0x22 | 0x23 | 0x24 => {
                 reader.read_u32_leb128()?;
+            }
+            0x28..=0x2D | 0x36..=0x3A => {
+                // Memory load/store — align + offset immediates.
+                reader.read_u32_leb128()?;
+                reader.read_u32_leb128()?;
+            }
+            0x3F | 0x40 => {
+                // memory.size / memory.grow — reserved byte.
+                reader.read_byte()?;
             }
             0x41 => {
                 reader.read_i32_leb128()?;
@@ -3314,6 +3342,394 @@ mod tests {
         assert!(result.success);
         // 'H' = 72
         assert_eq!(result.return_value, ContractValue::I32(72));
+    }
+
+    /// Build a WASM module that sums 1+2+3+...+10 using a while loop.
+    /// Returns 55.
+    ///
+    /// Pseudo-code:
+    ///   i = 1; sum = 0;
+    ///   loop {
+    ///     sum = sum + i;
+    ///     i = i + 1;
+    ///     if i <= 10: continue loop;
+    ///   }
+    ///   return sum;
+    fn build_sum_1_to_10_loop_wasm() -> Vec<u8> {
+        let mut wasm = Vec::new();
+        wasm.extend_from_slice(&[0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00]);
+
+        // Type section: () -> i32
+        {
+            let mut body = Vec::new();
+            encode_u32_leb128(&mut body, 1);
+            body.push(0x60);
+            encode_u32_leb128(&mut body, 0); // 0 params
+            encode_u32_leb128(&mut body, 1); // 1 result
+            body.push(0x7F); // i32
+            emit_section(&mut wasm, 1, &body);
+        }
+
+        // Function section
+        {
+            let mut body = Vec::new();
+            encode_u32_leb128(&mut body, 1);
+            encode_u32_leb128(&mut body, 0);
+            emit_section(&mut wasm, 3, &body);
+        }
+
+        // Export section
+        {
+            let mut body = Vec::new();
+            encode_u32_leb128(&mut body, 1);
+            encode_str(&mut body, "sum");
+            body.push(0x00);
+            encode_u32_leb128(&mut body, 0);
+            emit_section(&mut wasm, 7, &body);
+        }
+
+        // Code section
+        {
+            let mut func_body = Vec::new();
+            // 2 local declarations: local 0 = i (i32), local 1 = sum (i32)
+            encode_u32_leb128(&mut func_body, 2);
+            encode_u32_leb128(&mut func_body, 1); // count 1
+            func_body.push(0x7F); // i32
+            encode_u32_leb128(&mut func_body, 1); // count 1
+            func_body.push(0x7F); // i32
+
+            // i = 1
+            func_body.push(0x41); // i32.const
+            encode_i32_leb128(&mut func_body, 1);
+            func_body.push(0x21); // local.set
+            encode_u32_leb128(&mut func_body, 0); // local 0 = i
+
+            // sum = 0 (already default, but explicit)
+            func_body.push(0x41); // i32.const
+            encode_i32_leb128(&mut func_body, 0);
+            func_body.push(0x21); // local.set
+            encode_u32_leb128(&mut func_body, 1); // local 1 = sum
+
+            // loop (void)
+            func_body.push(0x03); // loop
+            func_body.push(0x40); // void block type
+
+            // sum = sum + i
+            func_body.push(0x20); // local.get
+            encode_u32_leb128(&mut func_body, 1); // sum
+            func_body.push(0x20); // local.get
+            encode_u32_leb128(&mut func_body, 0); // i
+            func_body.push(0x6A); // i32.add
+            func_body.push(0x21); // local.set
+            encode_u32_leb128(&mut func_body, 1); // sum = sum + i
+
+            // i = i + 1
+            func_body.push(0x20); // local.get
+            encode_u32_leb128(&mut func_body, 0); // i
+            func_body.push(0x41); // i32.const
+            encode_i32_leb128(&mut func_body, 1);
+            func_body.push(0x6A); // i32.add
+            func_body.push(0x22); // local.tee
+            encode_u32_leb128(&mut func_body, 0); // i = i + 1, value stays on stack
+
+            // if i <= 10, continue loop
+            func_body.push(0x41); // i32.const
+            encode_i32_leb128(&mut func_body, 11);
+            func_body.push(0x48); // i32.lt_s (i < 11, i.e. i <= 10)
+            func_body.push(0x0D); // br_if
+            encode_u32_leb128(&mut func_body, 0); // depth 0 = this loop
+
+            // end (loop)
+            func_body.push(0x0B);
+
+            // return sum
+            func_body.push(0x20); // local.get
+            encode_u32_leb128(&mut func_body, 1); // sum
+
+            // end (function)
+            func_body.push(0x0B);
+
+            let mut body = Vec::new();
+            encode_u32_leb128(&mut body, 1);
+            encode_u32_leb128(&mut body, func_body.len() as u32);
+            body.extend_from_slice(&func_body);
+            emit_section(&mut wasm, 10, &body);
+        }
+
+        wasm
+    }
+
+    #[test]
+    fn test_while_loop_sum_1_to_10() {
+        let mut runtime = InterpreterRuntime::new();
+        let addr = Address([10u8; 32]);
+        let bytecode = build_sum_1_to_10_loop_wasm();
+
+        runtime
+            .load_contract(addr, &bytecode, &SandboxConfig::default())
+            .unwrap();
+
+        let mut gas_meter = GasMeter::new(1_000_000);
+        let mut env = make_test_env();
+        let perms = ContractPermissions::default();
+
+        let result = runtime
+            .execute_contract(&addr, "sum", &[], &mut gas_meter, &mut env, &perms)
+            .unwrap();
+
+        assert!(result.success);
+        assert_eq!(result.return_value, ContractValue::I32(55));
+    }
+
+    /// Build a WASM module that counts down from 5 to 0 using a while loop.
+    /// Returns the final counter value (0).
+    ///
+    /// Pseudo-code:
+    ///   counter = 5;
+    ///   loop {
+    ///     counter = counter - 1;
+    ///     if counter > 0: continue loop;
+    ///   }
+    ///   return counter;
+    fn build_countdown_loop_wasm() -> Vec<u8> {
+        let mut wasm = Vec::new();
+        wasm.extend_from_slice(&[0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00]);
+
+        // Type section: () -> i32
+        {
+            let mut body = Vec::new();
+            encode_u32_leb128(&mut body, 1);
+            body.push(0x60);
+            encode_u32_leb128(&mut body, 0);
+            encode_u32_leb128(&mut body, 1);
+            body.push(0x7F);
+            emit_section(&mut wasm, 1, &body);
+        }
+
+        // Function section
+        {
+            let mut body = Vec::new();
+            encode_u32_leb128(&mut body, 1);
+            encode_u32_leb128(&mut body, 0);
+            emit_section(&mut wasm, 3, &body);
+        }
+
+        // Export section
+        {
+            let mut body = Vec::new();
+            encode_u32_leb128(&mut body, 1);
+            encode_str(&mut body, "countdown");
+            body.push(0x00);
+            encode_u32_leb128(&mut body, 0);
+            emit_section(&mut wasm, 7, &body);
+        }
+
+        // Code section
+        {
+            let mut func_body = Vec::new();
+            // 1 local: counter (i32)
+            encode_u32_leb128(&mut func_body, 1);
+            encode_u32_leb128(&mut func_body, 1);
+            func_body.push(0x7F);
+
+            // counter = 5
+            func_body.push(0x41);
+            encode_i32_leb128(&mut func_body, 5);
+            func_body.push(0x21);
+            encode_u32_leb128(&mut func_body, 0);
+
+            // loop (void)
+            func_body.push(0x03);
+            func_body.push(0x40);
+
+            // counter = counter - 1
+            func_body.push(0x20); // local.get
+            encode_u32_leb128(&mut func_body, 0);
+            func_body.push(0x41); // i32.const
+            encode_i32_leb128(&mut func_body, 1);
+            func_body.push(0x6B); // i32.sub
+            func_body.push(0x22); // local.tee
+            encode_u32_leb128(&mut func_body, 0);
+
+            // if counter > 0, continue loop
+            func_body.push(0x41); // i32.const
+            encode_i32_leb128(&mut func_body, 0);
+            func_body.push(0x4A); // i32.gt_s
+            func_body.push(0x0D); // br_if
+            encode_u32_leb128(&mut func_body, 0); // depth 0 = loop
+
+            // end (loop)
+            func_body.push(0x0B);
+
+            // return counter
+            func_body.push(0x20);
+            encode_u32_leb128(&mut func_body, 0);
+
+            // end (function)
+            func_body.push(0x0B);
+
+            let mut body = Vec::new();
+            encode_u32_leb128(&mut body, 1);
+            encode_u32_leb128(&mut body, func_body.len() as u32);
+            body.extend_from_slice(&func_body);
+            emit_section(&mut wasm, 10, &body);
+        }
+
+        wasm
+    }
+
+    #[test]
+    fn test_while_loop_countdown() {
+        let mut runtime = InterpreterRuntime::new();
+        let addr = Address([11u8; 32]);
+        let bytecode = build_countdown_loop_wasm();
+
+        runtime
+            .load_contract(addr, &bytecode, &SandboxConfig::default())
+            .unwrap();
+
+        let mut gas_meter = GasMeter::new(1_000_000);
+        let mut env = make_test_env();
+        let perms = ContractPermissions::default();
+
+        let result = runtime
+            .execute_contract(&addr, "countdown", &[], &mut gas_meter, &mut env, &perms)
+            .unwrap();
+
+        assert!(result.success);
+        assert_eq!(result.return_value, ContractValue::I32(0));
+    }
+
+    /// Build a WASM module with a block+loop pattern using br to exit the outer block.
+    /// Tests that br targeting a block correctly skips forward.
+    ///
+    /// Pseudo-code:
+    ///   i = 0; sum = 0;
+    ///   block $exit {
+    ///     loop $loop {
+    ///       sum = sum + i;
+    ///       i = i + 1;
+    ///       if i > 5: br $exit;   // br 1 (block)
+    ///       br $loop;              // br 0 (loop)
+    ///     }
+    ///   }
+    ///   return sum;
+    fn build_block_loop_exit_wasm() -> Vec<u8> {
+        let mut wasm = Vec::new();
+        wasm.extend_from_slice(&[0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00]);
+
+        // Type section: () -> i32
+        {
+            let mut body = Vec::new();
+            encode_u32_leb128(&mut body, 1);
+            body.push(0x60);
+            encode_u32_leb128(&mut body, 0);
+            encode_u32_leb128(&mut body, 1);
+            body.push(0x7F);
+            emit_section(&mut wasm, 1, &body);
+        }
+
+        // Function section
+        {
+            let mut body = Vec::new();
+            encode_u32_leb128(&mut body, 1);
+            encode_u32_leb128(&mut body, 0);
+            emit_section(&mut wasm, 3, &body);
+        }
+
+        // Export section
+        {
+            let mut body = Vec::new();
+            encode_u32_leb128(&mut body, 1);
+            encode_str(&mut body, "sum_with_break");
+            body.push(0x00);
+            encode_u32_leb128(&mut body, 0);
+            emit_section(&mut wasm, 7, &body);
+        }
+
+        // Code section
+        {
+            let mut func_body = Vec::new();
+            // 2 locals: i (i32), sum (i32)
+            encode_u32_leb128(&mut func_body, 2);
+            encode_u32_leb128(&mut func_body, 1);
+            func_body.push(0x7F);
+            encode_u32_leb128(&mut func_body, 1);
+            func_body.push(0x7F);
+
+            // i = 0 (default), sum = 0 (default)
+
+            // block (void)
+            func_body.push(0x02);
+            func_body.push(0x40);
+
+            // loop (void)
+            func_body.push(0x03);
+            func_body.push(0x40);
+
+            // sum = sum + i
+            func_body.push(0x20); encode_u32_leb128(&mut func_body, 1); // sum
+            func_body.push(0x20); encode_u32_leb128(&mut func_body, 0); // i
+            func_body.push(0x6A); // i32.add
+            func_body.push(0x21); encode_u32_leb128(&mut func_body, 1); // sum = sum + i
+
+            // i = i + 1
+            func_body.push(0x20); encode_u32_leb128(&mut func_body, 0); // i
+            func_body.push(0x41); encode_i32_leb128(&mut func_body, 1); // 1
+            func_body.push(0x6A); // i32.add
+            func_body.push(0x22); encode_u32_leb128(&mut func_body, 0); // tee i
+
+            // if i > 5, br 1 (exit block)
+            func_body.push(0x41); encode_i32_leb128(&mut func_body, 5); // 5
+            func_body.push(0x4A); // i32.gt_s
+            func_body.push(0x0D); encode_u32_leb128(&mut func_body, 1); // br_if 1 (block)
+
+            // br 0 (continue loop)
+            func_body.push(0x0C); encode_u32_leb128(&mut func_body, 0); // br 0
+
+            // end (loop)
+            func_body.push(0x0B);
+
+            // end (block)
+            func_body.push(0x0B);
+
+            // return sum (0+1+2+3+4+5 = 15)
+            func_body.push(0x20); encode_u32_leb128(&mut func_body, 1);
+
+            // end (function)
+            func_body.push(0x0B);
+
+            let mut body = Vec::new();
+            encode_u32_leb128(&mut body, 1);
+            encode_u32_leb128(&mut body, func_body.len() as u32);
+            body.extend_from_slice(&func_body);
+            emit_section(&mut wasm, 10, &body);
+        }
+
+        wasm
+    }
+
+    #[test]
+    fn test_block_loop_with_break() {
+        let mut runtime = InterpreterRuntime::new();
+        let addr = Address([12u8; 32]);
+        let bytecode = build_block_loop_exit_wasm();
+
+        runtime
+            .load_contract(addr, &bytecode, &SandboxConfig::default())
+            .unwrap();
+
+        let mut gas_meter = GasMeter::new(1_000_000);
+        let mut env = make_test_env();
+        let perms = ContractPermissions::default();
+
+        let result = runtime
+            .execute_contract(&addr, "sum_with_break", &[], &mut gas_meter, &mut env, &perms)
+            .unwrap();
+
+        assert!(result.success);
+        // sum = 0+1+2+3+4+5 = 15
+        assert_eq!(result.return_value, ContractValue::I32(15));
     }
 
 }

@@ -1,0 +1,22 @@
+[package]
+name = "gratia-simulator"
+description = "Local multi-node network simulator for Gratia consensus testing"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "gratia-simulator"
+path = "src/main.rs"
+
+[dependencies]
+gratia-core = { path = "../gratia-core" }
+gratia-consensus = { path = "../gratia-consensus" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ed25519-dalek = { workspace = true }
+rand = { workspace = true }
+rand_chacha = { workspace = true }
+sha2 = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }

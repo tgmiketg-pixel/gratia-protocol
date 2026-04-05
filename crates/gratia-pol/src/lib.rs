@@ -40,6 +40,13 @@ pub struct ProofOfLifeManager {
     /// retrieve it after finalize_day() returns true, without changing the
     /// finalize_day() return type and breaking existing callers.
     last_zk_proof: Option<PolRangeProof>,
+    /// WHY: After an app restart, current_day_data is empty because sensor
+    /// events aren't persisted. But if the phone had valid PoL before the
+    /// restart (onboarding_complete=true), we grant a warm-start grace period
+    /// so the user doesn't have to wait for sensor re-collection. The PoL
+    /// service will re-populate sensor data in the background; this just
+    /// bridges the gap so mining isn't interrupted by routine app restarts.
+    warm_start_until: Option<std::time::Instant>,
 }
 
 impl ProofOfLifeManager {
@@ -67,6 +74,7 @@ impl ProofOfLifeManager {
             onboarding_complete: false,
             mining_eligible: false,
             last_zk_proof: None,
+            warm_start_until: None,
         }
     }
 
@@ -294,10 +302,22 @@ impl ProofOfLifeManager {
                     }
                 }
 
+                // WHY: Grant 10-minute warm-start grace after loading persisted
+                // state. This lets the PoL service re-collect sensor events in
+                // the background while mining resumes immediately. 10 minutes is
+                // enough for unlocks, orientation changes, and GPS fixes to
+                // re-populate current_day_data through normal phone usage.
+                if self.onboarding_complete {
+                    self.warm_start_until = Some(
+                        std::time::Instant::now() + std::time::Duration::from_secs(600)
+                    );
+                }
+
                 tracing::info!(
                     consecutive = self.consecutive_valid_days,
                     total = total_days,
                     onboarded = self.onboarding_complete,
+                    warm_start = self.warm_start_until.is_some(),
                     "PoL state restored from persistence"
                 );
             }
@@ -306,6 +326,14 @@ impl ProofOfLifeManager {
 
     /// Check current day's validity in real-time.
     pub fn current_day_valid(&self) -> bool {
+        // WHY: Warm-start grace — after app restart, sensor data hasn't been
+        // re-collected yet but the phone was previously verified. Accept the
+        // cached PoL validity for a short window so mining resumes immediately.
+        if let Some(until) = self.warm_start_until {
+            if until.elapsed().as_secs() == 0 || std::time::Instant::now() < until {
+                return true;
+            }
+        }
         self.current_day_data.is_valid(&self.config.proof_of_life)
     }
 
@@ -330,6 +358,48 @@ impl ProofOfLifeManager {
     /// Get the number of consecutive missed days.
     pub fn missed_days(&self) -> u32 {
         self.consecutive_missed_days
+    }
+
+    /// Count how many of the 8 daily PoL parameters are currently met.
+    /// WHY: Health telemetry needs a quick summary of PoL progress without
+    /// exposing raw sensor data. Returns 0-8.
+    pub fn parameters_met_count(&self) -> u8 {
+        let cfg = &self.config.proof_of_life;
+        let d = &self.current_day_data;
+        let mut count: u8 = 0;
+
+        // 1. Unlocks (count + spread)
+        let spread_ok = match (d.first_unlock, d.last_unlock) {
+            (Some(first), Some(last)) => (last - first).num_hours() >= cfg.min_unlock_spread_hours as i64,
+            _ => false,
+        };
+        if d.unlock_count >= cfg.min_daily_unlocks && spread_ok { count += 1; }
+
+        // 2. Screen interactions
+        if d.interaction_sessions >= cfg.min_interaction_sessions { count += 1; }
+
+        // 3. Orientation change
+        if d.orientation_changed { count += 1; }
+
+        // 4. Human motion
+        if d.human_motion_detected { count += 1; }
+
+        // 5. GPS fix
+        if d.gps_fix_obtained { count += 1; }
+
+        // 6. Network connectivity (Wi-Fi OR Bluetooth)
+        if d.distinct_wifi_networks >= 1 || d.distinct_bt_environments >= 1 { count += 1; }
+
+        // 7. BT variation (passes if no BT, or if BT shows variation)
+        let bt_variation_ok = d.distinct_bt_environments == 0
+            || (d.distinct_bt_environments >= cfg.min_distinct_bt_environments
+                && d.bt_environment_change_count >= 1);
+        if bt_variation_ok { count += 1; }
+
+        // 8. Charge cycle event
+        if d.charge_cycle_event { count += 1; }
+
+        count
     }
 
     /// Determine mining state based on current conditions.

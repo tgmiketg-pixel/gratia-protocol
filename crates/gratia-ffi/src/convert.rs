@@ -55,55 +55,56 @@ pub fn mining_state_to_string(state: &MiningState) -> String {
 // FfiSensorEvent -> SensorEvent
 // ============================================================================
 
-impl From<FfiSensorEvent> for SensorEvent {
-    fn from(ffi: FfiSensorEvent) -> Self {
-        // WHY: We use Utc::now() as the timestamp for all FFI events because
-        // the native layer calls us in real-time as events happen. The timestamp
-        // represents "when the Rust layer received the event," which is close
-        // enough to the actual event time for PoL purposes.
-        let now = Utc::now();
+/// Convert an FFI sensor event to a PoL-internal sensor event.
+///
+/// Returns `None` for environmental sensor readings (barometer, light,
+/// magnetometer, accelerometer magnitude) that are cached for VM host
+/// functions but should NOT affect PoL parameter validation.
+///
+/// WHY: Previously these mapped to `SensorEvent::Motion`, which incorrectly
+/// satisfied PoL parameter #4 (human-consistent motion) whenever a barometer
+/// or light reading arrived. The PoL buffer's Motion handler unconditionally
+/// sets `human_motion_detected = true`, so even a single barometer reading
+/// would auto-pass parameter #4 in release builds.
+pub fn ffi_sensor_to_pol(ffi: &FfiSensorEvent) -> Option<SensorEvent> {
+    // WHY: We use Utc::now() as the timestamp for all FFI events because
+    // the native layer calls us in real-time as events happen. The timestamp
+    // represents "when the Rust layer received the event," which is close
+    // enough to the actual event time for PoL purposes.
+    let now = Utc::now();
 
-        match ffi {
-            FfiSensorEvent::Unlock => SensorEvent::Unlock { timestamp: now },
-            FfiSensorEvent::Interaction { duration_secs } => SensorEvent::Interaction {
-                timestamp: now,
-                duration_secs,
-            },
-            FfiSensorEvent::OrientationChange => {
-                SensorEvent::OrientationChange { timestamp: now }
-            }
-            FfiSensorEvent::Motion => SensorEvent::Motion { timestamp: now },
-            FfiSensorEvent::GpsUpdate { lat, lon } => SensorEvent::GpsUpdate {
-                timestamp: now,
-                lat,
-                lon,
-            },
-            FfiSensorEvent::WifiScan { bssid_hashes } => SensorEvent::WifiScan {
-                timestamp: now,
-                bssid_hashes,
-            },
-            FfiSensorEvent::BluetoothScan { peer_hashes } => SensorEvent::BluetoothScan {
-                timestamp: now,
-                peer_hashes,
-            },
-            FfiSensorEvent::ChargeEvent { is_charging } => SensorEvent::ChargeEvent {
-                timestamp: now,
-                is_charging,
-            },
-            // WHY: Environmental sensor readings (barometer, light, magnetometer,
-            // accelerometer) are cached in GratiaNodeInner for VM host functions
-            // but don't map to PoL sensor events. The PoL engine cares about
-            // motion patterns, not raw sensor values. We map these to Motion
-            // events with zero impact on PoL validation (motion requires threshold
-            // detection, which these won't trigger).
-            FfiSensorEvent::BarometerReading { .. }
-            | FfiSensorEvent::LightReading { .. }
-            | FfiSensorEvent::MagnetometerReading { .. }
-            | FfiSensorEvent::AccelerometerReading { .. } => {
-                // No-op for PoL: these are only used by the VM sensor cache
-                SensorEvent::Motion { timestamp: now }
-            }
+    match ffi {
+        FfiSensorEvent::Unlock => Some(SensorEvent::Unlock { timestamp: now }),
+        FfiSensorEvent::Interaction { duration_secs } => Some(SensorEvent::Interaction {
+            timestamp: now,
+            duration_secs: *duration_secs,
+        }),
+        FfiSensorEvent::OrientationChange => {
+            Some(SensorEvent::OrientationChange { timestamp: now })
         }
+        FfiSensorEvent::Motion => Some(SensorEvent::Motion { timestamp: now }),
+        FfiSensorEvent::GpsUpdate { lat, lon } => Some(SensorEvent::GpsUpdate {
+            timestamp: now,
+            lat: *lat,
+            lon: *lon,
+        }),
+        FfiSensorEvent::WifiScan { bssid_hashes } => Some(SensorEvent::WifiScan {
+            timestamp: now,
+            bssid_hashes: bssid_hashes.clone(),
+        }),
+        FfiSensorEvent::BluetoothScan { peer_hashes } => Some(SensorEvent::BluetoothScan {
+            timestamp: now,
+            peer_hashes: peer_hashes.clone(),
+        }),
+        FfiSensorEvent::ChargeEvent { is_charging } => Some(SensorEvent::ChargeEvent {
+            timestamp: now,
+            is_charging: *is_charging,
+        }),
+        // Environmental sensor readings: VM cache only, NOT PoL events.
+        FfiSensorEvent::BarometerReading { .. }
+        | FfiSensorEvent::LightReading { .. }
+        | FfiSensorEvent::MagnetometerReading { .. }
+        | FfiSensorEvent::AccelerometerReading { .. } => None,
     }
 }
 
@@ -216,7 +217,7 @@ mod tests {
     #[test]
     fn test_ffi_sensor_event_unlock_converts() {
         let ffi = FfiSensorEvent::Unlock;
-        let event: SensorEvent = ffi.into();
+        let event = ffi_sensor_to_pol(&ffi).expect("Unlock should convert");
         match event {
             SensorEvent::Unlock { timestamp } => {
                 // Timestamp should be very recent (within last second)
@@ -233,7 +234,7 @@ mod tests {
             lat: 40.7128,
             lon: -74.006,
         };
-        let event: SensorEvent = ffi.into();
+        let event = ffi_sensor_to_pol(&ffi).expect("GpsUpdate should convert");
         match event {
             SensorEvent::GpsUpdate { lat, lon, .. } => {
                 assert!((lat - 40.7128).abs() < 0.0001);
@@ -248,7 +249,7 @@ mod tests {
         let ffi = FfiSensorEvent::WifiScan {
             bssid_hashes: vec![100, 200, 300],
         };
-        let event: SensorEvent = ffi.into();
+        let event = ffi_sensor_to_pol(&ffi).expect("WifiScan should convert");
         match event {
             SensorEvent::WifiScan { bssid_hashes, .. } => {
                 assert_eq!(bssid_hashes, vec![100, 200, 300]);
@@ -262,7 +263,7 @@ mod tests {
         let ffi = FfiSensorEvent::BluetoothScan {
             peer_hashes: vec![10, 20],
         };
-        let event: SensorEvent = ffi.into();
+        let event = ffi_sensor_to_pol(&ffi).expect("BluetoothScan should convert");
         match event {
             SensorEvent::BluetoothScan { peer_hashes, .. } => {
                 assert_eq!(peer_hashes, vec![10, 20]);
@@ -274,7 +275,7 @@ mod tests {
     #[test]
     fn test_ffi_sensor_event_charge_converts() {
         let ffi = FfiSensorEvent::ChargeEvent { is_charging: true };
-        let event: SensorEvent = ffi.into();
+        let event = ffi_sensor_to_pol(&ffi).expect("ChargeEvent should convert");
         match event {
             SensorEvent::ChargeEvent { is_charging, .. } => {
                 assert!(is_charging);
@@ -286,13 +287,24 @@ mod tests {
     #[test]
     fn test_ffi_sensor_event_interaction_converts() {
         let ffi = FfiSensorEvent::Interaction { duration_secs: 120 };
-        let event: SensorEvent = ffi.into();
+        let event = ffi_sensor_to_pol(&ffi).expect("Interaction should convert");
         match event {
             SensorEvent::Interaction { duration_secs, .. } => {
                 assert_eq!(duration_secs, 120);
             }
             _ => panic!("expected Interaction variant"),
         }
+    }
+
+    #[test]
+    fn test_ffi_environmental_sensors_return_none() {
+        // WHY: Environmental sensor readings must NOT enter the PoL buffer.
+        // Previously they mapped to SensorEvent::Motion, which incorrectly
+        // auto-passed PoL parameter #4 (human-consistent motion).
+        assert!(ffi_sensor_to_pol(&FfiSensorEvent::BarometerReading { hpa: 1013.25 }).is_none());
+        assert!(ffi_sensor_to_pol(&FfiSensorEvent::LightReading { lux: 500.0 }).is_none());
+        assert!(ffi_sensor_to_pol(&FfiSensorEvent::MagnetometerReading { degrees: 180.0 }).is_none());
+        assert!(ffi_sensor_to_pol(&FfiSensorEvent::AccelerometerReading { magnitude: 9.8 }).is_none());
     }
 
     #[test]

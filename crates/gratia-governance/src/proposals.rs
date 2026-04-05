@@ -7,7 +7,7 @@
 //! supermajority of the validator committee, with mandatory ratification
 //! by standard vote within 90 days.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -69,8 +69,8 @@ pub struct EmergencyProposal {
     pub submitted_at: DateTime<Utc>,
     /// Deadline for ratification by standard governance vote.
     pub ratification_deadline: DateTime<Utc>,
-    /// Committee members who approved.
-    pub approvals: Vec<NodeId>,
+    /// Committee members who approved (HashSet prevents duplicate approvals).
+    pub approvals: HashSet<NodeId>,
     /// Total committee size at time of creation.
     pub committee_size: usize,
     /// Whether the emergency action has been activated.
@@ -90,7 +90,7 @@ impl EmergencyProposal {
         }
         // threshold_bps is e.g. 7500 for 75%
         let required = (self.committee_size as u64).saturating_mul(threshold_bps as u64).saturating_add(9999) / 10000;
-        self.approvals.len() as u64 >= required
+        self.approvals.len() as u64 >= required as u64
     }
 }
 
@@ -338,7 +338,7 @@ impl ProposalStore {
             proposal_data,
             submitted_at: now,
             ratification_deadline,
-            approvals: Vec::new(),
+            approvals: HashSet::new(),
             committee_size,
             activated: false,
             ratified: false,
@@ -380,12 +380,10 @@ impl ProposalStore {
             return Err(GovernanceError::EmergencyAlreadyResolved);
         }
 
-        // Prevent double approval.
-        if ep.approvals.contains(&approver) {
+        // HashSet::insert returns false if already present — prevents double approval.
+        if !ep.approvals.insert(approver) {
             return Ok(false);
         }
-
-        ep.approvals.push(approver);
 
         if !ep.activated && ep.has_supermajority(config.emergency_threshold_bps) {
             ep.activated = true;

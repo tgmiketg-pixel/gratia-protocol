@@ -253,16 +253,29 @@ impl RecoveryClaim {
 
 /// A seed phrase backup. Optional, buried in settings, not shown during onboarding.
 ///
-/// # Implementation Note
-/// This is a conceptual structure. A full BIP39-style word list is not included
-/// in Phase 1. The 32-byte entropy maps to a deterministic Ed25519 keypair.
-/// In production, the entropy would be encoded as a mnemonic word sequence
+/// Stores the raw 32-byte Ed25519 secret key as entropy. When the `seed-phrase`
+/// feature is enabled, the entropy can be encoded as a 24-word BIP39 mnemonic
 /// for human-friendly backup.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// # Security
+/// - Never shown during onboarding.
+/// - Never logged (no Display impl, no Debug leak of entropy).
+/// - Entropy is zeroized on drop.
+/// - Export requires an explicit user action in the settings UI.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SeedPhrase {
     /// Raw entropy bytes (32 bytes = 256 bits of entropy).
-    /// In production, these map to a 24-word mnemonic via a word list.
+    /// Maps to a 24-word BIP39 mnemonic when the `seed-phrase` feature is enabled.
     entropy: Vec<u8>,
+}
+
+/// Custom Debug that never leaks entropy.
+impl std::fmt::Debug for SeedPhrase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SeedPhrase")
+            .field("entropy", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl SeedPhrase {
@@ -286,19 +299,51 @@ impl SeedPhrase {
         &self.entropy
     }
 
-    /// Return the entropy as a hex string (placeholder for mnemonic encoding).
+    /// Return the entropy as a hex string.
     ///
-    /// In production, this would return a space-separated word list.
-    /// For Phase 1, hex is sufficient for testing the recovery flow.
+    /// Available regardless of the `seed-phrase` feature. Prefer `to_words()`
+    /// when BIP39 is enabled for a human-friendly representation.
     pub fn to_hex(&self) -> String {
         hex::encode(&self.entropy)
     }
 
-    /// Parse a hex-encoded seed phrase (placeholder for mnemonic decoding).
+    /// Parse a hex-encoded seed phrase.
     pub fn from_hex(hex_str: &str) -> Result<Self, GratiaError> {
         let bytes = hex::decode(hex_str)
             .map_err(|e| GratiaError::Other(format!("invalid hex seed phrase: {}", e)))?;
         Self::from_secret_key(&bytes)
+    }
+
+    /// Export the seed phrase as a 24-word BIP39 mnemonic string.
+    ///
+    /// Requires the `seed-phrase` feature (which pulls in the `bip39` crate).
+    /// The full 32-byte (256-bit) entropy produces a 24-word mnemonic.
+    ///
+    /// # Security Warning
+    /// The returned string is the master backup for the wallet. It must be
+    /// shown to the user only on explicit request and never logged or cached.
+    #[cfg(feature = "seed-phrase")]
+    pub fn to_words(&self) -> Result<String, GratiaError> {
+        let mnemonic = bip39::Mnemonic::from_entropy(&self.entropy)
+            .map_err(|e| GratiaError::Other(format!("failed to generate mnemonic: {}", e)))?;
+        Ok(mnemonic.to_string())
+    }
+
+    /// Restore a seed phrase from a 24-word BIP39 mnemonic string.
+    ///
+    /// Validates the mnemonic checksum. Returns an error if the words are
+    /// invalid or the checksum doesn't match.
+    #[cfg(feature = "seed-phrase")]
+    pub fn from_words(phrase: &str) -> Result<Self, GratiaError> {
+        let mnemonic: bip39::Mnemonic = phrase.parse()
+            .map_err(|e: bip39::Error| GratiaError::Other(format!("invalid seed phrase: {}", e)))?;
+        let entropy = mnemonic.to_entropy();
+        if entropy.len() != 32 {
+            return Err(GratiaError::Other(
+                "seed phrase must encode exactly 256 bits (24 words)".into(),
+            ));
+        }
+        Ok(SeedPhrase { entropy })
     }
 }
 
@@ -526,6 +571,49 @@ mod tests {
     fn test_seed_phrase_invalid_hex() {
         let result = SeedPhrase::from_hex("not_valid_hex!");
         assert!(result.is_err());
+    }
+
+    #[cfg(feature = "seed-phrase")]
+    #[test]
+    fn test_seed_phrase_bip39_roundtrip() {
+        let secret = [42u8; 32];
+        let phrase = SeedPhrase::from_secret_key(&secret).unwrap();
+
+        // Export as 24 words
+        let words = phrase.to_words().unwrap();
+        let word_count = words.split_whitespace().count();
+        assert_eq!(word_count, 24, "BIP39 mnemonic from 256-bit entropy must be 24 words");
+
+        // Import from words
+        let recovered = SeedPhrase::from_words(&words).unwrap();
+        assert_eq!(recovered.to_secret_key_bytes(), &secret);
+    }
+
+    #[cfg(feature = "seed-phrase")]
+    #[test]
+    fn test_seed_phrase_bip39_invalid_words() {
+        let result = SeedPhrase::from_words("not a valid mnemonic phrase");
+        assert!(result.is_err());
+    }
+
+    #[cfg(feature = "seed-phrase")]
+    #[test]
+    fn test_seed_phrase_bip39_bad_checksum() {
+        // Valid BIP39 words but wrong checksum (last word changed)
+        let result = SeedPhrase::from_words(
+            "abandon abandon abandon abandon abandon abandon abandon abandon \
+             abandon abandon abandon abandon abandon abandon abandon abandon \
+             abandon abandon abandon abandon abandon abandon abandon abandon"
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_seed_phrase_debug_redacted() {
+        let phrase = SeedPhrase::from_secret_key(&[42u8; 32]).unwrap();
+        let debug_str = format!("{:?}", phrase);
+        assert!(debug_str.contains("REDACTED"));
+        assert!(!debug_str.contains("42"));
     }
 
     // --- Inheritance Tests ---

@@ -156,6 +156,14 @@ impl ConsensusEngine {
         }
     }
 
+    /// Clear seen proposals for a specific height.
+    /// WHY: When a BFT-pending block expires, the producer needs to create
+    /// a new block at the same height. Without clearing, the new block
+    /// triggers false equivocation detection.
+    pub fn clear_proposals_for_height(&mut self, height: u64) {
+        self.seen_proposals.retain(|&(h, _), _| h != height);
+    }
+
     /// Get the current consensus state.
     pub fn state(&self) -> ConsensusState {
         self.state
@@ -187,6 +195,26 @@ impl ConsensusEngine {
             .as_ref()
             .map(|c| c.is_committee_member(&self.node_id))
             .unwrap_or(false)
+    }
+
+    /// Compute the RANDAO epoch seed from recent block history.
+    /// WHY: Using the hash of the last finalized block hash + current height as
+    /// the epoch seed makes committee selection unpredictable — an attacker would
+    /// need to control block production to manipulate the seed. The hardcoded
+    /// [0xAB; 32] seed made committee ordering completely deterministic and
+    /// predictable, which is a critical security vulnerability.
+    pub fn compute_epoch_seed(&self) -> [u8; 32] {
+        use sha2::{Sha256, Digest};
+        let mut hasher = Sha256::new();
+        hasher.update(b"gratia-epoch-seed-v1:");
+        // Use last_finalized_hash as minimum entropy
+        hasher.update(&self.last_finalized_hash.0);
+        // Add current height for per-epoch uniqueness
+        hasher.update(&self.current_height.to_be_bytes());
+        let result = hasher.finalize();
+        let mut seed = [0u8; 32];
+        seed.copy_from_slice(&result);
+        seed
     }
 
     /// Initialize the committee from a set of eligible nodes and a seed.
@@ -322,6 +350,7 @@ impl ConsensusEngine {
         transactions: Vec<Transaction>,
         attestations: Vec<ProofOfLifeAttestation>,
         state_root: [u8; 32],
+        producer_pubkey: Vec<u8>,
     ) -> Result<&PendingBlock, GratiaError> {
         if self.state != ConsensusState::Producing {
             return Err(GratiaError::BlockValidationFailed {
@@ -337,7 +366,7 @@ impl ConsensusEngine {
             }
         })?;
 
-        let pending = self.block_producer.produce_block(
+        let mut pending = self.block_producer.produce_block(
             transactions,
             attestations,
             self.last_finalized_hash,
@@ -346,6 +375,10 @@ impl ConsensusEngine {
             &self.vrf_secret_key,
             committee,
         )?;
+
+        // WHY: Set producer_pubkey so receiving peers can derive the
+        // correct wallet address for reward crediting.
+        pending.block.header.producer_pubkey = producer_pubkey;
 
         info!(
             height = height,
@@ -359,11 +392,14 @@ impl ConsensusEngine {
     }
 
     /// Get the finality threshold for the pending block (if any).
+    /// WHY: Returns usize::MAX when no pending block exists. A threshold of 0
+    /// would mean "instant finality with no signatures" — catastrophically wrong.
+    /// MAX means "never finalized" which is correct when nothing is pending.
     pub fn pending_finality_threshold(&self) -> usize {
         self.pending_block
             .as_ref()
             .map(|p| p.finality_threshold)
-            .unwrap_or(0)
+            .unwrap_or(usize::MAX)
     }
 
     /// Add a committee member's signature to the pending block.
@@ -610,6 +646,22 @@ impl ConsensusEngine {
             self.seen_proposals.retain(|&(h, _), _| h > cutoff);
         }
 
+        // SECURITY: For fast-forward blocks (gap=2), verify the producer is at
+        // least a committee member. We can't check the exact slot assignment (we
+        // don't have the intermediate block), but we must not accept blocks from
+        // nodes that aren't on the committee at all.
+        if is_fast_forward {
+            if let Some(ref committee) = self.current_committee {
+                let is_member = committee.members.iter()
+                    .any(|m| m.node_id == block.header.producer && !m.signing_pubkey.is_empty());
+                if !is_member {
+                    return Err(GratiaError::BlockValidationFailed {
+                        reason: "fast-forward block producer is not a committee member".into(),
+                    });
+                }
+            }
+        }
+
         // Normal case: block at expected next height with correct parent.
         // WHY: Validate that the block producer is a legitimate committee
         // member for this height. Skip for fast-forwards (gap=2) since
@@ -617,52 +669,53 @@ impl ConsensusEngine {
         // uses expected_height which doesn't match the actual block height.
         if !is_fast_forward {
         if let Some(ref committee) = self.current_committee {
-            let expected_producer = committee.block_producer_for_slot(expected_height);
-            if let Some(producer) = expected_producer {
-                if producer.node_id != block.header.producer {
-                    // WHY: Hard-reject blocks from the wrong producer. Both nodes
-                    // agree on slot = height, so they must agree on who produces.
-                    // Allow ±1 height tolerance for clock skew during transitions.
-                    let alt_height = expected_height.wrapping_add(1);
-                    let alt_producer = committee.block_producer_for_slot(alt_height);
-                    let allowed = alt_producer
-                        .map(|p| p.node_id == block.header.producer)
-                        .unwrap_or(false);
-                    if !allowed {
-                        warn!(
-                            height = expected_height,
-                            expected = ?producer.node_id,
-                            actual = ?block.header.producer,
-                            "Block producer mismatch — rejecting",
-                        );
-                        return Err(GratiaError::BlockValidationFailed {
-                            reason: "block producer does not match expected for this height".into(),
-                        });
-                    }
-                }
+            // WHY: Validate that the block producer is a committee member.
+            // We check membership rather than exact slot assignment because
+            // committee rebuilds happen at different times on each node (causing
+            // different start_slot values and therefore different slot-to-producer
+            // mappings). Membership check is sufficient for security — BFT finality
+            // (requiring threshold signatures) prevents any single node from
+            // unilaterally advancing the chain.
+            let is_committee_member = committee.members.iter()
+                .any(|m| m.node_id == block.header.producer);
+            if !is_committee_member {
+                warn!(
+                    height = expected_height,
+                    producer = ?block.header.producer,
+                    committee_size = committee.members.len(),
+                    "Block producer is not a committee member — rejecting",
+                );
+                return Err(GratiaError::BlockValidationFailed {
+                    reason: "block producer is not a committee member".into(),
+                });
             }
         }
         } // closes !is_fast_forward producer check
 
-        // SECURITY: Validate incoming block signatures meet finality threshold.
-        // WHY: Without this check, a malicious node can broadcast blocks with
-        // zero or insufficient signatures, and we'd accept them as finalized.
-        // This is the primary defense against forged blocks from the network.
+        // SECURITY: Validate incoming block has at least the producer's signature.
+        // WHY: In BFT consensus, blocks arrive as PROPOSALS with the producer's
+        // signature. Other committee members validate and co-sign, building toward
+        // the finality threshold. Requiring full threshold before accepting creates
+        // a deadlock: no one can co-sign until threshold is met, but threshold
+        // requires co-signatures. The security model:
+        //   1. Accept proposals with ≥1 valid signature (producer's)
+        //   2. Co-sign valid proposals (adds our signature)
+        //   3. Producer collects signatures until threshold is met
+        //   4. Block with full threshold signatures is the FINALIZED version
+        //   5. force_finalize() enforces threshold before committing to chain
+        // An attacker can't forge blocks because Ed25519 signatures are verified
+        // below, and the producer must be a committee member (checked above).
         if let Some(ref committee) = self.current_committee {
             let sig_count = block.validator_signatures.len();
-            let threshold = committee.finality_threshold;
-
-            // WHY: In bootstrap/solo mode (committee of 1 real + synthetics),
-            // require at least 1 signature. In multi-node mode, require the
-            // full BFT finality threshold.
-            let required = if threshold <= 1 { 1 } else { threshold };
+            let _threshold = committee.finality_threshold;
+            let required = 1; // Producer's signature minimum for BFT proposals
 
             if sig_count < required {
                 warn!(
                     height = incoming_height,
                     signatures = sig_count,
                     required = required,
-                    "Rejecting block: insufficient signatures for finality",
+                    "Rejecting block: no signatures at all",
                 );
                 return Err(GratiaError::InsufficientSignatures {
                     count: sig_count,
@@ -969,13 +1022,16 @@ impl ForkResolver {
     ///
     /// `our_sigs` and `their_sigs` are the number of valid committee signatures
     /// each block has collected.
+    /// WHY: Returns Result so hash computation failures propagate instead of
+    /// silently defaulting to zero hash, which could cause deterministic
+    /// tie-breaking to always pick the same "side" regardless of block content.
     pub fn resolve_fork(
         our_block: &Block,
         their_block: &Block,
         our_sigs: usize,
         their_sigs: usize,
         finality_threshold: usize,
-    ) -> ForkChoice {
+    ) -> Result<ForkChoice, GratiaError> {
         let our_height = our_block.header.height;
         let their_height = their_block.header.height;
 
@@ -983,9 +1039,9 @@ impl ForkResolver {
         // Different heights are handled by normal chain selection (highest wins).
         if our_height != their_height {
             if their_height > our_height {
-                return ForkChoice::SwitchToTheirs;
+                return Ok(ForkChoice::SwitchToTheirs);
             } else {
-                return ForkChoice::KeepOurs;
+                return Ok(ForkChoice::KeepOurs);
             }
         }
 
@@ -997,17 +1053,28 @@ impl ForkResolver {
                 their_sigs = their_sigs,
                 "Fork resolved: switching to block with more signatures"
             );
-            return ForkChoice::SwitchToTheirs;
+            return Ok(ForkChoice::SwitchToTheirs);
         }
 
         if our_sigs > their_sigs && our_sigs >= finality_threshold {
-            return ForkChoice::KeepOurs;
+            return Ok(ForkChoice::KeepOurs);
         }
 
         // Rule 2: Tie-break by block hash (deterministic).
+        // WHY: Hash failures must propagate as errors. Defaulting to zero hash
+        // would make tie-breaking deterministically wrong — both blocks would
+        // hash to zero and the comparison would be meaningless.
         if our_sigs == their_sigs && our_sigs >= finality_threshold {
-            let our_hash = our_block.header.hash().unwrap_or_default();
-            let their_hash = their_block.header.hash().unwrap_or_default();
+            let our_hash = our_block.header.hash().map_err(|_| {
+                GratiaError::BlockValidationFailed {
+                    reason: "failed to compute hash for our block during fork resolution".into(),
+                }
+            })?;
+            let their_hash = their_block.header.hash().map_err(|_| {
+                GratiaError::BlockValidationFailed {
+                    reason: "failed to compute hash for their block during fork resolution".into(),
+                }
+            })?;
 
             // WHY: Lower hash wins. Since block hashes include VRF output and
             // timestamps, this is effectively random but deterministic — all
@@ -1017,14 +1084,14 @@ impl ForkResolver {
                     height = our_height,
                     "Fork resolved: switching to block with lower hash (tie-break)"
                 );
-                return ForkChoice::SwitchToTheirs;
+                return Ok(ForkChoice::SwitchToTheirs);
             } else {
-                return ForkChoice::KeepOurs;
+                return Ok(ForkChoice::KeepOurs);
             }
         }
 
         // Neither block has reached finality — need more signatures.
-        ForkChoice::NeedMoreInfo
+        Ok(ForkChoice::NeedMoreInfo)
     }
 }
 
@@ -1106,7 +1173,7 @@ mod tests {
         engine.initialize_committee(&nodes, &[0xAB; 32], 0, 0).unwrap();
 
         // Should fail because we haven't advanced to a producing slot
-        let result = engine.produce_block(vec![], vec![], [0; 32]);
+        let result = engine.produce_block(vec![], vec![], [0; 32], vec![]);
         assert!(result.is_err());
     }
 
@@ -1138,7 +1205,7 @@ mod tests {
             if should_produce {
                 assert_eq!(engine.state(), ConsensusState::Producing);
 
-                let result = engine.produce_block(vec![], vec![], [0; 32]);
+                let result = engine.produce_block(vec![], vec![], [0; 32], vec![]);
                 assert!(result.is_ok());
             }
         }

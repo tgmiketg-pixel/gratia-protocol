@@ -147,6 +147,11 @@ pub enum SyncRequest {
         from_height: u64,
         to_height: u64,
     },
+    /// Forward a NodeAnnouncement directly to a peer via request-response.
+    /// WHY: Gossipsub publish fails when the mesh is one-directional (e.g.,
+    /// S25 outbound Noise handshakes fail). Request-response uses the
+    /// already-established connection and works regardless of gossipsub state.
+    ForwardAnnouncement(Vec<u8>),
 }
 
 /// Response to a sync request.
@@ -163,6 +168,9 @@ pub enum SyncResponse {
     Headers(Vec<(u64, BlockHash)>),
     /// Error response.
     Error(String),
+    /// Acknowledgement of a forwarded announcement (no data needed).
+    /// WHY: Request-response protocol requires a response for every request.
+    AnnounceAck,
 }
 
 impl SyncRequest {
@@ -567,6 +575,12 @@ impl SyncManager {
                     Some(blocks) => SyncResponse::Blocks(blocks),
                     None => SyncResponse::Error("Failed to retrieve blocks".to_string()),
                 }
+            }
+            SyncRequest::ForwardAnnouncement(_) => {
+                // WHY: Handled at the network event loop level, not here.
+                // The event loop deserializes the announcement and emits it
+                // as a NodeAnnouncementReceived event. We just ACK.
+                SyncResponse::AnnounceAck
             }
             SyncRequest::GetHeaders {
                 from_height,

@@ -72,11 +72,19 @@ pub struct NodeAnnouncement {
     /// verification without a lookup table.
     #[serde(default)]
     pub ed25519_pubkey: [u8; 32],
-    /// Ed25519 signature over (node_id || vrf_pubkey_bytes || presence_score || pol_days || timestamp).
+    /// Ed25519 signature over (node_id || vrf_pubkey_bytes || presence_score || pol_days || timestamp || height).
     /// WHY: Without a signature, any peer can claim any node_id with any score,
     /// enabling trivial committee takeover attacks.
     #[serde(default)]
     pub signature: Vec<u8>,
+    /// Current chain height of the announcing node.
+    /// WHY: During solo→multi transitions, two phones with independent solo
+    /// chains need to decide which chain to keep. The shorter chain resets
+    /// to height 0 and syncs from the longer chain. Including height in the
+    /// announcement lets the receiving node make this decision immediately
+    /// without waiting for sync protocol negotiation.
+    #[serde(default)]
+    pub height: u64,
 }
 
 /// A validator's signature on a pending block, broadcast for BFT finality.
@@ -212,12 +220,15 @@ impl GossipMessage {
 /// validation) must produce the exact same byte sequence. This function is the
 /// single source of truth for that encoding.
 pub fn node_announcement_signing_payload(ann: &NodeAnnouncement) -> Vec<u8> {
-    let mut payload = Vec::with_capacity(32 + 32 + 1 + 8 + 8);
+    let mut payload = Vec::with_capacity(32 + 32 + 1 + 8 + 8 + 8);
     payload.extend_from_slice(&ann.node_id.0);
     payload.extend_from_slice(&ann.vrf_pubkey_bytes);
     payload.push(ann.presence_score);
     payload.extend_from_slice(&ann.pol_days.to_be_bytes());
     payload.extend_from_slice(&ann.timestamp.timestamp().to_be_bytes());
+    // WHY: Height is included in the signed payload so a peer can't lie
+    // about their chain height during solo→multi fork resolution.
+    payload.extend_from_slice(&ann.height.to_be_bytes());
     payload
 }
 
@@ -239,7 +250,11 @@ fn verify_ed25519(pubkey_bytes: &[u8; 32], message: &[u8], sig_bytes: &[u8]) -> 
 /// WHY: Used to verify that a claimed ed25519_pubkey actually corresponds
 /// to the claimed node_id.
 fn node_id_from_pubkey(pubkey_bytes: &[u8; 32]) -> NodeId {
+    // WHY: Must match NodeId::from_public_key() in gratia-core which uses
+    // domain-separated hashing. Without the prefix, the derived NodeId
+    // won't match what phones put in their announcements.
     let mut hasher = Sha256::new();
+    hasher.update(b"gratia-node-id-v1:");
     hasher.update(pubkey_bytes);
     let result = hasher.finalize();
     let mut id = [0u8; 32];
@@ -391,6 +406,23 @@ pub fn validate_incoming_message(data: &[u8]) -> Result<GossipMessage, NetworkEr
             if let Err(e) = verify_ed25519(&ann.ed25519_pubkey, &payload, &ann.signature) {
                 return Err(NetworkError::InvalidMessage(
                     format!("NodeAnnouncement signature invalid: {}", e),
+                ));
+            }
+            // SECURITY: Reject stale announcements to prevent replay attacks.
+            // An attacker capturing a valid signed announcement could replay it
+            // to re-add a departed peer or trigger committee rebuilds with stale data.
+            // 5-minute window accounts for clock skew between mobile devices.
+            let now = chrono::Utc::now();
+            let age = now.signed_duration_since(ann.timestamp);
+            if age.num_seconds() > 300 {
+                return Err(NetworkError::InvalidMessage(
+                    format!("NodeAnnouncement timestamp too old: {}s (max 300s)", age.num_seconds()),
+                ));
+            }
+            // Reject announcements from the future (clock manipulation defense)
+            if age.num_seconds() < -60 {
+                return Err(NetworkError::InvalidMessage(
+                    format!("NodeAnnouncement timestamp in future: {}s", -age.num_seconds()),
                 ));
             }
         }

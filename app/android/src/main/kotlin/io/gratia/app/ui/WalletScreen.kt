@@ -1291,6 +1291,15 @@ private fun SendDialog(
                     }
                     // Convert GRAT to Lux (1 GRAT = 1,000,000 Lux)
                     val lux = (gratAmount * 1_000_000).toLong()
+                    // Validate that amount + fee doesn't exceed balance.
+                    // The Rust FFI adds a 1000 Lux (0.001 GRAT) fee on top of the
+                    // send amount. Without this check, manually typing the full
+                    // balance causes rejection because total > balance.
+                    val TX_FEE_LUX = 1000L
+                    if (lux + TX_FEE_LUX > balanceLux) {
+                        amountError = "Insufficient balance (0.001 GRAT fee required)"
+                        return@Button
+                    }
                     onSend(toAddress, lux)
                 },
             ) {

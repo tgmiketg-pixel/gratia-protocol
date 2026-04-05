@@ -52,6 +52,12 @@ const INVALID_TX_PENALTY: i32 = -10;
 /// WHY: Higher than invalid tx because spam has zero legitimate purpose.
 const SPAM_PENALTY: i32 = -15;
 
+/// Score penalty for exceeding a rate limit on a known action type.
+/// WHY: Much lighter than SPAM_PENALTY because rate-limit violations on
+/// known topics (blocks, txs) can happen legitimately during bursts or
+/// minor timing skew. Only repeated sustained flooding should tank reputation.
+const RATE_LIMIT_PENALTY: i32 = -2;
+
 /// Score threshold at which a peer should be disconnected.
 const DISCONNECT_THRESHOLD: i32 = -50;
 
@@ -74,9 +80,10 @@ const HARD_BAN_DURATION_HOURS: i64 = 24;
 const RATE_WINDOW_SECS: i64 = 60;
 
 /// Maximum blocks a single peer may relay per window.
-/// WHY: At 3-5 second block times, ~12-20 blocks/min is the theoretical max;
-/// 10 allows normal operation while catching obvious floods.
-const MAX_BLOCKS_PER_MINUTE: usize = 10;
+/// WHY: At 3-5 second block times, 12-20 blocks/min is the theoretical max.
+/// 25 gives comfortable headroom for legitimate burst relay (e.g., a peer
+/// catching up after a brief disconnect) while still catching real floods.
+const MAX_BLOCKS_PER_MINUTE: usize = 25;
 
 /// Maximum transactions a single peer may relay per window.
 /// WHY: Mobile nodes have limited bandwidth; 100 txs/min is generous for
@@ -281,6 +288,25 @@ impl ReputationManager {
         warn!(peer = peer_id, score = rep.score, "spam message, reputation -15");
     }
 
+    /// Record that `peer_id` exceeded a rate limit on a known action type.
+    ///
+    /// WHY: This is separate from `record_spam` because rate-limit violations
+    /// on recognized topics (blocks, txs, announcements) can happen during
+    /// legitimate bursts — e.g., a peer relaying blocks after a brief
+    /// disconnect. The penalty is much lighter (-2 vs -15) so that normal
+    /// operation at block-production rates doesn't crater a peer's reputation.
+    /// Sustained flooding still accumulates enough penalties to trigger bans.
+    pub fn record_rate_limited(&mut self, peer_id: &str, action: &str) {
+        let rep = self.entry(peer_id);
+        rep.apply_delta(RATE_LIMIT_PENALTY);
+        debug!(
+            peer = peer_id,
+            action = action,
+            score = rep.score,
+            "rate limited on known action, reputation -2"
+        );
+    }
+
     // ----- queries -----
 
     /// Returns `true` if the peer is currently serving a ban.
@@ -400,6 +426,11 @@ impl RateLimiter {
         limits.insert("block".to_string(), MAX_BLOCKS_PER_MINUTE);
         limits.insert("tx".to_string(), MAX_TXS_PER_MINUTE);
         limits.insert("message".to_string(), MAX_MESSAGES_PER_MINUTE);
+        // WHY: NodeAnnouncements re-broadcast every 5-32s for peer discovery.
+        // With 20 peers, that's ~20 announcements/min per peer — generous limit.
+        limits.insert("announce".to_string(), 30);
+        // WHY: Validator signatures arrive per-block (~15/min in solo, less in BFT).
+        limits.insert("validator_sig".to_string(), 30);
 
         Self {
             windows: HashMap::new(),
@@ -524,6 +555,31 @@ mod tests {
         let mut mgr = ReputationManager::new();
         mgr.record_spam("peer1");
         assert_eq!(mgr.get_score("peer1"), DEFAULT_SCORE + SPAM_PENALTY);
+    }
+
+    #[test]
+    fn rate_limited_uses_light_penalty() {
+        let mut mgr = ReputationManager::new();
+        mgr.record_rate_limited("peer1", "block");
+        // -2 instead of -15
+        assert_eq!(mgr.get_score("peer1"), DEFAULT_SCORE + RATE_LIMIT_PENALTY);
+        assert_eq!(mgr.get_score("peer1"), 98);
+    }
+
+    #[test]
+    fn rate_limited_does_not_crater_score_at_normal_rates() {
+        let mut mgr = ReputationManager::new();
+        // Simulate 15 valid blocks (normal 4s production for 1 minute)
+        for _ in 0..15 {
+            mgr.record_valid_block("peer1");
+        }
+        // Then 5 rate-limited hits (brief burst)
+        for _ in 0..5 {
+            mgr.record_rate_limited("peer1", "block");
+        }
+        // 100 + (15 * 5) + (5 * -2) = 100 + 75 - 10 = 165
+        assert_eq!(mgr.get_score("peer1"), 165);
+        assert!(!mgr.should_disconnect("peer1"));
     }
 
     #[test]

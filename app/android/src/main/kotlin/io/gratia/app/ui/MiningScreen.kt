@@ -515,7 +515,12 @@ private fun MiningStateCard(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Stop Mining")
                 }
-            } else if ((status.state == "proof_of_life" || status.state == "pending_activation") && status.isPluggedIn && status.batteryPercent >= 80 && status.currentDayPolValid) {
+            } else if (status.isPluggedIn && status.batteryPercent >= 80) {
+                // WHY: Show Start Mining when power conditions are met regardless
+                // of Rust-reported state. The Rust power_state may not have been
+                // updated yet (mining service not running), but the Kotlin layer
+                // knows the real battery state. PoL and other checks are enforced
+                // at the protocol level in Rust when mining actually starts.
                 Button(onClick = onStartMining) {
                     Icon(
                         Icons.Default.PlayArrow,

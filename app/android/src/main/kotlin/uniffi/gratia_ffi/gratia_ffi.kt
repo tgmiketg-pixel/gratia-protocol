@@ -856,6 +856,14 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -911,19 +919,27 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_cross_shard_queue_size(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Int
+    fun uniffi_gratia_ffi_fn_method_gratianode_get_health_report(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_last_pol_proof(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_mesh_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_get_mining_stats(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_mining_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_network_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_get_poll_results(`ptr`: Pointer,`pollIdHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_polls(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_pool_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_proof_of_life_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_gratia_ffi_fn_method_gratianode_get_proposal(`ptr`: Pointer,`proposalIdHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_gratia_ffi_fn_method_gratianode_get_proposals(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1163,19 +1179,27 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_cross_shard_queue_size(
     ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_get_health_report(
+    ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_last_pol_proof(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_mesh_status(
     ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_get_mining_stats(
+    ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_mining_status(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_network_status(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_get_poll_results(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_polls(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_pool_status(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_proof_of_life_status(
+    ): Short
+    fun uniffi_gratia_ffi_checksum_method_gratianode_get_proposal(
     ): Short
     fun uniffi_gratia_ffi_checksum_method_gratianode_get_proposals(
     ): Short
@@ -1316,7 +1340,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_enable_debug_bypass() != 53967.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_export_seed_phrase() != 28164.toShort()) {
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_export_seed_phrase() != 62979.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_finalize_day() != 30023.toShort()) {
@@ -1337,16 +1361,25 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_cross_shard_queue_size() != 8286.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_health_report() != 6361.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_last_pol_proof() != 27228.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_mesh_status() != 5869.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_mining_stats() != 1984.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_mining_status() != 12667.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_network_status() != 38657.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_poll_results() != 61883.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_polls() != 17116.toShort()) {
@@ -1356,6 +1389,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_proof_of_life_status() != 59779.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_proposal() != 46899.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_gratia_ffi_checksum_method_gratianode_get_proposals() != 23105.toShort()) {
@@ -1716,6 +1752,29 @@ public object FfiConverterFloat: FfiConverter<Float, Float> {
 /**
  * @suppress
  */
+public object FfiConverterDouble: FfiConverter<Double, Double> {
+    override fun lift(value: Double): Double {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Double {
+        return buf.getDouble()
+    }
+
+    override fun lower(value: Double): Double {
+        return value
+    }
+
+    override fun allocationSize(value: Double) = 8UL
+
+    override fun write(value: Double, buf: ByteBuffer) {
+        buf.putDouble(value)
+    }
+}
+
+/**
+ * @suppress
+ */
 public object FfiConverterBoolean: FfiConverter<Boolean, Byte> {
     override fun lift(value: Byte): Boolean {
         return value.toInt() != 0
@@ -2043,9 +2102,9 @@ public interface GratiaNodeInterface {
      * Export the wallet's seed phrase as a hex string.
      *
      * WHY: Optional backup mechanism. The seed phrase IS the raw Ed25519
-     * private key encoded as hex. In production, this would be converted to
-     * a BIP39 24-word mnemonic. For Phase 2, hex export is sufficient for
-     * wallet recovery between devices.
+     * private key encoded as hex. Prefer `export_seed_words()` for a
+     * human-friendly 24-word BIP39 mnemonic when the `seed-phrase` feature
+     * is enabled.
      *
      * This is deliberately buried behind a confirmation dialog in the UI
      * and not shown during onboarding — per the design spec, behavioral
@@ -2114,6 +2173,16 @@ public interface GratiaNodeInterface {
     fun `getCrossShardQueueSize`(): kotlin.UInt
     
     /**
+     * Build a JSON health report for remote diagnostics.
+     *
+     * WHY: When testing on remote phones (e.g., Samsung A06 without physical
+     * access), we need a lightweight snapshot of node health. This is READ-ONLY
+     * — the Kotlin layer decides where to send it (bootstrap server, local file,
+     * or nowhere). No networking or external dependencies added.
+     */
+    fun `getHealthReport`(): kotlin.String
+    
+    /**
      * Retrieve the last successfully generated Proof of Life ZK proof from the
      * PoL manager, if one exists.
      *
@@ -2132,6 +2201,21 @@ public interface GratiaNodeInterface {
     fun `getMeshStatus`(): FfiMeshStatus
     
     /**
+     * Get mining stats optimized for UI animation data.
+     *
+     * WHY: The Kotlin UI layer needs a single lightweight JSON blob to drive:
+     * - Live balance with tick-up animation (total_balance_lux changes)
+     * - Mining streak fire counter (streak_days from PoL consecutive days)
+     * - Session earnings display (session_grat / session_blocks)
+     * - Peer count and block production indicator
+     * - Last reward age for pulse/glow animation
+     * - PoL parameter progress (params_met / params_total)
+     *
+     * Called on a 1-second timer from Kotlin — must be fast (no I/O).
+     */
+    fun `getMiningStats`(): kotlin.String
+    
+    /**
      * Get the current mining status.
      */
     fun `getMiningStatus`(): FfiMiningStatus
@@ -2140,6 +2224,14 @@ public interface GratiaNodeInterface {
      * Get the current network status.
      */
     fun `getNetworkStatus`(): FfiNetworkStatus
+    
+    /**
+     * Get detailed results for a poll by hex ID.
+     *
+     * Returns per-option vote counts and percentages, total voters,
+     * and whether the poll has expired.
+     */
+    fun `getPollResults`(`pollIdHex`: kotlin.String): FfiPollResults
     
     /**
      * Get all active polls.
@@ -2158,6 +2250,11 @@ public interface GratiaNodeInterface {
      * Get the current Proof of Life status.
      */
     fun `getProofOfLifeStatus`(): FfiProofOfLifeStatus
+    
+    /**
+     * Get a single proposal by hex ID.
+     */
+    fun `getProposal`(`proposalIdHex`: kotlin.String): FfiProposal
     
     /**
      * Get all proposals (active and past).
@@ -2812,9 +2909,9 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
      * Export the wallet's seed phrase as a hex string.
      *
      * WHY: Optional backup mechanism. The seed phrase IS the raw Ed25519
-     * private key encoded as hex. In production, this would be converted to
-     * a BIP39 24-word mnemonic. For Phase 2, hex export is sufficient for
-     * wallet recovery between devices.
+     * private key encoded as hex. Prefer `export_seed_words()` for a
+     * human-friendly 24-word BIP39 mnemonic when the `seed-phrase` feature
+     * is enabled.
      *
      * This is deliberately buried behind a confirmation dialog in the UI
      * and not shown during onboarding — per the design spec, behavioral
@@ -2960,6 +3057,27 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
 
     
     /**
+     * Build a JSON health report for remote diagnostics.
+     *
+     * WHY: When testing on remote phones (e.g., Samsung A06 without physical
+     * access), we need a lightweight snapshot of node health. This is READ-ONLY
+     * — the Kotlin layer decides where to send it (bootstrap server, local file,
+     * or nowhere). No networking or external dependencies added.
+     */
+    @Throws(FfiException::class)override fun `getHealthReport`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_get_health_report(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Retrieve the last successfully generated Proof of Life ZK proof from the
      * PoL manager, if one exists.
      *
@@ -3000,6 +3118,32 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
 
     
     /**
+     * Get mining stats optimized for UI animation data.
+     *
+     * WHY: The Kotlin UI layer needs a single lightweight JSON blob to drive:
+     * - Live balance with tick-up animation (total_balance_lux changes)
+     * - Mining streak fire counter (streak_days from PoL consecutive days)
+     * - Session earnings display (session_grat / session_blocks)
+     * - Peer count and block production indicator
+     * - Last reward age for pulse/glow animation
+     * - PoL parameter progress (params_met / params_total)
+     *
+     * Called on a 1-second timer from Kotlin — must be fast (no I/O).
+     */
+    @Throws(FfiException::class)override fun `getMiningStats`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_get_mining_stats(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Get the current mining status.
      */
     @Throws(FfiException::class)override fun `getMiningStatus`(): FfiMiningStatus {
@@ -3024,6 +3168,25 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
     uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_get_network_status(
         it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Get detailed results for a poll by hex ID.
+     *
+     * Returns per-option vote counts and percentages, total voters,
+     * and whether the poll has expired.
+     */
+    @Throws(FfiException::class)override fun `getPollResults`(`pollIdHex`: kotlin.String): FfiPollResults {
+            return FfiConverterTypeFfiPollResults.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_get_poll_results(
+        it, FfiConverterString.lower(`pollIdHex`),_status)
 }
     }
     )
@@ -3075,6 +3238,22 @@ open class GratiaNode: Disposable, AutoCloseable, GratiaNodeInterface {
     uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_get_proof_of_life_status(
         it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Get a single proposal by hex ID.
+     */
+    @Throws(FfiException::class)override fun `getProposal`(`proposalIdHex`: kotlin.String): FfiProposal {
+            return FfiConverterTypeFfiProposal.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_gratia_ffi_fn_method_gratianode_get_proposal(
+        it, FfiConverterString.lower(`proposalIdHex`),_status)
 }
     }
     )
@@ -4746,6 +4925,99 @@ public object FfiConverterTypeFfiPoll: FfiConverterRustBuffer<FfiPoll> {
 
 
 /**
+ * Detailed poll results for the mobile UI.
+ */
+data class FfiPollOptionResult (
+    var `index`: kotlin.UInt, 
+    var `label`: kotlin.String, 
+    var `votes`: kotlin.ULong, 
+    /**
+     * Percentage of total voters (0.0 - 100.0).
+     */
+    var `percentage`: kotlin.Double
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiPollOptionResult: FfiConverterRustBuffer<FfiPollOptionResult> {
+    override fun read(buf: ByteBuffer): FfiPollOptionResult {
+        return FfiPollOptionResult(
+            FfiConverterUInt.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterDouble.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiPollOptionResult) = (
+            FfiConverterUInt.allocationSize(value.`index`) +
+            FfiConverterString.allocationSize(value.`label`) +
+            FfiConverterULong.allocationSize(value.`votes`) +
+            FfiConverterDouble.allocationSize(value.`percentage`)
+    )
+
+    override fun write(value: FfiPollOptionResult, buf: ByteBuffer) {
+            FfiConverterUInt.write(value.`index`, buf)
+            FfiConverterString.write(value.`label`, buf)
+            FfiConverterULong.write(value.`votes`, buf)
+            FfiConverterDouble.write(value.`percentage`, buf)
+    }
+}
+
+
+
+/**
+ * Aggregated poll results including per-option breakdown.
+ */
+data class FfiPollResults (
+    var `pollIdHex`: kotlin.String, 
+    var `question`: kotlin.String, 
+    var `totalVoters`: kotlin.ULong, 
+    var `options`: List<FfiPollOptionResult>, 
+    var `expired`: kotlin.Boolean
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiPollResults: FfiConverterRustBuffer<FfiPollResults> {
+    override fun read(buf: ByteBuffer): FfiPollResults {
+        return FfiPollResults(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterSequenceTypeFfiPollOptionResult.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiPollResults) = (
+            FfiConverterString.allocationSize(value.`pollIdHex`) +
+            FfiConverterString.allocationSize(value.`question`) +
+            FfiConverterULong.allocationSize(value.`totalVoters`) +
+            FfiConverterSequenceTypeFfiPollOptionResult.allocationSize(value.`options`) +
+            FfiConverterBoolean.allocationSize(value.`expired`)
+    )
+
+    override fun write(value: FfiPollResults, buf: ByteBuffer) {
+            FfiConverterString.write(value.`pollIdHex`, buf)
+            FfiConverterString.write(value.`question`, buf)
+            FfiConverterULong.write(value.`totalVoters`, buf)
+            FfiConverterSequenceTypeFfiPollOptionResult.write(value.`options`, buf)
+            FfiConverterBoolean.write(value.`expired`, buf)
+    }
+}
+
+
+
+/**
  * Network Security Pool status for the mobile UI.
  *
  * WHY: The mobile app needs to display how much overflow is in the pool,
@@ -6276,6 +6548,34 @@ public object FfiConverterSequenceTypeFfiPoll: FfiConverterRustBuffer<List<FfiPo
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeFfiPoll.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeFfiPollOptionResult: FfiConverterRustBuffer<List<FfiPollOptionResult>> {
+    override fun read(buf: ByteBuffer): List<FfiPollOptionResult> {
+        val len = buf.getInt()
+        return List<FfiPollOptionResult>(len) {
+            FfiConverterTypeFfiPollOptionResult.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FfiPollOptionResult>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFfiPollOptionResult.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FfiPollOptionResult>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFfiPollOptionResult.write(it, buf)
         }
     }
 }

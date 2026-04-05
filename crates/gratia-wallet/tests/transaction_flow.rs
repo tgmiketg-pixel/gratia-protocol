@@ -128,7 +128,7 @@ fn test_transaction_history_recorded() {
 fn test_emission_schedule_block_reward_decreases() {
     // Year 1 reward should be higher than year 2
     let year_1_reward = EmissionSchedule::block_reward_lux(1);
-    let year_2_reward = EmissionSchedule::block_reward_lux(2_628_001); // First block of year 2
+    let year_2_reward = EmissionSchedule::block_reward_lux(7_884_001); // First block of year 2
 
     assert!(year_1_reward > year_2_reward);
     // Year 2 should be ~75% of year 1

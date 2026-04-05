@@ -72,6 +72,10 @@ echo ""
 echo "[1/4] Cross-compiling gratia-ffi for $ANDROID_TARGET ($PROFILE)..."
 
 cd "$PROJECT_ROOT"
+# WHY: Force-clean gratia-ffi before cross-compiling. Cargo's incremental
+# compilation can miss changes to lib.rs when timestamps are ambiguous
+# (common on Windows NTFS + MinGW). Without this, stale .so gets deployed.
+cargo clean -p gratia-ffi --target "$ANDROID_TARGET" 2>/dev/null || true
 cargo build \
     --target "$ANDROID_TARGET" \
     -p gratia-ffi \

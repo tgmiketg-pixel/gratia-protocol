@@ -17,6 +17,9 @@ use thiserror::Error;
 pub enum GasError {
     #[error("out of gas: used {used}, limit {limit}")]
     OutOfGas { used: u64, limit: u64 },
+
+    #[error("gas limit too high: {requested}, maximum allowed is {max}")]
+    GasLimitTooHigh { requested: u64, max: u64 },
 }
 
 // ============================================================================
@@ -168,6 +171,13 @@ impl Default for GasCosts {
 // GasMeter
 // ============================================================================
 
+/// Maximum gas limit allowed per execution.
+/// WHY: At u64::MAX, the saturating_add in charge() means gas_used can
+/// saturate to u64::MAX and then never exceed it, allowing infinite free
+/// computation. 10 billion gas (~10 seconds of ARM compute at 1 GHz) is
+/// far more than any legitimate contract needs within a 500ms time window.
+pub const MAX_GAS_LIMIT: u64 = 10_000_000_000;
+
 /// Tracks gas consumption during contract execution.
 ///
 /// The meter is initialized with a gas limit (set by the transaction sender)
@@ -185,18 +195,36 @@ pub struct GasMeter {
 
 impl GasMeter {
     /// Create a new GasMeter with the given limit and default costs.
+    /// The limit is capped at MAX_GAS_LIMIT to prevent edge cases at u64::MAX.
     pub fn new(limit: u64) -> Self {
         GasMeter {
-            limit,
+            limit: limit.min(MAX_GAS_LIMIT),
             used: 0,
             costs: GasCosts::default(),
         }
     }
 
+    /// Create a new GasMeter, returning an error if the limit exceeds MAX_GAS_LIMIT.
+    /// Use this when the caller needs to know the limit was rejected rather than silently capped.
+    pub fn new_checked(limit: u64) -> Result<Self, GasError> {
+        if limit > MAX_GAS_LIMIT {
+            return Err(GasError::GasLimitTooHigh {
+                requested: limit,
+                max: MAX_GAS_LIMIT,
+            });
+        }
+        Ok(GasMeter {
+            limit,
+            used: 0,
+            costs: GasCosts::default(),
+        })
+    }
+
     /// Create a new GasMeter with custom gas costs.
+    /// The limit is capped at MAX_GAS_LIMIT to prevent edge cases at u64::MAX.
     pub fn with_costs(limit: u64, costs: GasCosts) -> Self {
         GasMeter {
-            limit,
+            limit: limit.min(MAX_GAS_LIMIT),
             used: 0,
             costs,
         }

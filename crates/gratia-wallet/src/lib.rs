@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use gratia_core::error::GratiaError;
-use gratia_core::types::{Address, Lux, Transaction, TransactionPayload};
+use gratia_core::types::{Address, Lux, NodeId, Transaction, TransactionPayload};
 
 use crate::keystore::{FileKeystore, Keystore, SoftwareKeystore};
 use crate::recovery::{InheritanceConfig, RecoveryClaim, SeedPhrase};
@@ -175,6 +175,17 @@ impl<K: Keystore> WalletManager<K> {
     pub fn address(&self) -> Result<Address, GratiaError> {
         let pubkey = self.keystore.public_key_bytes()?;
         keystore::address_from_pubkey_bytes(&pubkey)
+    }
+
+    /// Get the node identity (NodeId) derived from the public key.
+    ///
+    /// WHY: NodeId uses domain separation "gratia-node-id-v1:" which is distinct
+    /// from the Address domain "gratia-address-v1:". Previously, the FFI layer
+    /// incorrectly derived NodeId from Address bytes, causing a mismatch between
+    /// the identity used in gossip validation and the identity used locally.
+    pub fn node_id(&self) -> Result<NodeId, GratiaError> {
+        let pubkey = self.keystore.public_key_bytes()?;
+        keystore::node_id_from_pubkey_bytes(&pubkey)
     }
 
     /// Get the cached balance (in Lux).
@@ -460,6 +471,25 @@ impl<K: Keystore> WalletManager<K> {
         Ok(address)
     }
 
+    /// Export the seed phrase as a 24-word BIP39 mnemonic.
+    ///
+    /// Requires the `seed-phrase` feature. This is the human-friendly
+    /// representation that should be shown to the user on explicit request only.
+    #[cfg(feature = "seed-phrase")]
+    pub fn export_seed_words(&self) -> Result<String, GratiaError> {
+        let phrase = self.export_seed_phrase()?;
+        phrase.to_words()
+    }
+
+    /// Restore a wallet from a 24-word BIP39 mnemonic.
+    ///
+    /// Requires the `seed-phrase` feature.
+    #[cfg(feature = "seed-phrase")]
+    pub fn import_seed_words(&mut self, words: &str) -> Result<Address, GratiaError> {
+        let phrase = SeedPhrase::from_words(words)?;
+        self.import_seed_phrase(&phrase)
+    }
+
     // --- Inheritance ---
 
     /// Enable inheritance with a beneficiary address.
@@ -641,6 +671,23 @@ mod tests {
         // Import into a fresh wallet
         let mut wm2 = WalletManager::new_software();
         let addr2 = wm2.import_seed_phrase(&phrase).unwrap();
+
+        assert_eq!(addr1, addr2);
+    }
+
+    #[cfg(feature = "seed-phrase")]
+    #[test]
+    fn test_seed_words_export_and_import() {
+        let mut wm1 = WalletManager::new_software();
+        let addr1 = wm1.create_wallet().unwrap();
+
+        // Export as 24-word mnemonic
+        let words = wm1.export_seed_words().unwrap();
+        assert_eq!(words.split_whitespace().count(), 24);
+
+        // Import into a fresh wallet using the words
+        let mut wm2 = WalletManager::new_software();
+        let addr2 = wm2.import_seed_words(&words).unwrap();
 
         assert_eq!(addr1, addr2);
     }

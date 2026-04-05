@@ -32,7 +32,10 @@ fn make_node(index: u32, presence_score: u8, pol_days: u64) -> EligibleNode {
         has_valid_pol: true,
         meets_minimum_stake: true,
         pol_days,
-        signing_pubkey: vec![],
+        // WHY: Non-empty signing_pubkey marks this as a real node (not a
+        // synthetic placeholder). The solo-mode threshold override only
+        // applies when ≤1 member has a real signing key.
+        signing_pubkey: node_id.to_vec(),
         vrf_proof: vec![],
     }
 }

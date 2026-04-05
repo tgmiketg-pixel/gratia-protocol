@@ -162,15 +162,20 @@ impl ContractPermissions {
     /// Check if a specific host function is permitted.
     pub fn check_permission(&self, function_name: &str) -> Result<(), SandboxError> {
         let permitted = match function_name {
-            "get_location" => self.location,
-            "get_nearby_peers" => self.proximity,
+            "get_location" | "get_location_lat" | "get_location_lon" => self.location,
+            "get_nearby_peers" | "get_nearby_peer_count" => self.proximity,
             "get_presence_score" => self.presence,
-            "get_sensor_data" => self.sensor,
+            "get_sensor_data" | "get_sensor_reading" => self.sensor,
             // Block info and caller info are always available — they don't
             // leak privacy-sensitive data beyond what's on-chain already.
             "get_block_height" | "get_block_timestamp" => true,
             "get_caller_address" | "get_caller_balance" => true,
-            _ => true,
+            // WHY: Storage and events are core contract operations, always allowed.
+            "storage_read" | "storage_write" | "emit_event" | "log" => true,
+            // WHY: Default deny for unknown host functions. Previously defaulted
+            // to true, which allowed split function names like "get_location_lat"
+            // to bypass permission checks by falling through to the catch-all.
+            _ => false,
         };
 
         if permitted {

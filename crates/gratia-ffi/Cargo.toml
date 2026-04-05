@@ -14,6 +14,10 @@ default = []
 # for cross-compilation. The default (no feature) uses InMemoryStore + file
 # persistence which works everywhere without C++ dependencies.
 rocksdb-backend = ["gratia-state/rocksdb-backend"]
+# WHY: Enables BIP39 24-word mnemonic export/import for optional seed phrase
+# backup. Opt-in — not included in default to minimize binary size and
+# make clear this is a secondary recovery mechanism (PoL behavioral is primary).
+seed-phrase = ["gratia-wallet/seed-phrase"]
 
 [dependencies]
 # UniFFI for generating Kotlin (Android) and Swift (iOS) bindings

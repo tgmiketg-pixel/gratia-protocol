@@ -17,6 +17,7 @@ gratia-zk = { path = "../crates/gratia-zk" }
 gratia-staking = { path = "../crates/gratia-staking" }
 arbitrary = { version = "1", features = ["derive"] }
 bincode = "1.3"
+chrono = { version = "0.4", features = ["serde"] }
 libp2p = { version = "0.54", features = ["tokio"] }
 
 # Prevent this from being built as part of the main workspace
@@ -50,4 +51,19 @@ doc = false
 [[bin]]
 name = "fuzz_bulletproofs_generate"
 path = "fuzz_targets/fuzz_bulletproofs_generate.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_node_announcement"
+path = "fuzz_targets/fuzz_node_announcement.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_committee_selection"
+path = "fuzz_targets/fuzz_committee_selection.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_bft_signature"
+path = "fuzz_targets/fuzz_bft_signature.rs"
 doc = false

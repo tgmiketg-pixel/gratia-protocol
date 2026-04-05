@@ -369,6 +369,7 @@ class GratiaApplication : Application() {
 
         try {
             GratiaCoreManager.initialize(dataDir)
+            GratiaCoreManager.batteryManager = getSystemService(BATTERY_SERVICE) as? android.os.BatteryManager
             Log.i(TAG, "Rust core initialized successfully")
 
             // WHY: Enable debug bypass in debug builds so we can test mining

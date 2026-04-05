@@ -428,11 +428,27 @@ class MiningViewModel : ViewModel() {
             val consensusActive = consensus != null && consensus.state != "stopped"
             val network = try { bridge.getNetworkStatus() } catch (_: Exception) { null }
             val syncStatus = try { bridge.requestSync() } catch (_: Exception) { "unknown" }
+            // WHY: Rust power_state may not have been updated yet if the
+            // mining service hasn't started. Fall back to Android's BatteryManager
+            // sensor so the UI shows accurate power info and the "Start Mining"
+            // button appears when conditions are actually met.
+            val androidBattery = if (mining.batteryPercent == 0) {
+                val bm = bridge.batteryManager
+                if (bm != null) {
+                    val level = bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY).coerceIn(0, 100)
+                    val charging = bm.isCharging
+                    Pair(level, charging)
+                } else {
+                    Pair(mining.batteryPercent, mining.isPluggedIn)
+                }
+            } else {
+                Pair(mining.batteryPercent, mining.isPluggedIn)
+            }
             _uiState.value = _uiState.value.copy(
                 miningStatus = MiningStatus(
                     state = mining.state,
-                    batteryPercent = mining.batteryPercent,
-                    isPluggedIn = mining.isPluggedIn,
+                    batteryPercent = androidBattery.first,
+                    isPluggedIn = androidBattery.second,
                     currentDayPolValid = mining.currentDayPolValid,
                     presenceScore = mining.presenceScore,
                     earnedThisSessionLux = walletBalance,

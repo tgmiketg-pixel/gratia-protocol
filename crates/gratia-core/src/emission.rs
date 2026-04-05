@@ -30,12 +30,12 @@ pub const YEAR_1_EMISSION_GRAT: u64 = 2_125_000_000;
 pub const ANNUAL_RETENTION_BPS: u64 = 7500;
 
 /// Target block time in seconds.
-/// WHY: 12 seconds balances finality speed against mobile device constraints
-/// (network latency, ARM compute budget, battery impact).
-pub const BLOCK_TIME_SECS: u64 = 12;
+/// WHY: Must match the consensus engine's TARGET_BLOCK_TIME_SECS (4 seconds).
+/// 4 seconds is the midpoint of the 3-5 second target range from the spec.
+pub const BLOCK_TIME_SECS: u64 = 4;
 
 /// Blocks per day at the target block time.
-/// WHY: 86400 seconds/day / 12 seconds/block = 7200 blocks/day.
+/// WHY: 86400 seconds/day / 4 seconds/block = 21600 blocks/day.
 pub const BLOCKS_PER_DAY: u64 = 86_400 / BLOCK_TIME_SECS;
 
 /// Blocks per year (approximate, using 365 days).
@@ -86,7 +86,7 @@ impl EmissionSchedule {
         // formula (daily_grat / BLOCKS_PER_DAY * LUX_PER_GRAT) lost precision
         // because integer division truncated before the multiply. At year ~50+,
         // daily_grat < BLOCKS_PER_DAY causing per_block_grat = 0. Computing
-        // in Lux first: (daily_grat * 1_000_000) / 7200 preserves sub-GRAT
+        // in Lux first: (daily_grat * 1_000_000) / 21600 preserves sub-GRAT
         // rewards. Overflow is safe: max daily_grat (~2.7M) * 1M = 2.7T < u64::MAX.
         (daily_grat * LUX_PER_GRAT) / BLOCKS_PER_DAY
     }
@@ -195,8 +195,8 @@ mod tests {
 
         let reward = EmissionSchedule::block_reward_lux(0); // height 0 = year 1
         assert_eq!(reward, expected_lux);
-        // Sanity: ~808.6 GRAT per block
-        assert_eq!(reward, 808_599_583);
+        // Sanity: ~269.5 GRAT per block (3x less than 12s blocks, same daily total)
+        assert_eq!(reward, 269_533_194);
     }
 
     #[test]
@@ -207,7 +207,7 @@ mod tests {
         // Last block of year 1
         assert_eq!(EmissionSchedule::year_for_height(BLOCKS_PER_YEAR - 1), 1);
 
-        // First block of year 2 (height = BLOCKS_PER_YEAR = 2,628,000)
+        // First block of year 2 (height = BLOCKS_PER_YEAR = 7,884,000)
         assert_eq!(EmissionSchedule::year_for_height(BLOCKS_PER_YEAR), 2);
 
         // Midway through year 3

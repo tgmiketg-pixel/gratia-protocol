@@ -396,8 +396,16 @@ impl FileKeystore {
             GratiaError::Other(format!("failed to serialize encrypted key: {}", e))
         })?;
 
-        std::fs::write(path, json).map_err(|e| {
-            GratiaError::Other(format!("failed to write key file: {}", e))
+        // Atomic write: write to a temp file then rename, so a crash mid-write
+        // doesn't leave a corrupt key file.
+        let tmp_path = format!("{}.tmp", path);
+        std::fs::write(&tmp_path, &json).map_err(|e| {
+            GratiaError::Other(format!("failed to write temp key file: {}", e))
+        })?;
+        std::fs::rename(&tmp_path, path).map_err(|e| {
+            // Clean up temp file on rename failure.
+            let _ = std::fs::remove_file(&tmp_path);
+            GratiaError::Other(format!("failed to rename temp key file: {}", e))
         })
     }
 
